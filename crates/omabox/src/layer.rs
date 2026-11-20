@@ -69,6 +69,108 @@ pub fn layer_select(ctx: &Ctx, lys: &[u8], sel: &[u8]) -> Res<Vec<u8>> {
     Err(Exit(2))
 }
 
+/// layer_pick CMD LAYERS SEL MON (#473, shot --layer): layer_select's one layer, MON (not empty)
+/// picking among those on that monitor as `wait layer --monitor` does; one SEL names that is not
+/// drawn yet (0x0, or a closed menu's 1x1) is refused naming `wait layer`, exit 1; none, several,
+/// or a monitor the box does not have, exit 2, the candidates listed.
+pub fn layer_pick(ctx: &Ctx, cmd: &str, lys: &[u8], sel: &[u8], mon: &[u8]) -> Res<Vec<u8>> {
+    let a = jq::jq(&["-c", LAYER_LIST_JQ], Some(lys), jq::Err::Null);
+    if !a.ok() {
+        return Err(ctx.die(cat!("box '", ctx.name, "' did not list its layers")));
+    }
+    let all = a.text();
+    let mut hits = Args::new(&["-c"])
+        .kv("--arg", "s", sel)
+        .arg(crate::jqprog::LAYER_HITS_JQ)
+        .run(Some(&all), jq::Err::Inherit)
+        .text();
+    if !mon.is_empty() {
+        let mons = jq_r(r#"keys_unsorted | join(", ")"#, lys);
+        let has = Args::new(&["-e"])
+            .kv("--arg", "m", mon)
+            .arg("has($m)")
+            .run(Some(lys), jq::Err::Null);
+        if !has.ok() {
+            say(cat!(
+                cmd,
+                ": no monitor ",
+                mon,
+                " in box '",
+                ctx.name,
+                "' (",
+                mons,
+                ")"
+            ));
+            return Err(Exit(2));
+        }
+        let on = Args::new(&["-c"])
+            .kv("--arg", "m", mon)
+            .arg("map(select(.monitor == $m))")
+            .run(Some(&hits), jq::Err::Inherit)
+            .text();
+        if crate::win::jq_length(&on) == b"0" && crate::win::jq_length(&hits) != b"0" {
+            say(cat!(cmd, ": no layer ", sel, " on ", mon, "; where it is:"));
+            layer_lines(&hits);
+            return Err(Exit(2));
+        }
+        hits = on;
+    }
+    let big = jq::jq(
+        &["-c", crate::jqprog::LAYER_BIG_JQ],
+        Some(&hits),
+        jq::Err::Inherit,
+    )
+    .text();
+    let n = crate::win::jq_length(&big);
+    match n.as_slice() {
+        b"1" => return Ok(jq::jq(&["-c", ".[0]"], Some(&big), jq::Err::Inherit).text()),
+        b"0" if crate::win::jq_length(&hits) != b"0" => {
+            let ns = jq_r(".[0].namespace", &hits);
+            say(cat!(
+                cmd,
+                ": layer ",
+                sel,
+                " is mapped at ",
+                jq_r(r#".[0] | "\(.w)x\(.h)""#, &hits),
+                ", not drawn (not mapped yet, or a closed menu): omabox wait layer ",
+                if ns.is_empty() { sel.to_vec() } else { ns },
+                ", then ",
+                cmd,
+                " again"
+            ));
+            return Err(Exit(1));
+        }
+        b"0" => {
+            say(cat!(
+                cmd,
+                ": no layer matches ",
+                sel,
+                " (a namespace, address:0x... or pid:PID); the box's layers:"
+            ));
+            layer_lines(&all);
+        }
+        _ => {
+            let several_mons = jq_r("map(.monitor) | unique | length > 1", &big) == b"true";
+            say(cat!(
+                cmd,
+                ": ",
+                sel,
+                " matches ",
+                n,
+                " layers: name one by ",
+                if several_mons && mon.is_empty() {
+                    "--monitor NAME or "
+                } else {
+                    ""
+                },
+                "its address (address:0x...):"
+            ));
+            layer_lines(&big);
+        }
+    }
+    Err(Exit(2))
+}
+
 /// layer_lines LIST >&2: a layer a line, for a refusal.
 pub fn layer_lines(list: &[u8]) {
     let r = jq::jq(
@@ -302,6 +404,60 @@ mod tests {
             kb_hint(b"0xa", tied, b"0xd=1, 0xc=2"),
             Some(false),
             "a layer not of the size holding it is not counted"
+        );
+    }
+
+    // shot --layer's pick (#473): the selector as tree's, --monitor among one namespace's layers, one
+    // not drawn yet (0x0, or a closed menu's 1x1) refused with exit 1, naming wait layer.
+    #[test]
+    fn layer_pick_by_monitor_and_drawn() {
+        let j = br#"{"DP-1": {"levels": {"2": [{"address": "0xb", "namespace": "omarchy-bar", "pid": 7, "x": 0, "y": 0, "w": 1920, "h": 26},
+                     {"address": "0xm", "namespace": "omarchy-menu", "pid": 7, "x": 0, "y": 0, "w": 1, "h": 1},
+                     {"address": "0xn", "namespace": "t-new", "pid": 8, "x": 0, "y": 0, "w": 0, "h": 0}]}},
+    "DP-2": {"levels": {"2": [{"address": "0xd", "namespace": "omarchy-bar", "pid": 7, "x": 1920, "y": 0, "w": 800, "h": 26},
+      {"address": "0xe", "namespace": "solo", "pid": 9, "x": 2100, "y": 300, "w": 200, "h": 60}]}}}"#;
+        let mut ctx = Ctx::new(b"shot", b"/nonexistent".to_vec());
+        ctx.parsed();
+        let addr = |r: Res<Vec<u8>>| r.map(|l| jq_r(".address", &l));
+        assert_eq!(
+            addr(layer_pick(&ctx, "shot", j, b"omarchy-bar", b"")),
+            Err(Exit(2)),
+            "one on each monitor, none named: exit 2"
+        );
+        assert_eq!(
+            addr(layer_pick(&ctx, "shot", j, b"omarchy-bar", b"DP-2")),
+            Ok(b"0xd".to_vec()),
+            "--monitor DP-2: the one there"
+        );
+        assert_eq!(
+            addr(layer_pick(&ctx, "shot", j, b"omarchy-bar", b"DP-9")),
+            Err(Exit(2)),
+            "a monitor the box does not have: exit 2"
+        );
+        assert_eq!(
+            addr(layer_pick(&ctx, "shot", j, b"solo", b"DP-1")),
+            Err(Exit(2)),
+            "drawn on another monitor only: exit 2"
+        );
+        assert_eq!(
+            addr(layer_pick(&ctx, "shot", j, b"solo", b"")),
+            Ok(b"0xe".to_vec()),
+            "one alone: it"
+        );
+        assert_eq!(
+            addr(layer_pick(&ctx, "shot", j, b"t-new", b"")),
+            Err(Exit(1)),
+            "0x0, not mapped yet: exit 1"
+        );
+        assert_eq!(
+            addr(layer_pick(&ctx, "shot", j, b"omarchy-menu", b"DP-1")),
+            Err(Exit(1)),
+            "1x1, a closed menu: exit 1"
+        );
+        assert_eq!(
+            addr(layer_pick(&ctx, "shot", j, b"nope", b"")),
+            Err(Exit(2)),
+            "none: exit 2"
         );
     }
 
