@@ -366,6 +366,9 @@ fn arm() {
             let code = CODE_TRAPS.load(Ordering::SeqCst) > 0;
             SIGNALLED.store(sig, Ordering::SeqCst);
             run_undos();
+            // (the command's line in its box's command log, #447: main never gets to write it)
+            let rc = u8::try_from(128 + sig).unwrap_or(255);
+            crate::cmdlog::end(rc, Some(format!("ended by signal {sig}")));
             if code {
                 // (bash's `exit 130|143|129`, its EXIT trap run on the way: the first signal's)
                 let _ = std::io::Write::flush(&mut std::io::stdout());
