@@ -13,7 +13,10 @@ use crate::args::optarg;
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, out};
 use crate::num::ms_duration;
-use crate::select::select_box;
+use crate::boxes::{box_alive, need_box};
+use crate::exit::say;
+use crate::select::{env_names_box, select_box, session_boxes};
+use crate::sig::Teardown;
 use crate::shell::{self, Re};
 use serde_json::Value;
 use std::ffi::OsStr;
@@ -100,6 +103,54 @@ struct App {
     /// page: its shots over --after (a contact sheet), and whether this is a page.
     shots: u32,
     page: bool,
+    /// -b NAME; --fresh (a throwaway box even when one is up); and what pick found: a box that was
+    /// up already, the caller's own, where nothing is started or taken down.
+    boxname: Option<Vec<u8>>,
+    fresh: bool,
+    own: bool,
+}
+
+/// The box a look works in, as `run` picks one: a box that is up (-b NAME's, else this session's)
+/// is looked into as it is, and left as it is; with none up, or with --fresh, a throwaway `look-PID`,
+/// taken down by the guard however the look ends (unless --keep-box). A box asked for by name, or one
+/// that was up and is gone, is never replaced by a throwaway (#295's rule for run): that is said.
+fn pick(ctx: &mut Ctx, a: &mut App, me: u32) -> Res<(Vec<u8>, Option<Teardown>)> {
+    if a.fresh {
+        if a.boxname.is_some() {
+            return Err(ctx.die("look: --fresh starts a box of its own: not with -b NAME"));
+        }
+    } else {
+        let given = a.boxname.clone().unwrap_or_default();
+        select_box(ctx, &given)?;
+        if box_alive(ctx)? {
+            need_box(ctx)?;
+            if !a.up.is_empty() {
+                say(cat!(
+                    "box '",
+                    ctx.name,
+                    "' is already up: ",
+                    a.up.join(&b' '),
+                    " ignored (look --fresh for a box of its own)"
+                ));
+            }
+            a.own = true;
+            a.keep = false;
+            return Ok((ctx.name.clone(), None));
+        }
+        if !given.is_empty()
+            || (ctx.name_derived && !session_boxes(ctx).is_empty())
+            || env_names_box()
+            || shell::path(&ctx.d).is_dir()
+            || ctx.in_boxes(cat!(".expired-", ctx.name)).is_file()
+            || ctx.in_boxes(cat!(".taken-", ctx.name)).is_file()
+        {
+            need_box(ctx)?;
+        }
+    }
+    let name = format!("look-{me}").into_bytes();
+    select_box(ctx, &name)?;
+    let guard = (!a.keep).then(|| Teardown::new(name.clone()));
+    Ok((name, guard))
 }
 
 /// KIND's options (app, plugin): an app's program after --, a plugin's DIR as its one word.
@@ -181,6 +232,11 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>], kind: &str) -> Res<App> {
                 i += 1;
             }
             b"--keep-box" => a.keep = true,
+            b"--fresh" => a.fresh = true,
+            b"-b" | b"--box" => {
+                a.boxname = Some(val(i)?.clone());
+                i += 1;
+            }
             b"-h" | b"--help" => {
                 crate::help::usage("look")?;
                 return Err(Exit(0));
@@ -295,14 +351,53 @@ pub fn problem_lines(output: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// The first window of the box: the job's (its pid), else any; None before one is up.
-fn window_of(windows: &[u8], pid: Option<i64>) -> Option<Value> {
+/// The program's window: the job's (its pid), else the first that is not one of BEFORE (the
+/// addresses there when it was started: none in a throwaway box, so any); None before one is up.
+pub fn window_of(windows: &[u8], pid: Option<i64>, before: &[String]) -> Option<Value> {
     let v: Value = serde_json::from_slice(windows).ok()?;
     let all = v.as_array()?;
+    let addr = |w: &Value| w.get("address").and_then(Value::as_str).map(String::from);
     all.iter()
         .find(|w| pid.is_some() && w.get("pid").and_then(Value::as_i64) == pid)
-        .or_else(|| all.first())
+        .or_else(|| {
+            all.iter()
+                .find(|w| addr(w).is_none_or(|a| !before.contains(&a)))
+        })
         .cloned()
+}
+
+/// The addresses of `windows --json`'s windows.
+pub fn addresses(windows: &[u8]) -> Vec<String> {
+    serde_json::from_slice::<Value>(windows)
+        .ok()
+        .and_then(|v| {
+            Some(
+                v.as_array()?
+                    .iter()
+                    .filter_map(|w| w.get("address").and_then(Value::as_str).map(String::from))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// The pages earlier looks left open in a box that stays up: each `look page` Chromium job is
+/// stopped, so the next one starts a Chromium of its own on the profile (a second one beside it
+/// would hand its page to the first and end, its console never read).
+fn stop_pages(name: &[u8]) {
+    let r = ob(&[b"jobs", b"-b", name, b"--json"]);
+    let Ok(Value::Array(jobs)) = serde_json::from_slice::<Value>(&r.out) else {
+        return;
+    };
+    for j in jobs {
+        let ours = j.get("argv").and_then(Value::as_array).is_some_and(|v| {
+            v.iter()
+                .any(|w| w.as_str().is_some_and(|w| w.contains("omabox-look-chromium")))
+        });
+        if let (true, Some(pid)) = (ours, j.get("pid").and_then(Value::as_i64)) {
+            ob(&[b"stop", b"-b", name, pid.to_string().as_bytes()]);
+        }
+    }
 }
 
 /// The job whose log is LOG: its pid, while `jobs` lists it.
@@ -339,12 +434,11 @@ fn job_end(name: &[u8], pid: i64) -> Option<Vec<u8>> {
 }
 
 fn app(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
-    let a = parse(ctx, args, "app")?;
+    let mut a = parse(ctx, args, "app")?;
     let me = std::process::id();
-    let name = format!("look-{me}").into_bytes();
-    select_box(ctx, &name)?;
-    // Taken down however this ends, as a throwaway run's (the box's reaper retries once we are gone).
-    let guard = (!a.keep).then(|| crate::sig::Teardown::new(name.clone()));
+    // (a throwaway is taken down however this ends, as a throwaway run's: the box's reaper retries
+    // once we are gone)
+    let (name, guard) = pick(ctx, &mut a, me)?;
     let r = app_in(ctx, &a, &name, me);
     if let Some(g) = guard {
         g.finish();
@@ -360,6 +454,7 @@ fn page(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut a = parse(ctx, args, "page")?;
     a.page = true;
     let what = a.dir.take().unwrap_or_default();
+    let mut bind = None;
     let url = if Re::new("^(https?|file)://").is_some_and(|r| r.is_match(&what)) {
         what
     } else {
@@ -372,7 +467,7 @@ fn page(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             )));
         }
         let dirn = f[..f.iter().rposition(|&c| c == b'/').unwrap_or(0)].to_vec();
-        a.up.extend([b"--ro-bind".to_vec(), dirn]);
+        bind = Some(dirn);
         cat!("file://", f)
     };
     a.cmd = vec![
@@ -383,9 +478,26 @@ fn page(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         url,
     ];
     let me = std::process::id();
-    let name = format!("look-{me}").into_bytes();
-    select_box(ctx, &name)?;
-    let guard = (!a.keep).then(|| crate::sig::Teardown::new(name.clone()));
+    let (name, guard) = pick(ctx, &mut a, me)?;
+    // A box that was up has only the folders it was started with: a file outside them is said.
+    if let Some(d) = bind.filter(|_| !a.own) {
+        a.up.extend([b"--ro-bind".to_vec(), d]);
+    }
+    if a.own {
+        if let Some(f) = a.cmd.last().and_then(|u| u.strip_prefix(b"file://")) {
+            if !ob(&[b"run", b"-b", &name, b"--", b"test", b"-r", f]).ok {
+                return Err(ctx.die(cat!(
+                    "look page: box '",
+                    name,
+                    "' does not have ",
+                    f,
+                    " (not in a folder it was started with): omabox look page ",
+                    f,
+                    " --fresh opens it in a box of its own"
+                )));
+            }
+        }
+    }
     let r = app_in(ctx, &a, &name, me);
     if let Some(g) = guard {
         g.finish();
@@ -434,7 +546,21 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     let mut sheet = None;
     start(ctx, a, name, me, &[], &mut problems)?;
     // The program, a job of the box's: its log is its output.
-    let mut run: Vec<&[u8]> = vec![b"run", b"-b", name, b"-d", b"-q", b"--print-log", b"--"];
+    // In a box that was up: the same program still running from the last look is stopped first, and
+    // its window is the job's, else one that was not there before it (never another program's).
+    let before: Vec<String> = if a.own {
+        addresses(&ob(&[b"windows", b"-b", name, b"--json"]).out)
+    } else {
+        Vec::new()
+    };
+    if a.own && a.page {
+        stop_pages(name);
+    }
+    let mut run: Vec<&[u8]> = vec![b"run", b"-b", name, b"-d", b"-q", b"--print-log"];
+    if a.own {
+        run.push(b"--replace");
+    }
+    run.push(b"--");
     run.extend(a.cmd.iter().map(Vec::as_slice));
     let r = ob(&run);
     if !r.ok {
@@ -462,7 +588,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     let mut win = None;
     let mut ended = None;
     while start.elapsed() < a.timeout {
-        win = window_of(&ob(&[b"windows", b"-b", name, b"--json"]).out, pid);
+        win = window_of(&ob(&[b"windows", b"-b", name, b"--json"]).out, pid, &before);
         if win.is_some() {
             break;
         }
@@ -625,6 +751,17 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             }
         }
     }
+    // In a box that stays up the program does too: said, with what stops it.
+    if a.own {
+        if let Some(p) = pid.filter(|_| job_pid(name, &log).is_some()) {
+            notes.push(cat!(
+                "left running in the box: omabox stop -b ",
+                name,
+                " ",
+                p.to_string()
+            ));
+        }
+    }
     let mut output = std::fs::read(shell::path(&log)).unwrap_or_default();
     if a.page {
         let c = console_lines(&output);
@@ -639,6 +776,9 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     }
     if !window_line.is_empty() {
         head.push(("window", &window_line));
+    }
+    if a.own {
+        head.push(("box", name));
     }
     out(report(
         &head,
@@ -665,6 +805,9 @@ fn start(
     extra: &[&[u8]],
     problems: &mut Vec<Vec<u8>>,
 ) -> Res<Vec<u8>> {
+    if a.own {
+        return Ok(Vec::new());
+    }
     let owner = me.to_string();
     let mut up: Vec<&[u8]> = vec![b"up", name];
     if !a.keep {
@@ -897,7 +1040,7 @@ fn suffixed(path: &[u8], suffix: &str) -> Vec<u8> {
 }
 
 fn plugin(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
-    let a = parse(ctx, args, "plugin")?;
+    let mut a = parse(ctx, args, "plugin")?;
     let dir = a.dir.clone().unwrap_or_default();
     let Some(id) = plugin_id(&dir) else {
         return Err(ctx.die(cat!(
@@ -907,9 +1050,7 @@ fn plugin(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         )));
     };
     let me = std::process::id();
-    let name = format!("look-{me}").into_bytes();
-    select_box(ctx, &name)?;
-    let guard = (!a.keep).then(|| crate::sig::Teardown::new(name.clone()));
+    let (name, guard) = pick(ctx, &mut a, me)?;
     let r = plugin_in(ctx, &a, &dir, &id, &name, me);
     if let Some(g) = guard {
         g.finish();
@@ -922,19 +1063,41 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     let mut notes: Vec<Vec<u8>> = Vec::new();
     start(ctx, a, name, me, &[b"--plugin", dir], &mut problems)?;
     // Its state, as ls --json has it.
-    let ls: Value = serde_json::from_slice(&ob(&[b"ls", b"--json"]).out).unwrap_or(Value::Null);
-    let st = ls
-        .as_array()
-        .and_then(|v| {
-            v.iter()
-                .find(|b| b.get("name").and_then(Value::as_str).map(str::as_bytes) == Some(name))
-        })
-        .and_then(|b| {
-            b.get("plugin_status")?
-                .get(std::str::from_utf8(id).ok()?)
-                .cloned()
-        })
-        .unwrap_or(Value::Null);
+    let status = || -> Value {
+        let ls: Value = serde_json::from_slice(&ob(&[b"ls", b"--json"]).out).unwrap_or(Value::Null);
+        ls.as_array()
+            .and_then(|v| {
+                v.iter().find(|b| {
+                    b.get("name").and_then(Value::as_str).map(str::as_bytes) == Some(name)
+                })
+            })
+            .and_then(|b| {
+                b.get("plugin_status")?
+                    .get(std::str::from_utf8(id).ok()?)
+                    .cloned()
+            })
+            .unwrap_or(Value::Null)
+    };
+    // In a box that was up: the shell again, so it shows the plugin as its files are now (and its
+    // log holds this shell's lines only: no warning of an edit ago); a box without the plugin gets
+    // it first, as `plugin add` puts one in.
+    if a.own {
+        let r = if status().is_null() {
+            ob(&[b"plugin", b"-b", name, b"add", dir])
+        } else {
+            ob(&[b"restart-shell", b"-b", name])
+        };
+        if !r.ok {
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), &r.err);
+            return Err(ctx.die(cat!(
+                "look plugin: the shell of box '",
+                name,
+                "' could not be given the plugin (look --fresh for a box of its own)"
+            )));
+        }
+        warnings(&r.err, &mut problems);
+    }
+    let st = status();
     let f = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let state = if f("state").is_empty() {
         "unknown".to_string()
@@ -1071,6 +1234,9 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
             }
         }
         panel_text = Some(text_line(&items, PANEL_TEXT_MAX));
+        if a.own {
+            notes.push(b"its panel is left open in the box".to_vec());
+        }
         let out_p = a.out.as_ref().map(|o| suffixed(o, "panel"));
         let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name];
         if let Some(o) = &out_p {
@@ -1100,6 +1266,9 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     if let Some(t) = &panel_text {
         head.push(("panel text", t));
     }
+    if a.own {
+        head.push(("box", name));
+    }
     out(report(
         &head,
         &problems,
@@ -1118,7 +1287,7 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
 const PALETTE_SH: &str = r#"printf '\033[?25l\n  omabox look theme: the terminal palette\n\n'; for row in 0 8; do printf '  '; for i in 0 1 2 3 4 5 6 7; do n=$((row + i)); printf '\033[38;5;%dm %-6s\033[0m' "$n" "c$n"; done; printf '\n  '; for i in 0 1 2 3 4 5 6 7; do printf '\033[48;5;%dm       \033[0m' "$((row + i))"; done; printf '\n\n'; done; printf '  normal \033[1mbold\033[0m \033[2mdim\033[0m \033[3mitalic\033[0m \033[7mreverse\033[0m\n'; exec sleep 600"#;
 
 fn theme(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
-    let a = parse(ctx, args, "theme")?;
+    let mut a = parse(ctx, args, "theme")?;
     let given = a.dir.clone().unwrap_or_default();
     let dir = crate::repo::readlink_f(&given).unwrap_or_else(|| given.clone());
     // A folder is the theme in the works; a bare word an installed theme's NAME (up resolves it).
@@ -1130,9 +1299,7 @@ fn theme(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Err(ctx.die(cat!("look theme: ", given, " is no folder")));
     };
     let me = std::process::id();
-    let name = format!("look-{me}").into_bytes();
-    select_box(ctx, &name)?;
-    let guard = (!a.keep).then(|| crate::sig::Teardown::new(name.clone()));
+    let (name, guard) = pick(ctx, &mut a, me)?;
     let r = theme_in(ctx, &a, dir.as_deref(), &given, &name, me);
     if let Some(g) = guard {
         g.finish();
@@ -1154,6 +1321,75 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
         None => vec![b"--theme", &tname],
     };
     let up_err = start(ctx, a, name, me, &extra, &mut problems)?;
+    // In a box that was up: the theme set there, as `omarchy-theme-set` does on a desk, and said (the
+    // box stays on it). A folder is live only in a box started with it (--theme-dir): any other box
+    // would show an installed theme of that name, or none.
+    let mut own_named: Vec<Vec<u8>> = Vec::new();
+    if a.own {
+        let meta: Value = std::fs::read(ctx.at("box.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(Value::Null);
+        let dirs: Vec<Vec<u8>> = meta
+            .get("theme_dirs")
+            .and_then(Value::as_array)
+            .map(|v| {
+                v.iter()
+                    .filter_map(|d| d.as_str().map(|d| d.as_bytes().to_vec()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let real = |d: &[u8]| crate::repo::readlink_f(d).unwrap_or_else(|| d.to_vec());
+        if let Some(d) = dir {
+            if !dirs.iter().any(|b| real(b) == real(d)) {
+                return Err(ctx.die(cat!(
+                    "look theme: box '",
+                    name,
+                    "' does not have ",
+                    d,
+                    " as a live theme (it was not started with --theme-dir): omabox look theme ",
+                    given,
+                    " --fresh looks at it in a box of its own"
+                )));
+            }
+        }
+        let was = meta.get("theme").and_then(Value::as_str).unwrap_or("");
+        let r = ob(&[b"run", b"-b", name, b"--", b"omarchy-theme-set", &tname]);
+        if !r.ok {
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), &r.err);
+            return Err(ctx.die(cat!(
+                "look theme: omarchy-theme-set ",
+                tname,
+                " failed in box '",
+                name,
+                "'"
+            )));
+        }
+        notes.push(cat!(
+            "the box is on theme ",
+            tname,
+            " from now on",
+            if was.is_empty() || was.as_bytes() == tname.as_slice() {
+                String::new()
+            } else {
+                format!(" (it started on {was}: omabox run -- omarchy-theme-set {was})")
+            }
+        ));
+        if dir.is_none() {
+            let tree = meta
+                .get("omarchy")
+                .and_then(Value::as_str)
+                .filter(|t| t.starts_with('/'))
+                .unwrap_or("/usr/share/omarchy");
+            own_named = crate::plugins::theme_folders(
+                &tname,
+                tree.as_bytes(),
+                &dirs,
+                &shell::env_or_empty("HOME"),
+                &crate::jailpath::jail_path,
+            );
+        }
+    }
     let still: [&[u8]; 6] = [b"wait", b"-b", name, b"--timeout", b"8s", b"still"];
     if ob(&still).code == 124 {
         notes.push(
@@ -1173,12 +1409,14 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
     };
     // A terminal with its palette: the colours a theme is mostly looked at for.
     let mut term = None;
+    let mut palette_pid: Option<Vec<u8>> = None;
     let r = ob(&[
         b"run",
         b"-b",
         name,
         b"-d",
         b"-q",
+        b"--replace",
         b"--",
         b"foot",
         b"-T",
@@ -1187,6 +1425,9 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
         b"-c",
         PALETTE_SH.as_bytes(),
     ]);
+    if r.ok {
+        palette_pid = last_line(&r.out).filter(|p| p.iter().all(u8::is_ascii_digit));
+    }
     if r.ok
         && ob(&[
             b"wait",
@@ -1240,13 +1481,30 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
                 .into_iter()
                 .map(String::into_bytes),
         ),
+        None if a.own => {
+            // An installed theme's checks, as up makes them for --theme NAME.
+            problems.extend(
+                crate::theme_check::check_layered(&own_named, screen)
+                    .into_iter()
+                    .map(String::into_bytes),
+            );
+        }
         None => problems.extend(theme_notes(&up_err)),
+    }
+    // The palette terminal is the look's own: gone from a box that stays up.
+    if a.own {
+        if let Some(pid) = palette_pid {
+            ob(&[b"stop", b"-b", name, &pid]);
+        }
     }
     let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
     if let Some(t) = &term {
         head.push(("terminal", t));
     }
     head.push(("theme", &tname));
+    if a.own {
+        head.push(("box", name));
+    }
     out(report(
         &head,
         &problems,
