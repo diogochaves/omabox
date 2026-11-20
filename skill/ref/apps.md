@@ -68,9 +68,9 @@ Sections:
   does (any case, exact over a part; several alike: exit 2, `--index N`) and prints it as the app
   then has it: `check menu item "Sync" [unchecked]`. `tray menu ID` opens the menu as a host does
   (AboutToShow; an app may fill it then), `tray activate ID` is a left click on the icon,
-  `--secondary` a middle one. Not pixels, and not the bar's menu card: Omarchy's bar publishes no
-  accessible items nor where an icon is (`tree --layer omarchy-bar` has none), so for the look of
-  the icon or the card, a shot (`--stock-bar` if the user's bar has no tray). An item listed
+  `--secondary` a middle one. Not pixels, and not the bar's menu card: `tree --layer omarchy-bar`
+  has the bar's text but not its icons (icon-font glyphs are left out), so for the look of the
+  icon or the card, a shot (`--stock-bar` if the user's bar has no tray). An item listed
   `(no menu)` shows a menu of its own: `tray menu ID` asks it (ContextMenu), then `windows`, `tree`.
   What a row opens, as it opens: `shot --burst 12 --sheet --after -- tray click ID LABEL` (or
   `record -- tray click ...`); `menu` and `activate` are actions too, a bare `tray` is not.

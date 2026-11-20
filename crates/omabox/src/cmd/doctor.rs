@@ -212,15 +212,15 @@ const PKGS: &[(&str, [&str; 5])] = &[
         "ffmpeg",
         ["ffmpeg", "ffmpeg", "ffmpeg-free", "ffmpeg", "ffmpeg"],
     ),
-    // tools/ (C, wayland-scanner, pkg-config's modules: the Makefiles')
+    // tools/ (C, and C++ with Qt Quick for qtext; wayland-scanner, pkg-config's modules: the Makefiles')
     (
         "tools-build",
         [
-            "base-devel pkgconf wayland libxkbcommon libpng pixman at-spi2-core glib2",
-            "build-essential pkg-config libwayland-dev libxkbcommon-dev libpng-dev libpixman-1-dev libatspi2.0-dev libglib2.0-dev",
-            "gcc make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel",
-            "gcc make pkgconf wayland-devel libxkbcommon-devel libpng16-compat-devel libpixman-1-0-devel at-spi2-core-devel glib2-devel",
-            "gcc gnumake pkg-config wayland wayland-scanner libxkbcommon libpng pixman at-spi2-core glib",
+            "base-devel pkgconf wayland libxkbcommon libpng pixman at-spi2-core glib2 qt6-declarative",
+            "build-essential pkg-config libwayland-dev libxkbcommon-dev libpng-dev libpixman-1-dev libatspi2.0-dev libglib2.0-dev qt6-declarative-dev",
+            "gcc gcc-c++ make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel qt6-qtdeclarative-devel",
+            "gcc gcc-c++ make pkgconf wayland-devel libxkbcommon-devel libpng16-compat-devel libpixman-1-0-devel at-spi2-core-devel glib2-devel qt6-declarative-devel",
+            "gcc gnumake pkg-config wayland wayland-scanner libxkbcommon libpng pixman at-spi2-core glib qt6.qtdeclarative",
         ],
     ),
     // setup --aquamarine (the programs it checks for)
@@ -757,6 +757,7 @@ const TOOLS_SOME: &[(&str, &str)] = &[
     ("notices", "log notifications"),
     ("polkit", "up --polkit"),
     ("idlehold", "desk boxes"),
+    ("qtext", "the shell's text in tree --layer and look plugin"),
 ];
 
 /// pkg-config modules and programs tools/ builds with.
@@ -767,6 +768,7 @@ const TOOLS_MODULES: &[&str] = &[
     "libpng",
     "atspi-2",
     "gio-2.0",
+    "Qt6Quick",
 ];
 
 fn tools_check(co: &[u8], fam: Option<Family>, tool: impl Fn(&str) -> Vec<u8>) -> Check {
@@ -811,7 +813,7 @@ fn tools_check(co: &[u8], fam: Option<Family>, tool: impl Fn(&str) -> Vec<u8>) -
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         let modules = crate::sig::run_status(m).is_ok_and(|rc| rc == 0);
-        let progs = ["cc", "make", "wayland-scanner"]
+        let progs = ["cc", "c++", "make", "wayland-scanner"]
             .iter()
             .all(|p| crate::exec::executable_on_path(p.as_bytes()));
         if !modules || !progs {

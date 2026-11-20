@@ -24,7 +24,8 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
              [UP OPTIONS] -- CMD [ARG...]                a program in a throwaway box: its window shot, its
                                                          problems and output reported (exit 1: problems)
   omabox look plugin DIR [--open] [-o FILE] [--keep-box] [UP OPTIONS]   a plugin in one: the bar shot, its
-                                                         panel too with --open, its state and its warnings
+                                                         panel too with --open, its state, the text it shows
+                                                         (text:, panel text:) and its warnings
   omabox look theme DIR|NAME [-o FILE] [--keep-box] [UP OPTIONS]   a theme applied: the desktop and a palette terminal
                                                          shot, what a person would notice in it named
   omabox look page FILE|URL [--keys "K..."] [--hold KEY DURATION] [--shots N] [--after 2s] [-o FILE]
@@ -684,13 +685,19 @@ when started with --force-renderer-accessibility; terminals have none: "no acces
 An app that publishes only some of its windows (egui's root viewport, not its child ones): a window it
 does not publish has no tree, and its only one stands for a window of another title only at that
 window's size, and when no other window of the app is that size (else "cannot be told"), exit 1.
---layer SEL (or -l SEL) reads a layer surface instead (the shell's bar, panels, menus, a plugin's panel): its
-namespace (omabox hyprctl layers), address:0x... or pid:PID. Its bounds are the screen's coordinates:
-a plain `click X Y` at their middle lands on that node. Quickshell publishes them from 0.3.2 on, and
-only items that set an Accessible role: "the layer publishes no accessible items", exit 1, when none
-does (Omarchy's own bar). Two layers of one process with one size cannot be told apart (their frames
-have no names) unless one of them holds the keyboard (a launcher, an Omarchy 4.5 bar popup): said
-so, exit 1.
+--layer SEL (or -l SEL) reads a layer surface instead (the shell's bar, panels, menus, a plugin's
+panel): its namespace (omabox hyprctl layers), address:0x... or pid:PID. Its bounds are the screen's
+coordinates: a plain `click X Y` at their middle lands on that node. Quickshell publishes them from
+0.3.2 on, and only items that set an Accessible role (Omarchy's own bar sets none). The box's shell
+also gives its text (#467): each Text, TextInput or TextEdit it draws, visible, as `text "WORDS" @x,y
+wxh` one level under the frame (`frame "omarchy-bar"` when nothing is on AT-SPI; `[cut]` when only
+part of it shows, past the bar or a clip), after what AT-SPI has; --find, --json and `click --find`
+take them as any node. Icon-font glyphs are left out. So `tree --layer omarchy-bar --find TEXT` finds
+what a bar widget shows. Another Quickshell (a config you run with `omabox run -- qs -p`) gives only
+its AT-SPI items: "the layer publishes no accessible items", exit 1, when none. Two layers of one
+process with one size cannot be told apart on AT-SPI (their frames have no names) unless one of them
+holds the keyboard (a launcher, an Omarchy 4.5 bar popup): said so, exit 1; the shell's text is read
+by the layer's namespace.
 @ tray
 `tray` reads the box's tray over its own session bus (never yours): each StatusNotifierItem the
 box's watcher has, `ID "TITLE" [status]` (active, passive, needs attention; Omarchy's bar leaves

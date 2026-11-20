@@ -30,6 +30,11 @@ if [ "$tag" = omarchy-shell ]; then
     qs=$XDG_RUNTIME_DIR/omabox-quickshell/quickshell
     [ -x "$qs" ] || qs=/usr/bin/quickshell
     set -- "$qs" --log-times "${@:2}"
+    # What the bar draws as text, for `tree --layer` and `look plugin` (#467, finding 727): Qt Quick
+    # publishes no AT-SPI item for a Text without an Accessible role. The library takes itself out of
+    # LD_PRELOAD again once the shell is up, so nothing the shell starts loads it.
+    qtext=/opt/omabox/bin/omabox-qtext
+    [ ! -f "$qtext" ] || export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$qtext"
   fi
 fi
 [ $# -gt 0 ] || exec cat >> "$log"

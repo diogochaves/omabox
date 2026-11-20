@@ -126,4 +126,7 @@ launcher=$OMARCHY_PATH/bin/omarchy-launch-shell
 [ ! -x "$launcher" ] || exec "$launcher" >> "$HOME/shell.log" 2>&1
 # An Omarchy tree without it (`up --omarchy` of an older one): the shell itself, as before.
 echo $$ > "$pidfile"
+# (the bar's text for `tree`, as the systemd-cat stand-in gives it: #467)
+qtext=/opt/omabox/bin/omabox-qtext
+[ ! -f "$qtext" ] || export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$qtext"
 QS_DISABLE_FILE_WATCHER=1 QS_NO_RELOAD_POPUP=1 exec "$qs" --log-times -n -p "$OMARCHY_PATH/shell" >> "$HOME/shell.log" 2>&1

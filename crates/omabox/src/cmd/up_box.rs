@@ -38,6 +38,9 @@ const BOX_BURST: &str = "/opt/omabox/bin/omabox-burst";
 const BOX_TREE: &str = "/opt/omabox/bin/omabox-tree";
 /// The notification recorder share/session.sh starts on the box's bus (#430, finding 680).
 const BOX_NOTICES: &str = "/opt/omabox/bin/omabox-notices";
+/// What the box's shell draws as text (#467, finding 727): share/shell.sh and the systemd-cat
+/// stand-in preload it into Quickshell; omabox-tree --layer reads it.
+const BOX_QTEXT: &str = "/opt/omabox/bin/omabox-qtext";
 /// A desk box's idle hold (#321 step 5, finding 704): deskguard::after_ready starts it.
 pub const BOX_IDLEHOLD: &str = "/opt/omabox/bin/omabox-idlehold";
 /// `up --polkit`'s stand-in authority and its session shim (#258).
@@ -1302,11 +1305,12 @@ pub(crate) fn helper_binds(polkit: bool, desk: bool) -> Vec<HelperBind> {
     })
     .collect();
     // shot --burst's one capture client (#196), `tree`'s reader (#178), the notification recorder
-    // (#430): when built.
+    // (#430), the library the shell starts with for its text (#467): when built.
     for (name, dest) in [
         ("burst", BOX_BURST),
         ("tree", BOX_TREE),
         ("notices", BOX_NOTICES),
+        ("qtext", BOX_QTEXT),
     ] {
         let src = paths::tool(name);
         if crate::exec::executable(&src) {

@@ -696,6 +696,146 @@ pub fn plugin_warnings(warnings: &[u8], id: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// The bar's layer in an Omarchy box (4.5 and 4.0 alike).
+const BAR_NS: &[u8] = b"omarchy-bar";
+/// A panel's text items shown at most (the rest counted).
+const PANEL_TEXT_MAX: usize = 60;
+
+/// `tree --layer NS --json`'s text (#467): each node under the frame that has a name, as
+/// (name, x, y, w, h, cut) in the screen's coordinates, in the tree's order (cut: its `cut` state,
+/// only part of it shows); and the frame's x, y.
+pub fn tree_texts(json: &[u8]) -> (Vec<TextItem>, (i64, i64)) {
+    let v: Value = serde_json::from_slice(json).unwrap_or(Value::Null);
+    let n = |e: &Value, k: &str| e.get(k).and_then(Value::as_i64).unwrap_or(0);
+    let mut origin = (0, 0);
+    let mut items = Vec::new();
+    for e in v.as_array().map(Vec::as_slice).unwrap_or(&[]) {
+        if n(e, "depth") == 0 {
+            origin = (n(e, "x"), n(e, "y"));
+            continue;
+        }
+        let name = e.get("name").and_then(Value::as_str).unwrap_or("");
+        let text = e.get("text").and_then(Value::as_str).unwrap_or("");
+        let said = if name.is_empty() { text } else { name };
+        if !said.is_empty() {
+            let cut = e
+                .get("states")
+                .and_then(Value::as_array)
+                .is_some_and(|a| a.iter().any(|s| s == "cut"));
+            items.push((
+                said.to_string(),
+                n(e, "x"),
+                n(e, "y"),
+                n(e, "w"),
+                n(e, "h"),
+                cut,
+            ));
+        }
+    }
+    (items, origin)
+}
+
+/// The text a bar widget shows (#467): the items of the bar's tree (TREE, `tree --json`) whose
+/// middle is in widget ID's slot, from the shell's `debugBarGeometry` (GEOM: window coordinates, the
+/// bar's frame giving the layer's place).
+pub fn widget_text(tree: &[u8], geom: &[u8], id: &str) -> WidgetText {
+    let g: Value = serde_json::from_slice(geom).unwrap_or(Value::Null);
+    let Some(slot) = g.as_array().and_then(|a| {
+        a.iter()
+            .find(|s| s.get("id").and_then(Value::as_str) == Some(id))
+    }) else {
+        return WidgetText::Absent;
+    };
+    if slot.get("visible").and_then(Value::as_bool) != Some(true) {
+        return WidgetText::Hidden;
+    }
+    let n = |k: &str| slot.get(k).and_then(Value::as_i64).unwrap_or(0);
+    let (items, (ox, oy)) = tree_texts(tree);
+    let (x0, y0) = (n("x") + ox, n("y") + oy);
+    let (x1, y1) = (x0 + n("width"), y0 + n("height"));
+    let mine: Vec<TextItem> = items
+        .into_iter()
+        .filter(|(_, x, y, w, h, _)| {
+            let (mx, my) = (x + w / 2, y + h / 2);
+            mx >= x0 && mx < x1 && my >= y0 && my < y1
+        })
+        .collect();
+    let cut = mine.iter().any(|t| t.5);
+    WidgetText::Shown(mine.into_iter().map(|(s, ..)| s).collect(), cut)
+}
+
+/// widget_text's answer.
+#[derive(Debug, PartialEq)]
+pub enum WidgetText {
+    /// Its slot is shown: the text in it (none: icons or pictures only), and whether any of it is
+    /// cut (only part of it shows: a label wider than a vertical bar).
+    Shown(Vec<String>, bool),
+    /// Its slot is in the bar's layout with nothing shown (the widget hides itself, or is empty).
+    Hidden,
+    /// No slot of it in the bar's layout (off the bar, or placed by another plugin).
+    Absent,
+}
+
+/// The namespaces of LAYERS (`hyprctl -j layers`), each once, in order.
+pub fn layer_names(layers: &[u8]) -> Vec<String> {
+    fn walk(v: &Value, into: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                if let Some(ns) = m.get("namespace").and_then(Value::as_str) {
+                    if !into.iter().any(|n| n == ns) {
+                        into.push(ns.to_string());
+                    }
+                }
+                m.values().for_each(|c| walk(c, into));
+            }
+            Value::Array(a) => a.iter().for_each(|c| walk(c, into)),
+            _ => {}
+        }
+    }
+    let mut into = Vec::new();
+    walk(
+        &serde_json::from_slice(layers).unwrap_or(Value::Null),
+        &mut into,
+    );
+    into
+}
+
+/// Text items as one line: `a | b | c`, MAX at most and the rest counted; "none" for none.
+pub fn text_line(items: &[String], max: usize) -> Vec<u8> {
+    if items.is_empty() {
+        return b"none".to_vec();
+    }
+    let mut s = items
+        .iter()
+        .take(max)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if items.len() > max {
+        s.push_str(&format!(" | ... and {} more", items.len() - max));
+    }
+    s.into_bytes()
+}
+
+/// One text item of a layer: what it says and where (tree_texts').
+type TextItem = (String, i64, i64, i64, i64, bool);
+
+/// `tree --layer NS --json` in box NAME, as it printed it, or why it read nothing.
+fn layer_tree(name: &[u8], ns: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
+    let r = ob(&[b"tree", b"-b", name, b"--layer", ns, b"--json"]);
+    if !r.ok {
+        let why = shell::subst(&r.err);
+        let why = why.strip_prefix(b"omabox: ").unwrap_or(&why).to_vec();
+        return Err(why);
+    }
+    Ok(r.out)
+}
+
+/// layer_tree's text items.
+fn layer_texts(name: &[u8], ns: &[u8]) -> Result<Vec<TextItem>, Vec<u8>> {
+    layer_tree(name, ns).map(|j| tree_texts(&j).0)
+}
+
 /// A plugin's id, from DIR/manifest.json.
 fn plugin_id(dir: &[u8]) -> Option<Vec<u8>> {
     let m: Value =
@@ -792,9 +932,55 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
         problems.push(cat!("shot: ", shell::subst(&r.err)));
         None
     };
+    // What the widget shows (#467): the bar's text items in its slot, from the shell's own geometry
+    // of the bar and `tree`, which reads the shell's text (tools/qtext).
+    let id_s = String::from_utf8_lossy(id).into_owned();
+    let geom = ob(&[
+        b"run",
+        b"-b",
+        name,
+        b"--",
+        b"omarchy-shell",
+        b"shell",
+        b"debugBarGeometry",
+    ]);
+    let bar_json = layer_tree(name, BAR_NS);
+    let bar = bar_json.as_ref().map(|j| tree_texts(j).0);
+    let text = match bar_json.as_ref().map(|j| widget_text(j, &geom.out, &id_s)) {
+        Err(why) => {
+            notes.push(cat!("the bar's text could not be read: ", why));
+            b"unknown".to_vec()
+        }
+        Ok(WidgetText::Shown(t, cut)) => {
+            if cut {
+                notes.push(
+                    b"part of the widget's text is cut off (outside the bar, or clipped): the shot shows only some of it"
+                        .to_vec(),
+                );
+            }
+            text_line(&t, PANEL_TEXT_MAX)
+        }
+        Ok(WidgetText::Hidden) => {
+            notes.push(cat!(
+                id,
+                " is in the bar's layout but shows nothing now (hidden, or no width)"
+            ));
+            b"none".to_vec()
+        }
+        Ok(WidgetText::Absent) => {
+            notes.push(cat!(
+                id,
+                " has no slot in the bar's layout (off the bar, or placed by another plugin): its text is not read"
+            ));
+            b"unknown".to_vec()
+        }
+    };
     // --open: its panel summoned, then the whole screen.
     let mut panel = None;
+    let mut panel_text = None;
     if a.open {
+        let layers = |n: &[u8]| layer_names(&ob(&[b"hyprctl", b"-b", n, b"-j", b"layers"]).out);
+        let before = layers(name);
         let r = ob(&[
             b"run",
             b"-b",
@@ -815,6 +1001,35 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
             ));
         }
         ob(&still);
+        // Its text: the layers the summon mapped (Omarchy's panels are layers of their own), else
+        // what is new in the bar's (a popup drawn in the bar's layer, #315).
+        let mut items: Vec<String> = Vec::new();
+        let new: Vec<String> = layers(name)
+            .into_iter()
+            .filter(|n| !before.contains(n))
+            .collect();
+        let mut unread = Vec::new();
+        for ns in &new {
+            match layer_texts(name, ns.as_bytes()) {
+                Ok(t) => items.extend(t.into_iter().map(|(s, ..)| s)),
+                Err(why) => unread.push(why),
+            }
+        }
+        if new.is_empty() {
+            if let (Ok(old), Ok(now)) = (&bar, layer_texts(name, BAR_NS)) {
+                items.extend(
+                    now.into_iter()
+                        .filter(|t| !old.contains(t))
+                        .map(|(s, ..)| s),
+                );
+            }
+        }
+        if items.is_empty() {
+            for why in unread {
+                notes.push(cat!("the panel's text could not be read: ", why));
+            }
+        }
+        panel_text = Some(text_line(&items, PANEL_TEXT_MAX));
         let out_p = a.out.as_ref().map(|o| suffixed(o, "panel"));
         let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name];
         if let Some(o) = &out_p {
@@ -840,6 +1055,10 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
         head.push(("panel", p));
     }
     head.push(("plugin", &line));
+    head.push(("text", &text));
+    if let Some(t) = &panel_text {
+        head.push(("panel text", t));
+    }
     out(report(
         &head,
         &problems,
@@ -1144,6 +1363,53 @@ mod tests {
         assert_eq!(
             plugin_warnings(w, b"me.x"),
             [b"qs:///p/plugins/me.x/Panel.qml[15:-1]: ReferenceError: y".to_vec()]
+        );
+    }
+
+    // #467: what a widget shows, from the bar's tree (`tree --layer omarchy-bar --json`, its text
+    // items) and the shell's debugBarGeometry; a panel's from the layers its summon mapped.
+    #[test]
+    fn a_widgets_text() {
+        let tree = br#"[{"depth": 0, "role": "frame", "name": "omarchy-bar", "states": [], "x": 0, "y": 30, "w": 1920, "h": 26},
+ {"depth": 1, "role": "text", "name": "Thursday 21:25", "states": [], "x": 910, "y": 35, "w": 101, "h": 16},
+ {"depth": 1, "role": "text", "name": "cups", "states": [], "x": 1845, "y": 35, "w": 30, "h": 16},
+ {"depth": 1, "role": "label", "name": "", "text": "391", "states": ["cut"], "x": 1880, "y": 35, "w": 20, "h": 16}]"#;
+        let geom =
+            br#"[{"id":"omarchy.clock","x":901,"y":0,"width":118,"height":26,"visible":true},
+ {"id":"example.cups","x":1837,"y":0,"width":75,"height":26,"visible":true},
+ {"id":"omarchy.tray","x":1729,"y":0,"width":0,"height":0,"visible":false}]"#;
+        assert_eq!(
+            widget_text(tree, geom, "example.cups"),
+            WidgetText::Shown(vec!["cups".into(), "391".into()], true),
+            "the items in its slot, the bar's place added (a name, else the text), one cut"
+        );
+        assert_eq!(
+            widget_text(tree, geom, "omarchy.clock"),
+            WidgetText::Shown(vec!["Thursday 21:25".into()], false)
+        );
+        assert_eq!(widget_text(tree, geom, "omarchy.tray"), WidgetText::Hidden);
+        assert_eq!(widget_text(tree, geom, "nope"), WidgetText::Absent);
+        assert_eq!(widget_text(tree, b"", "example.cups"), WidgetText::Absent);
+        assert_eq!(
+            widget_text(b"[]", geom, "example.cups"),
+            WidgetText::Shown(vec![], false)
+        );
+        assert_eq!(tree_texts(tree).1, (0, 30));
+        assert_eq!(text_line(&["a".into(), "b c".into()], 60), b"a | b c");
+        assert_eq!(
+            text_line(&["a".into(), "b".into(), "c".into()], 2),
+            b"a | b | ... and 1 more"
+        );
+        assert_eq!(text_line(&[], 60), b"none");
+        let layers = br#"{"DP-1": {"levels": {"0": [{"namespace": "omarchy-background"}],
+ "2": [{"namespace": "omarchy-bar"}, {"namespace": "omarchy-bar"}], "3": [{"namespace": "omarchy-keyboard-panel"}]}}}"#;
+        assert_eq!(
+            layer_names(layers),
+            [
+                "omarchy-background",
+                "omarchy-bar",
+                "omarchy-keyboard-panel"
+            ]
         );
     }
 

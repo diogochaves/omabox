@@ -49,11 +49,12 @@ Sections:
   namespace from `omabox hyprctl layers`, `address:0x...` or `pid:PID`), with `--find`, `--json` and
   `--all` as for windows. Its bounds are the **screen's** coordinates: plain `click X Y` at a node's
   middle lands on it, and `click --layer SEL --find TEXT` finds and clicks it. Quickshell publishes them from 0.3.2 (older: "no accessibility tree", or
-  `--quickshell` a build), and only items that set an `Accessible.role`: a layer without any says
-  "publishes no accessible items" (Omarchy's own bar today), exit 1. Its `frame`s have no names, so
-  the layer's is the one of its pid that is its size: two layers of one pid and size are told apart
-  only when one holds the keyboard (the launcher, or an Omarchy 4.5 bar popup, over the wallpaper);
-  else `tree` says so.
+  `--quickshell` a build), and only items that set an `Accessible.role`; the box's own shell also gives
+  the text it draws, `text "WORDS"` lines (#467: a bar widget's count, a panel's labels; ref:
+  shell.md). A layer with neither says "publishes no accessible items", exit 1. Its `frame`s have no
+  names, so the layer's is the one of its pid that is its size: two layers of one pid and size are
+  told apart only when one holds the keyboard (the launcher, or an Omarchy 4.5 bar popup, over the
+  wallpaper); else `tree` says so (the shell's text is read by namespace).
 - `click --window SEL X Y` takes the window's own coordinates (0,0 its corner, as in its `shot
   --window`).
 - `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a

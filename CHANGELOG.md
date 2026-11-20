@@ -23,6 +23,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   stock themes score. They are notes in `up`, problems in `look`. An installed theme is checked
   by its name too: `up --theme NAME` and `look theme NAME` read it as Omarchy builds it, its own
   folder with yours of the same name over it.
+- **A bar widget's text, without a screenshot** ([#467](https://github.com/diogochaves/omabox/issues/467)):
+  `tree --layer omarchy-bar` lists the text the box's shell draws, `text "cups 391" @1845,5 58x16`,
+  so `--find TEXT` finds what a widget shows and `click --find` clicks it; panels the same, on their
+  own layers. Omarchy's bar sets no accessibility roles, so `tree` found nothing there and agents
+  read the bar with OCR. `look plugin` prints the widget's text (`text:`) and, with `--open`, its
+  panel's (`panel text:`). The box's shell runs with a small reader of its own Qt Quick items
+  (`tools/qtext`, which needs Qt 6's Quick headers to build: `./install.sh` installs them).
 
 ### Fixed
 - **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):

@@ -85,6 +85,14 @@ most people will. Then:
   another mounted plugin runs (`off the bar`); if Y puts it in its own lanes through its config or
   IPC, that is fine. `warning: plugin X disabled: not in the bar's layout`: no mounted plugin could
   place it; the line gives the `putBarWidget` command that puts it there.
+- **What it shows, as text** (no shot, no OCR): `omabox tree --layer omarchy-bar --find TEXT` finds a
+  widget's text on the bar, `text "cups 391" @1845,5 58x16` (the screen's coordinates: `click X Y` at
+  its middle, or `click --layer omarchy-bar --find TEXT`); a panel's is its own layer's (`omabox
+  hyprctl -j layers` names it, e.g. `omarchy-keyboard-panel`). The box's shell is started with
+  omabox's text reader, which gives every Text, TextInput and TextEdit it draws, whatever the QML
+  sets (`[cut]`: only part of it shows); icon-font glyphs are left out. `look plugin` prints the
+  widget's (`text:`) and with `--open` its panel's. A Quickshell config you run yourself (`omabox run
+  -- qs -p`) gives only the items that set an Accessible role.
 - **Its settings** are the desk's (`~/.config/omarchy/extensions/NAME.json`, copied at `up`, which
   says so): an on/off switch off on the desk is off in the box. `up --no-seed extensions` starts
   without them; `--seed` a fixture for a known state (Mounts, HOME and the session in session.md).

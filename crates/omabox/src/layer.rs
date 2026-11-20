@@ -196,6 +196,12 @@ fn layer_argv(
         b"--offset".to_vec(),
         cat!(x, ",", y),
     ]);
+    // Its namespace, which names its window in the shell's text reader (#467): two layers of one
+    // size and pid (the bar and the wallpaper) are told apart by it there.
+    let ns = jq_r(".namespace // \"\"", l);
+    if !ns.is_empty() {
+        argv.extend([b"--namespace".to_vec(), ns]);
+    }
     argv.extend(hint);
     argv.extend(args.iter().cloned());
     Ok(argv)
@@ -318,11 +324,12 @@ mod tests {
         };
         assert_eq!(
             read(b"solo", ""),
-            "/usr/bin/timeout 30 /opt/omabox/bin/omabox-tree --pid 9 --layer --size 200x60 --offset 2100,300 --json",
-            "a layer alone at its size: its pid, size and place, no hint"
+            "/usr/bin/timeout 30 /opt/omabox/bin/omabox-tree --pid 9 --layer --size 200x60 --offset 2100,300 --namespace solo --json",
+            "a layer alone at its size: its pid, size, place and namespace, no hint"
         );
         assert!(
-            read(b"omarchy-launcher", "0xc=1").ends_with("--offset 0,0 --active yes --json"),
+            read(b"omarchy-launcher", "0xc=1")
+                .ends_with("--offset 0,0 --namespace omarchy-launcher --active yes --json"),
             "two of its size, it with the keyboard: its frame is the active one"
         );
         assert!(

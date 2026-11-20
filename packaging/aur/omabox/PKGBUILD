@@ -20,7 +20,7 @@ depends=('bash' 'glibc' 'libgcc' 'hyprland>=0.56' 'labwc' 'wlr-randr' 'bubblewra
          'iproute2' 'jq' 'grim>=1.5' 'gnome-keyring' 'libsecret' 'dbus' 'passt' 'wl-clipboard'
          'wayland' 'libxkbcommon' 'pixman' 'libpng' 'at-spi2-core' 'glib2' 'systemd-libs'
          'coreutils' 'diffutils' 'findutils' 'gawk' 'grep' 'procps-ng' 'sed' 'tar')
-makedepends=('pkgconf' 'cargo')
+makedepends=('pkgconf' 'cargo' 'qt6-declarative')
 optdepends=("quickshell: a shell in a box (Omarchy's bar in Omarchy boxes; plain boxes with --shell)"
             'gtk3: GTK settings in Omarchy boxes'
             'xdg-terminal-exec: the terminal a box opens (else foot, alacritty, kitty or ghostty)'
@@ -44,7 +44,7 @@ install=omabox.install
 source=("$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
 sha256sums=('20d40ea8027ed6e43f1ade5bfaf4f819dbe7e1bddeeec75ddec003de475692fd')
 
-_tools=(pointer keyboard wlfd peek still relay events burst tree notices polkit fixture idlehold)
+_tools=(pointer keyboard wlfd peek still relay events burst tree notices polkit fixture idlehold qtext)
 
 prepare() {
   cd "$pkgname-$pkgver"

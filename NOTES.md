@@ -14401,6 +14401,68 @@ from them.
     one run each: all four passed, pi in 8 calls each (47 s, 49 s; text-only: 10 and 18 calls), OpenCode
     in 18 and 11 (281 s, 130 s; text-only: 18 and 17), and the plugin runs read the widget without OCR.
 
+727. **A bar widget's text: the box's shell reads its own Qt Quick items** (2026-11-19, #467; finding
+    726's gap). `look plugin` said `loaded` and `tree --layer omarchy-bar` "publishes no accessible
+    items", so every benchmark run OCR'd the bar. *Routes tried.* (1) **AT-SPI** (what `tree` reads):
+    Qt Quick publishes an item only when its QML creates the `Accessible` attached object (a role or a
+    name); Qt 6.12's `QQuickText` has no accessibility of its own (`qquicktext.cpp` has none; only
+    `QQuickItemPrivate::setAccessible` sets the flag, from the attached object). Seen in a box: a
+    `qs -p` config of a `PanelWindow` with two plain `Text`s publishes its frame and nothing under it,
+    started after IsEnabled was set, with `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1` or not, and after a
+    shell restart. Omarchy's `WidgetButton` sets no role, and a third-party widget cannot be made to
+    without changing it. (2) **The shell's IPC**: `omarchy-shell shell debugBarGeometry` gives each
+    widget's slot (id, section, x, y, width, height, visible), not its text; no call dumps item text,
+    and a plugin's own `IpcHandler` is the plugin's choice. (3) **QML debugging** (`quickshell --debug
+    PORT`, QQmlEngineDebugService): it can list objects and properties, but over TCP (a port in the
+    box's network namespace, which pasta may forward), with QVariant values in QDataStream's encoding
+    to decode by type, and the shell started in debug mode; not tried further. *Route taken:*
+    **`tools/qtext`, a library preloaded into the box's shell.** `share/shell.sh` and the systemd-cat
+    stand-in (both of the shell's starts: `up`, `restart-shell`, `omarchy restart shell`) add
+    `/opt/omabox/bin/omabox-qtext` to `LD_PRELOAD` on Quickshell's exec (kept after the session's own:
+    `--polkit`'s shim). It does nothing outside a box (`omabox_inside_box`). A
+    `Q_COREAPP_STARTUP_FUNCTION` (Qt calls it for every QCoreApplication made) listens, once there is
+    a QGuiApplication, on `$XDG_RUNTIME_DIR/omabox-qtext/PID`, and on each connection walks, on the
+    GUI thread (a QSocketNotifier), every visible QQuickWindow's items: a `QQuickText`, `TextEdit`
+    (rich or styled text as its plain words) or `TextInput` (its `displayText`: a password stays
+    masked) that is visible, with opacity left along its ancestors, not clipped away by a `clip: true`
+    ancestor nor outside the window, is a line `text X Y W H CUT WORDS` in window coordinates
+    (mapRectToScene; CUT when part of it is outside the window or a clipping ancestor, or Qt elided
+    it: `truncated`), under `window W H ACTIVE NAMESPACE`. The namespace: the window's content item is parented to the
+    PanelWindow (Quickshell's `WlrLayershell` proxy), whose `namespace` property is the layer's, so
+    the bar and the wallpaper (one pid, both 1920x1080: finding 547) are told apart by name. Two traps:
+    **Quickshell executes itself again as it starts** (the pid stays, the image is new), so a library
+    that took itself out of `LD_PRELOAD` as it loaded was gone from the shell that runs; it does so
+    in its startup function, once the QGuiApplication exists, so the shell's children (apps from its
+    menus, `wl-paste`, the input-method indicator) never load Qt Quick for it. And a program that
+    makes a QCoreApplication twice: the socket goes with the one it was made for (a post routine) and
+    the next makes its own. Nothing is written into the shell; any connection is one read.
+    `omabox-tree --layer` (layer_argv now passes `--namespace NS`) asks it first: the window by
+    namespace, else by size (and `--active`), and prints its items as `text "WORDS" @x,y wxh` one
+    level under the frame (`[cut]` when only part shows), after what AT-SPI has (a text AT-SPI said is not said again), the
+    layer's offset added; with nothing on AT-SPI (no bus, no frame, the empty one Omarchy's bar has)
+    the frame is the window's, `frame "omarchy-bar" @0,0 1920x1080`. `--find`, `--json`, `click
+    --find` and `wait tree` take them as any node. `clean` now drops the supplementary private-use
+    planes too (Nerd Fonts' `󰇧` is U+F01E7): icon glyphs were noise lines, ten a bar. A layer with
+    neither items nor text is still exit 5, said with why no text either ("pid N was not started with
+    omabox's text reader": a `qs -p` of the agent's own, a plain box's `--shell`, a box from before;
+    or "it shows no text"). `look plugin` reads the bar's tree once and the shell's
+    `debugBarGeometry`: `text:` is the items whose middle is in the widget's slot, joined by ` | `
+    (`none` and a note for a slot shown empty: omabox's own widget hides while no box is up; `unknown`
+    and a note for no slot; a note when part of it is cut: on a vertical bar 42 px
+    wide, `cups 391` is drawn wider than the bar and the shot shows `ups 39`); with `--open`, `panel text:` is the text of the layers the summon mapped
+    (Omarchy 4.5's `KeyboardPanel` is a layer of its own, `omarchy-keyboard-panel`), else what is new
+    in the bar's layer, 60 items at most. **Seen in a box** (Omarchy 4.5, Quickshell 0.3.2, Qt 6.12):
+    the benchmark's cups fixture, `look plugin ./cups`: `text: cups 391` (4.4 s); `tree --layer
+    omarchy-bar --find cups`: `text "cups 391" @1845,5 58x16`, `click --layer omarchy-bar --find "cups
+    391"` at 1874,13; the clock's panel summoned, `tree --layer omarchy-keyboard-panel`: "November 19",
+    "2026", the weekday heads and every day of the month. Building it needs a C++ compiler and Qt 6's
+    Quick headers (Arch's `qt6-declarative`, which Quickshell already pulls in; install.sh and doctor
+    name each family's package, the other families' not installed here). A Quickshell build of
+    another Qt (`--quickshell`, checked to be the box's Qt by `qs_check`) loads it the same.
+    Not covered: a plain box's `--shell` and the desk shells (their command is the user's own, run
+    by `sh -c`; preloading it would load Qt Quick into every process it starts), and Qt Quick apps
+    (their AT-SPI tree is what `tree` reads).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

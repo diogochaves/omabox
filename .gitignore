@@ -18,6 +18,7 @@ tools/events/omabox-events
 tools/notices/omabox-notices
 tools/tree/omabox-tree
 tools/polkit/omabox-polkit
+tools/qtext/omabox-qtext
 tools/polkit/omabox-polkit-session.so
 tools/fixture/omabox-fixture
 tools/fixture/*-protocol.[ch]

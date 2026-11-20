@@ -35,6 +35,15 @@
 // one of them with the keyboard: applied only when exactly one of them is active. Bounds are the
 // surface's own plus --offset (the layer's place on the screen: what `omabox click X Y` takes).
 //
+// A layer's text (#467, NOTES finding 727): Qt Quick publishes an item only when its QML gives it an
+// Accessible role or name, so Omarchy's bar and its plugins' widgets publish nothing. The box's shell
+// runs with tools/qtext preloaded, which answers on $XDG_RUNTIME_DIR/omabox-qtext/PID with each of its
+// windows (size, whether active, the layer's namespace) and the text drawn in it. The layer's window
+// there is the one --namespace NS names, else the one of its size (--active as above); its text items
+// are printed as `text "WORDS" @x,y wxh` lines one level under the frame, after whatever AT-SPI has
+// (a text AT-SPI already said is not said again), and --find and --click take them as any node. With
+// nothing on AT-SPI (no bus, no frame, an empty one), the frame's line is the window's.
+//
 // --click TEXT (#318): instead of the tree, where `omabox click --find TEXT` clicks: the middle of the
 // visible part of the one node named TEXT (any case; an exact name wins over a part of one, a
 // control over a label), in the coordinates the bounds are in, "X Y" and its line on stdout. Hidden
@@ -47,7 +56,7 @@
 // is read once however many parents it has (some Qt WebEngine nodes sit under two).
 //
 // Exit: 0 printed; 1 --find or --click matched nothing; 3 no tree for that window (said why); 4 the box has no
-// accessibility bus; 5 the layer's frame has nothing under it; 6 several frames are the layer's size,
+// accessibility bus; 5 the layer's frame has nothing under it and no text is read from it; 6 several frames are the layer's size,
 // or the app's only frame is the size of several of its windows; 7 the app's only frame is not the
 // window's size (that window is not on the bus); 8 --click: several in view; 9 --click: the one
 // matching cannot be clicked (said why); 2 usage, or outside a box.
@@ -58,7 +67,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "../common/box.h"
 
@@ -71,10 +84,11 @@
 #define MAX_DEPTH 64
 
 static int opt_all, opt_json, win_w = -1, win_h = -1, opt_layer, layer_ox, layer_oy, active_hint = -1, twins;
-static const char *find, *click;
+static const char *find, *click, *layer_ns;
 static int nodes, lines, matched, truncated, click_index;
 static GString *out;
 static GHashTable *seen; // the nodes read, by bus name and path
+static GHashTable *said; // --layer: the names and texts AT-SPI's nodes printed (a text item says none again)
 
 // --click: whether the node being read is under one that is not showing and visible, and the part
 // of the window in view there (the window's, cut by each ancestor's bounds).
@@ -133,7 +147,7 @@ static char *clean(const char *s, glong n) {
     for (const char *p = s ? s : ""; *p; p = g_utf8_next_char(p)) {
         gunichar c = g_utf8_get_char_validated(p, -1);
         if (c == (gunichar)-1 || c == (gunichar)-2) break;
-        if (c == 0xFFFC || (c >= 0xE000 && c <= 0xF8FF)) continue;
+        if (c == 0xFFFC || (c >= 0xE000 && c <= 0xF8FF) || c >= 0xF0000) continue; // (Nerd Fonts: both planes)
         if (g_unichar_isspace(c)) { space = g->len > 0; continue; }
         if (space) g_string_append_c(g, ' ');
         space = 0;
@@ -505,6 +519,10 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
     }
 
     int pushed = 0;
+    if (printed && said) {
+        if (*name) g_hash_table_add(said, g_utf8_casefold(name, -1));
+        if (*text) g_hash_table_add(said, g_utf8_casefold(text, -1));
+    }
     if (printed) {
         if (click) hit(role, name, text, val, states, hasb ? b : NULL, hasvis ? vis : NULL,
                        ss && !HAS(ATSPI_STATE_SENSITIVE) && !HAS(ATSPI_STATE_ENABLED));
@@ -773,6 +791,136 @@ static int is_active(AtspiAccessible *f) {
     return r;
 }
 
+// Why layer_frame found no frame to read (its words, said only when no text is read instead).
+static GString *frame_why;
+
+// --layer's text (#467): the window tools/qtext names for the layer, and what it draws as text.
+struct qitem { int b[4], cut; char *text; }; // cut: part of it is outside what shows it
+static struct { int w, h, active; char *ns; GArray *items; } qwin;
+enum { QT_NONE, QT_NOWIN, QT_TIED, QT_OK };
+static char *qt_why; // why there is no text (QT_NONE, QT_NOWIN, QT_TIED)
+
+// PID's answer on its socket, NULL (and qt_why) without one: not started with the library (anything
+// but the box's shell), or one from before it (an omabox without it).
+static char *qtext_ask(long pid) {
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    char *path = g_strdup_printf("%s/omabox-qtext/%ld", rt && *rt ? rt : "/run/user/0", pid);
+    struct sockaddr_un a = {.sun_family = AF_UNIX};
+    int fd = -1;
+    if (strlen(path) < sizeof a.sun_path) {
+        strcpy(a.sun_path, path);
+        fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    }
+    g_free(path);
+    if (fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof a) < 0) close(fd), fd = -1;
+    if (fd < 0) {
+        qt_why = g_strdup_printf("its text is not read either: pid %ld was not started with omabox's text reader "
+                                 "(the box's shell is, from omabox 1.5 on)", pid);
+        return NULL;
+    }
+    struct timeval tv = {3, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    GString *g = g_string_new(NULL);
+    char buf[65536];
+    for (ssize_t n; (n = read(fd, buf, sizeof buf)) != 0;) {
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        g_string_append_len(g, buf, n);
+        if (g->len > (gsize)64 << 20) break;
+    }
+    close(fd);
+    return g_string_free(g, FALSE);
+}
+
+// Reads PID's windows and picks the layer's into qwin: by --namespace, else by --size (and --active).
+static int qtext_load(long pid) {
+    char *ans = qtext_ask(pid);
+    if (!ans) return QT_NONE;
+    char **ls = g_strsplit(ans, "\n", -1);
+    g_free(ans);
+    int n_ns = 0, n_size = 0, n_active = 0, rc;
+    // Two passes: which windows match, then the one taken.
+    for (int pass = 0; pass < 2; pass++) {
+        int take = 0, want = -1;
+        if (pass == 1) {
+            if (n_ns == 1) want = 0;
+            else if (n_ns == 0 && n_size == 1) want = 1;
+            else if (n_ns == 0 && n_size > 1 && active_hint == 1 && n_active == 1) want = 2;
+            else break;
+        }
+        for (char **l = ls; *l; l++) {
+            char **f = g_strsplit(*l, "\t", 7);
+            guint nf = g_strv_length(f);
+            if (nf == 5 && !strcmp(f[0], "window")) {
+                int w = atoi(f[1]), h = atoi(f[2]), act = atoi(f[3]);
+                int by_ns = layer_ns && *layer_ns && !strcmp(f[4], layer_ns), by_size = w == win_w && h == win_h;
+                if (pass == 0) n_ns += by_ns, n_size += by_size, n_active += by_size && act;
+                take = pass == 1 && ((want == 0 && by_ns) || (want == 1 && by_size) || (want == 2 && by_size && act));
+                if (take) {
+                    qwin.w = w, qwin.h = h, qwin.active = act, qwin.ns = g_strdup(f[4]);
+                    qwin.items = g_array_new(FALSE, FALSE, sizeof(struct qitem));
+                }
+            } else if (take && nf == 7 && !strcmp(f[0], "text") && qwin.items->len < BUDGET) {
+                struct qitem it = {{atoi(f[1]), atoi(f[2]), atoi(f[3]), atoi(f[4])}, atoi(f[5]), g_strdup(f[6])};
+                g_array_append_val(qwin.items, it);
+            }
+            g_strfreev(f);
+        }
+    }
+    g_strfreev(ls);
+    if (qwin.items) rc = QT_OK;
+    else if (n_ns > 1 || n_size > 1) {
+        qt_why = g_strdup_printf("its text is not read either: %d of its windows are the layer's", MAX(n_ns, n_size));
+        rc = QT_TIED;
+    } else {
+        qt_why = g_strdup_printf("its text is not read either: none of its windows is the layer (%s, %dx%d)",
+                                 layer_ns ? layer_ns : "", win_w, win_h);
+        rc = QT_NOWIN;
+    }
+    return rc;
+}
+
+// The layer's text items, one level under its frame: as emit prints a node, or as --click weighs one.
+static void qtext_emit(void) {
+    GPtrArray *none = g_ptr_array_new(), *cut = g_ptr_array_new();
+    g_ptr_array_add(cut, "cut"); // (a state of its own: only part of the text shows)
+    int whole[4] = {0, 0, qwin.w, qwin.h};
+    for (guint i = 0; i < qwin.items->len; i++) {
+        struct qitem *it = &g_array_index(qwin.items, struct qitem, i);
+        char *s = clean(it->text, FULL), *key = g_utf8_casefold(s, -1);
+        if (*s && !g_hash_table_contains(said, key)) {
+            g_hash_table_add(said, g_strdup(key));
+            GPtrArray *st = it->cut ? cut : none;
+            if (click) {
+                int vis[4], in_view = meet(it->b, whole, vis);
+                hit("text", s, "", NULL, st, it->b, in_view ? vis : NULL, 0);
+            } else {
+                emit(1, "text", s, "", NULL, st, it->b);
+            }
+        }
+        g_free(key);
+        g_free(s);
+    }
+    g_ptr_array_free(none, TRUE);
+    g_ptr_array_free(cut, TRUE);
+}
+
+// The layer with nothing from AT-SPI: its window's frame, named by its namespace, and its text.
+static void qtext_only(void) {
+    GPtrArray *none = g_ptr_array_new();
+    int b[4] = {0, 0, qwin.w, qwin.h};
+    const char *ns = qwin.ns ? qwin.ns : "";
+    if (!click) emit(0, "frame", ns, "", NULL, none, b);
+    path[0] = g_strdup_printf("frame \"%s\"", ns);
+    path_full[0] = g_strdup(path[0]);
+    path_n = 1;
+    qtext_emit();
+    path_n = 0;
+    g_ptr_array_free(none, TRUE);
+}
+
 // --layer: the frame of APPS that is the layer's size (win_w x win_h) into *win, else says why and
 // returns the exit code. Its frame with nothing under it is said apart: that is a layer whose items
 // set no Accessible role, not a build that publishes no tree (Quickshell before 0.3.2: no frame).
@@ -815,18 +963,18 @@ static int layer_frame(GPtrArray *apps, long pid, AtspiAccessible **win) {
         if (atspi_accessible_get_child_count(same->pdata[i], NULL) <= 0) empty++;
     int rc = 0;
     if (same->len == 0) {
-        fprintf(stderr, "no accessibility tree for the layer: none of its application's (pid %ld) windows is %dx%d (they are %s)\n",
+        g_string_append_printf(frame_why, "no accessibility tree for the layer: none of its application's (pid %ld) windows is %dx%d (they are %s)\n",
                 pid, win_w, win_h, sizes->len ? sizes->str : "none");
         rc = 3;
     } else if (same->len > 1 && empty == (int)same->len) {
-        fprintf(stderr, "the layer publishes no accessible items (nothing in it sets an Accessible role)\n");
+        g_string_append_printf(frame_why, "the layer publishes no accessible items (nothing in it sets an Accessible role)\n");
         rc = 5;
     } else if (same->len > 1) {
-        fprintf(stderr, "%u of its application's (pid %ld) windows are %dx%d, and they have no names: which one is the layer's cannot be told\n",
+        g_string_append_printf(frame_why, "%u of its application's (pid %ld) windows are %dx%d, and they have no names: which one is the layer's cannot be told\n",
                 same->len, pid, win_w, win_h);
         rc = 6;
     } else if (atspi_accessible_get_child_count(same->pdata[0], NULL) <= 0) {
-        fprintf(stderr, "the layer publishes no accessible items (nothing in it sets an Accessible role)\n");
+        g_string_append_printf(frame_why, "the layer publishes no accessible items (nothing in it sets an Accessible role)\n");
         rc = 5;
     } else {
         *win = g_object_ref(same->pdata[0]);
@@ -897,6 +1045,18 @@ static int pick(void) {
 }
 
 static int tree_main(int argc, char **argv);
+static int found_or_not(void);
+
+// The layer from its text alone (nothing on AT-SPI for it): its frame and text items, printed, or
+// --click's pick.
+static int text_only(void) {
+    qtext_only();
+    if (click) return pick();
+    if (opt_json) g_string_append(out, out->len ? "]\n" : "[]\n");
+    fputs(out->str, stdout);
+    return found_or_not();
+}
+
 int main(int argc, char **argv) {
     g_log_set_writer_func(glog_writer, NULL, NULL);
     int rc = tree_main(argc, argv);
@@ -924,13 +1084,14 @@ static int tree_main(int argc, char **argv) {
         else if (!strcmp(a, "--size") && v) {
             if (sscanf(argv[++i], "%dx%d", &win_w, &win_h) != 2) win_w = win_h = -1;
         } else if (!strcmp(a, "--layer")) opt_layer = 1;
+        else if (!strcmp(a, "--namespace") && v) layer_ns = argv[++i];
         else if (!strcmp(a, "--offset") && v) {
             if (sscanf(argv[++i], "%d,%d", &layer_ox, &layer_oy) != 2) layer_ox = layer_oy = 0;
         } else if (!strcmp(a, "--active") && v) {
             v = argv[++i];
             active_hint = !strcmp(v, "yes") ? 1 : !strcmp(v, "no") ? 0 : -1;
         } else {
-            fprintf(stderr, "usage: omabox-tree --pid PID [--title TITLE | --layer] [--size WxH] [--twins N] [--offset X,Y] [--active yes|no] "
+            fprintf(stderr, "usage: omabox-tree --pid PID [--title TITLE | --layer] [--size WxH] [--twins N] [--offset X,Y] [--namespace NS] [--active yes|no] "
                             "[--find TEXT | --click TEXT [--index N]] [--json] [--all]\n");
             return 2;
         }
@@ -955,9 +1116,22 @@ static int tree_main(int argc, char **argv) {
     g_log_set_handler("dbind", G_LOG_LEVEL_WARNING, dbind_log, NULL);
     g_log_set_handler("atspi", G_LOG_LEVEL_WARNING, dbind_log, NULL);
 
+    out = g_string_new(NULL);
+    seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    frame_why = g_string_new(NULL);
+    if (click) hits = g_ptr_array_new();
+    // A layer's text (#467): read first, so a layer with nothing on AT-SPI is still read.
+    int qt = QT_NONE;
+    if (opt_layer) {
+        said = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+        qt = qtext_load(pid);
+    }
+
     int was_off = a11y_bus();
+    if (was_off < 0 && qt == QT_OK) return text_only();
     if (was_off < 0) return 4;
     if (atspi_init() < 0) {
+        if (qt == QT_OK) return text_only();
         fprintf(stderr, "omabox-tree: could not reach the accessibility bus\n");
         return 4;
     }
@@ -975,6 +1149,7 @@ static int tree_main(int argc, char **argv) {
         }
         apps = apps_of(pid, &any, toolkit ? NULL : &toolkit);
     }
+    if (apps->len == 0 && qt == QT_OK) return text_only();
     if (apps->len == 0) {
         if (any) fprintf(stderr, "no accessibility tree: its application (pid %ld) is on the bus with no window under it\n", pid);
         else if (chromium_like(pid)) fprintf(stderr, "no accessibility tree: pid %ld, a Chromium or Electron app, is not on the box's "
@@ -988,17 +1163,24 @@ static int tree_main(int argc, char **argv) {
 
     AtspiAccessible *win = NULL;
     int rc = opt_layer ? layer_frame(apps, pid, &win) : window_frame(apps, title, &win);
-    if (rc) return rc;
+    if (rc && qt == QT_OK && !(rc == 5 && !qwin.items->len)) return text_only();
+    if (rc) {
+        // (rc 5, an empty frame: said with why no text is read instead, or that it shows none)
+        if (frame_why->len && frame_why->str[frame_why->len - 1] == '\n') g_string_truncate(frame_why, frame_why->len - 1);
+        if (rc == 5 && qt == QT_OK) g_string_append(frame_why, ", and it shows no text");
+        else if (rc == 5 && qt_why) g_string_append_printf(frame_why, "; %s", qt_why);
+        if (frame_why->len) fprintf(stderr, "%s\n", frame_why->str);
+        return rc;
+    }
 
-    out = g_string_new(NULL);
-    seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     if (click) {
-        hits = g_ptr_array_new();
         if (win_w > 0) clip[0] = clip[1] = 0, clip[2] = win_w, clip[3] = win_h, have_clip = 1;
         walk(win, 0, "");
+        if (qt == QT_OK) qtext_emit();
         return pick();
     }
     walk(win, 0, "");
+    if (qt == QT_OK) qtext_emit();
     if (opt_json) g_string_append(out, out->len ? "]\n" : "[]\n");
     fputs(out->str, stdout);
     // Chromium and Electron export the page only when started with --force-renderer-accessibility.
@@ -1006,6 +1188,11 @@ static int tree_main(int argc, char **argv) {
         fprintf(stderr, "omabox-tree: a Chromium or Electron window shows its page in the tree only when "
                         "started with --force-renderer-accessibility\n");
     if (truncated) fprintf(stderr, "omabox-tree: stopped at %d nodes (or %d children of one)\n", BUDGET, MAX_CHILDREN);
+    return found_or_not();
+}
+
+// What a read ends with: exit 1 when --find matched nothing.
+static int found_or_not(void) {
     if (find && !matched) {
         fprintf(stderr, "omabox-tree: nothing in the %s holds \"%s\" (%d lines)\n", opt_layer ? "layer" : "window", find, lines);
         return 1;

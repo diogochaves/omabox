@@ -11305,6 +11305,42 @@ t_unit_tree_layer() {
     "$(cat "$ROOT"/skill/ref/*.md | tr '\n' ' ' | tr -s ' ')"
 }
 
+# t467_plugin DIR: a bar widget whose text is worked out at run time ("tally 42"), with a panel that
+# says "panel holds 126", and two Texts that draw nothing (hidden, at opacity 0), for the shell's text
+# in `tree --layer` and `look plugin` (#467, finding 727).
+t467_plugin() {
+  mkdir -p "$1"
+  cat > "$1/manifest.json" <<'JSON'
+{"schemaVersion": 1, "id": "t467.tally", "name": "Tally", "version": "0.1.0", "kinds": ["bar-widget"],
+ "entryPoints": {"barWidget": "Widget.qml"}, "barWidget": {"displayName": "Tally", "defaultSection": "right"}}
+JSON
+  cat > "$1/Widget.qml" <<'QML'
+import QtQuick
+import qs.Ui
+Panel {
+  id: root
+  moduleName: "t467.tally"
+  ipcTarget: "t467.tally"
+  property int n: [6, 7].reduce((a, b) => a * b, 1)
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+  WidgetButton { id: button; bar: root.bar; text: "tally " + root.n; onPressed: function(b) { root.toggle() } }
+  Text { visible: false; text: "hidden words" }
+  Text { opacity: 0; text: "faded words" }
+  KeyboardPanel {
+    id: panel
+    anchorItem: button
+    owner: root
+    bar: root.bar
+    open: root.opened
+    contentWidth: panel.fittedContentWidth(240)
+    contentHeight: panel.fittedContentHeight(col.implicitHeight)
+    Column { id: col; Text { text: "panel holds " + root.n * 3 } }
+  }
+}
+QML
+}
+
 # tree --layer (#254, finding 384) in a box: a Quickshell config with a named button in a layer and
 # a layer with no roles, read through the box's AT-SPI bus; a click at the button's middle (the
 # screen's coordinates) lands; the shell's own bar; the launcher told from the wallpaper (both
@@ -11329,10 +11365,41 @@ t_tree_layer() {
     skip "tree --layer on a stub panel" "the installed Quickshell publishes no tree ($v)"
     ob down "$B" >/dev/null; return
   fi
-  out=$(ob tree -b "$B" --layer "$BAR_NS" 2>&1); rc=$?
-  check_eq "the shell's bar ($v): exit 1" 1 "$rc"
-  check_match "...it publishes no accessible items (Omarchy's QML sets no roles)" \
-    "tree: layer \"$BAR_NS\""' \(pid [0-9]+, [0-9]+x[0-9]+ at [0-9]+,[0-9]+\): the layer publishes no accessible items \(nothing in it sets an Accessible role\)' "$out"
+  if omarchy_here; then
+    # #467 (finding 727): Omarchy's QML sets no roles, but the box's shell gives the text it draws: a
+    # widget's, worked out at run time, found by --find and clicked by it; its panel's on its layer.
+    t467_plugin "$TMP/$P-t467"
+    ob plugin add -b "$B" "$TMP/$P-t467" >/dev/null 2>&1
+    ob wait -b "$B" --timeout 20s tree 'tally 42' --layer "$BAR_NS" >/dev/null 2>&1
+    out=$(ob tree -b "$B" --layer "$BAR_NS" 2>&1); rc=$?
+    check_eq "the shell's bar ($v): its text, exit 0 (#467)" 0 "$rc"
+    check_match "...under a frame named by the layer's namespace" "^frame \"$BAR_NS\" @[0-9]+,[0-9]+ [0-9]+x[0-9]+"$'\n' "$out"
+    check_match "...a widget's text worked out at run time, one level under it" $'\n''  text "tally 42"( \[cut\])? @-?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+' "$out"
+    check_fails "...not a hidden Text, nor one at opacity 0" grep -qE "hidden words|faded words" <<<"$out"
+    check_fails "...no icon-font glyph (private use)" perl -CSD -ne '$f = 1 if /text "[\x{E000}-\x{F8FF}\x{F0000}-\x{10FFFF}]/; END { exit($f ? 0 : 1) }' <<<"$out"
+    out=$(ob tree -b "$B" --layer "$BAR_NS" --find 'tally 42' 2>&1); rc=$?
+    check_match "...--find: its line alone, exit 0" '^text "tally 42"( \[cut\])? @-?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+\|0$' "$out|$rc"
+    read -r x y < <(ob tree -b "$B" --layer "$BAR_NS" --json | jq -r '.[] | select(.name == "tally 42") | "\(.x + .w / 2 | floor) \(.y + .h / 2 | floor)"')
+    check_match "...--json: its middle inside the widget's slot (the shell's debugBarGeometry)" '^yes$' \
+      "$(ob run -b "$B" -- omarchy-shell shell debugBarGeometry | jq -r --argjson x "${x:-0}" --argjson y "${y:-0}" \
+        '.[] | select(.id == "t467.tally") | if $x >= .x and $x < .x + .width and $y >= .y and $y < .y + .height then "yes" else "no: \(.)" end')"
+    check_eq "...--find matching nothing: exit 1" 1 "$(ob tree -b "$B" --layer "$BAR_NS" --find 'no such words' >/dev/null 2>&1; echo $?)"
+    if omarchy45; then
+      ob click -b "$B" --layer "$BAR_NS" --find 'tally 42' >/dev/null 2>&1
+      if ob wait -b "$B" --timeout 10s layer omarchy-keyboard-panel >/dev/null 2>&1; then
+        out=$(ob tree -b "$B" --layer omarchy-keyboard-panel --find 'panel holds' 2>&1)
+        check_match "...click --find on it opens its panel, whose text is on its own layer" '^text "panel holds 126" @' "$out"
+        ob run -b "$B" -- omarchy-shell shell hide t467.tally >/dev/null 2>&1
+        check "...and closes (shell hide), off the screen the clicks below go to" \
+          ob wait -b "$B" --timeout 10s layer omarchy-keyboard-panel --gone
+      else no "...click --find on it opens its panel" "no omarchy-keyboard-panel layer"; fi
+    fi
+  else
+    out=$(ob tree -b "$B" --layer "$BAR_NS" 2>&1); rc=$?
+    check_eq "the shell's bar ($v): exit 1" 1 "$rc"
+    check_match "...it publishes no accessible items (its QML sets no roles), and a plain box's shell gives no text" \
+      "tree: layer \"$BAR_NS\""' \(pid [0-9]+, [0-9]+x[0-9]+ at [0-9]+,[0-9]+\): the layer publishes no accessible items \(nothing in it sets an Accessible role\); its text is not read either' "$out"
+  fi
   cat > "$D/home/t254.qml" <<'QML'
 import QtQuick
 import Quickshell
@@ -11388,6 +11455,8 @@ QML
   out=$(ob tree -b "$B" --layer t254-empty 2>&1); rc=$?
   check_eq "a layer whose items set no role: exit 1" 1 "$rc"
   check_match "...said so, not as no tree" "the layer publishes no accessible items" "$out"
+  check_match "...nor its text: a Quickshell of its own is not started with omabox's reader (#467)" \
+    "its text is not read either: pid [0-9]+ was not started with omabox's text reader" "$out"
   check_eq "pid:PID with two layers: exit 2" 2 \
     "$(ob tree -b "$B" --layer "pid:$(ob hyprctl -b "$B" -j layers | jq -r '[.. | objects | select(.namespace? == "t254")][0].pid')" >/dev/null 2>&1; echo $?)"
   # Two layers of one size in one process, each with an item: their frames cannot be told apart. (Two
@@ -11454,7 +11523,9 @@ QML
     fi
     check_eq "...exit 0" 0 "$rc"
     out=$(ob tree -b "$B" --layer omarchy-background 2>&1)
-    check_match "...and the wallpaper's frame, not the launcher's" "layer \"omarchy-background\".*publishes no accessible items" "$out"
+    check_match "...and the wallpaper's frame, not the launcher's (no items; text only its own, #467)" \
+      "layer \"omarchy-background\".*publishes no accessible items|^frame \"omarchy-background\"" "$out"
+    check_fails "...none of the launcher's rows in it" grep -q "^  filler" <<<"$out"
     ob keys -b "$B" Escape >/dev/null
   else no "the launcher opens (super+space)" "no omarchy-menu layer"; fi
   ob down "$B" >/dev/null
@@ -23363,6 +23434,17 @@ look_plugin_checks() {
   check "...written" test -s "${shot%.png}-panel.png"
   check_match "...its state" $'\n''plugin: chaves.omabox loaded \((linked|mounted)\)' "$out"
   check_match "...no problems: the shell's own warnings about the box are not the plugin's" $'\n''problems: none' "$out"
+  check_match "...its text: none (it hides while no box is up), said" $'\n''text: none'$'\n'".*note: chaves.omabox is in the bar's layout but shows nothing now" "$out"
+  # #467 (finding 727): what a widget shows, worked out at run time, and its panel's, as text.
+  if omarchy45; then
+    t467_plugin "$TMP/$P-lookp-t467"
+    out=$(ob look plugin "$TMP/$P-lookp-t467" --stock-bar --open 2>&1); rc=$?
+    check_eq "look plugin on a widget with a count and a panel: 0 ($out)" 0 "$rc"
+    check_match "...the widget's text, worked out at run time" $'\n''text: tally 42'$'\n' "$out"
+    check_match "...--open: its panel's" $'\n''panel text: panel holds 126'$'\n' "$out"
+    out=$(ob look plugin "$TMP/$P-lookp-t467" --stock-bar 2>&1)
+    check_match "...without --open: the widget's text, no panel text" $'\n''text: tally 42'$'\n''problems: none' "$out"
+  else skip "look plugin: a widget's text and its panel's" "the panel's layer is Omarchy 4.5's"; fi
   rm -rf "$bad"; cp -r "$ROOT/plugin" "$bad"
   sed -i '0,/^\(\s*\)id: /s//\1property var boom: undefinedThing.name\n&/' "$bad/Panel.qml"
   out=$(ob look plugin "$bad" --stock-bar 2>&1); rc=$?

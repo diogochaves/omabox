@@ -45,6 +45,8 @@ throwaway box, then
 screenshot: /tmp/omabox-look-123-456.png
 panel: /tmp/omabox-look-123-789.png
 plugin: me.tally loaded (linked)
+text: tally 42
+panel text: Today | 42 cups | Reset
 problems:
   qs:///home/sbx/.config/omarchy/plugins/me.tally/Panel.qml[15:-1]: ReferenceError: x is not defined
 ```
@@ -52,8 +54,14 @@ problems:
 - **The shot** is the bar's strip, the edge Hyprland reserves for it (the top, or a side for a
   vertical bar), in your bar's layout as `up` copies it (`--stock-bar` for Omarchy's default one);
   the whole screen when no edge is reserved.
+- **`text:`**: what the widget shows, as text: the shell's text items in its slot on the bar (`tree
+  --layer omarchy-bar` reads them, ref: shell.md), joined by ` | `; icon glyphs and pictures are not
+  text (`none` for a widget of icons only). `none` and a note for one hidden in its slot; `unknown`
+  and a note for one with no slot (placed by another plugin); a note when part of it is cut off (a
+  label wider than a vertical bar: the shot shows only its middle).
 - **`--open`**: `omarchy-shell shell summon ID`, then the whole screen (`panel:`; `-o a.png` names it
-  `a-panel.png`). A widget with no panel shows nothing more.
+  `a-panel.png`), and `panel text:`, the text of the layers the summon mapped (60 items at most). A
+  widget with no panel shows nothing more (`panel text: none`).
 - **Problems**: its state when it is not `loaded` or `hosted` (`plugin_status`, as `ls --json` has
   it), `up`'s warnings for it, and the shell's warnings and errors that name the plugin (its QML
   files by path). The shell's own about the box (no portal, no system bus) are left out.
