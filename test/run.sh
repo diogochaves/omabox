@@ -166,6 +166,7 @@ cleanup() {
   cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
   # What its names left in the runtime dir (#158): a test's own lock, a down that found no box.
   rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/omabox"/.{lock,down,expired}-"$P"-* 2>/dev/null
+  rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/omabox/.commands/$P"-* 2>/dev/null   # (their command logs: #447)
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   rm -rf "$TMP" "$TMP.bar" "$TMP.bin"
@@ -8875,6 +8876,91 @@ t_log_rolling() {
   check_match "...--width 50: cut there" "^.{50}… \(\+[0-9]+ chars\)$" "$(ob log -b "$B" --grep "$long" --width 50 2>/dev/null)"
   check_match "...--width takes a number" "log: --width takes a number of characters" "$(ob log -b "$B" --width x 2>&1)"
   ob down "$B" >/dev/null 2>&1
+}
+
+# #447 (finding 733): every omabox command run against a box is a line in its command log, on the host
+# beside the box dirs: in order, each with its exit code, reads marked; `log commands` reads it while
+# the box is up and after its `down`, whose own line is there too.
+t_cmdlog() {
+  local B=$P-cl out rc L
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  L=${XDG_RUNTIME_DIR:-/run/user/$UID}/omabox/.commands/$B.log
+  ob windows -b "$B" >/dev/null
+  ob run -b "$B" -- true
+  ob keys -b "$B" Return >/dev/null 2>&1
+  ob shot -b "$B" -o "$TMP/cl.png" >/dev/null
+  ob tree -b "$B" --window "title:nosuch-$B" >/dev/null 2>&1
+  ob keys -b "$B" --nosuch >/dev/null 2>&1
+  out=$(ob log commands -b "$B" --json); rc=$?
+  check_eq "log commands --json: exit 0" 0 "$rc"
+  check_eq "...each command in the order run" "up windows run keys shot tree keys" \
+    "$(jq -rs 'map(.command) | join(" ")' <<<"$out")"
+  check_eq "...reads marked (windows, shot, tree)" "false true false false true true false" \
+    "$(jq -rs 'map(.read | tostring) | join(" ")' <<<"$out")"
+  check_eq "...their exit codes (tree's window not found, an unknown option: 2)" "0 0 0 0 0 2 2" \
+    "$(jq -rs 'map(.exit | tostring) | join(" ")' <<<"$out")"
+  check_eq "...the words as given (run's command line too)" '["-b","'"$B"'","--","true"]' \
+    "$(jq -sc '.[2].args' <<<"$out")"
+  check_match "...a failure's error line" "--nosuch" "$(jq -rs '.[6].error' <<<"$out")"
+  check_eq "...who: this omabox's pid and its parent's, not jailed, a duration" "true" \
+    "$(jq -s 'all(.pid > 1 and .ppid > 0 and .jailed == false and .secs >= 0 and .box == "'"$B"'")' <<<"$out")"
+  check "...on the host, the user's alone" test "$(stat -c %a "$L")" = 600
+  out=$(ob log commands -b "$B" 2>&1)
+  check_match "log commands: as text, a run's line" "^[0-9:.]+ run -b $B -- true \(exit 0, [0-9.]+ s; pid [0-9]+\)$" \
+    "$(grep ' run ' <<<"$out")"
+  check_match "...a read marked, a failure with its error line" "tree -b $B --window title:nosuch-$B \(read; exit 2, .*\): no window matches" \
+    "$(grep ' tree ' <<<"$out")"
+  check_eq "...-n 1: the last only (the log read before it)" "log" \
+    "$(ob log commands -b "$B" -n 1 --json | jq -r .command)"
+  check_eq "...--grep: the lines whose text matches" "shot" \
+    "$(ob log commands -b "$B" --grep '^[0-9:.]+ shot ' --json | jq -r .command)"
+  ob down "$B" >/dev/null 2>&1
+  check "the box is gone" test ! -e "$(ob path "$B" 2>/dev/null || echo "${L%/.commands/*}/$B")"
+  out=$(ob log commands -b "$B" --json 2>&1); rc=$?
+  check_eq "log commands after down: exit 0" 0 "$rc"
+  check_eq "...the whole sequence, the down last" "up windows run keys shot tree keys log log log log down" \
+    "$(jq -rs 'map(.command) | join(" ")' <<<"$out")"
+  check_eq "...-f of a box that is gone: what there is (a read of it is no line of its), said so" "down" \
+    "$(ob log commands -b "$B" -f -n 1 --json 2>"$TMP/cl.err" | jq -r .command)"
+  check_match "...said" "is down: the commands run against it as they were" "$(cat "$TMP/cl.err")"
+  check_match "a name nothing ran against: no log, said" "has no command log" \
+    "$(ob log commands -b "$P-never" 2>&1)"
+  rm -f "$L" "$L.1"
+}
+
+# #447 (finding 733): what the command log never holds (S2): a typed text (keys -t), the values of
+# --env, --pass's variable, --accept's password, a value written into an unknown option, nor in an
+# error line. Planted, then looked for in the whole box folder, its HOME and the log.
+t_cmdlog_secrets() {
+  local B=$P-cls D H L s1 s2 s3 s4 s5 found out
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  D=$(ob path "$B"); H=$(ob path "$B" --home)
+  L=${XDG_RUNTIME_DIR:-/run/user/$UID}/omabox/.commands/$B.log
+  s1=typed-$RANDOM$RANDOM s2=env-$RANDOM$RANDOM s3=pass-$RANDOM$RANDOM s4=pw-$RANDOM$RANDOM s5=opt-$RANDOM$RANDOM
+  ob keys -b "$B" -t "$s1" >/dev/null 2>&1
+  ob run -b "$B" --env "T447_TOKEN=$s2" -- true
+  T447_PASS=$s3 ob run -b "$B" --pass T447_PASS -- true
+  ob polkit -b "$B" ask --accept "$s4" --timeout 1s >/dev/null 2>&1
+  ob keys -b "$B" "--nosuch=$s5" >/dev/null 2>&1
+  out=$(ob log commands -b "$B" --json | jq -c 'select(.command != "path")')
+  check_eq "the commands are logged" "up keys run run polkit keys" "$(jq -rs 'map(.command) | join(" ")' <<<"$out")"
+  check_eq "...keys -t: the text's length" '["-b","'"$B"'","-t","<hidden: '${#s1}' bytes>"]' "$(jq -sc '.[1].args' <<<"$out")"
+  check_eq "...--env: the name" '"T447_TOKEN=<hidden>"' "$(jq -sc '.[2].args[3]' <<<"$out")"
+  check_eq "...--pass: the variable's name" '"T447_PASS"' "$(jq -sc '.[3].args[3]' <<<"$out")"
+  check_eq "...--accept: the length" '"<hidden: '${#s4}' bytes>"' "$(jq -sc '.[4].args | .[index("--accept") + 1]' <<<"$out")"
+  check_eq "...a value in an unknown option: the length, the error line without it" \
+    '"--nosuch=<hidden: '${#s5}' bytes>" true' \
+    "$(jq -sc '.[5].args[2]' <<<"$out") $(jq -s '.[5].error | test("<hidden>|left out")' <<<"$out")"
+  found=""
+  for s in "$s1" "$s2" "$s3" "$s4" "$s5"; do
+    found+=$(grep -rlF -D skip -- "$s" "$D" "$H" "$L" 2>/dev/null)
+  done
+  check_eq "none of the values in the box folder, its HOME or the command log" "" "$found"
+  ob down "$B" >/dev/null 2>&1
+  found=""
+  for s in "$s1" "$s2" "$s3" "$s4" "$s5"; do found+=$(grep -lF -- "$s" "$L" 2>/dev/null); done
+  check_eq "...nor in the log once the box is down" "" "$found"
+  rm -f "$L" "$L.1"
 }
 
 # #330 (finding 585): `wait log` until a box log (the shell's by default) gets a new line RE matches;
@@ -24173,7 +24259,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_runpath t_unit_theme_check t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's
