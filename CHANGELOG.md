@@ -56,6 +56,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   it looked for its tools under `target/`. It now finds the checkout it was built in.
 
 ### Changed
+- **`find --image WORD` names the text search** ([#469](https://github.com/diogochaves/omabox/issues/469)):
+  an `--image` that is no file or no PNG is refused with `--image takes a PNG; to find text: omabox
+  tree --find TEXT` (`click --image`: `click --find TEXT`; `wait image`: `wait tree TEXT`).
 - **The skill's reference is eleven pages in `skill/ref/`** ([#464](https://github.com/diogochaves/omabox/issues/464)):
   `reference.md` (159 KB) is split by topic (`look.md`, `shots.md`, `checks.md`, `input.md`,
   `session.md`, `builds.md`, `hyprland.md`, `shell.md`, `apps.md`, `agents.md`, `cli.md`), its text

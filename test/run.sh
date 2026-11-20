@@ -21732,6 +21732,16 @@ t_find_image() {
   check_match "wait image with no FILE: said" "which image" "$(ob wait -b "$B" image 2>&1)"
   printf 'not a png' > "$o/x.txt"
   check_match "a file that is not a PNG: said" "is not a PNG" "$(ob find -b "$B" --image "$o/x.txt" 2>&1)"
+  # #469: a model took find --image WORD for a text search; the refusal names the text route.
+  out=$(ob find -b "$B" --image cups 2>&1); rc=$?
+  check_eq "find --image WORD (no such file): exit 1, the text route named" \
+    "1 omabox: find: no such file: cups; --image takes a PNG; to find text: omabox tree --find TEXT" "$rc $out"
+  check_match "...a file that is not a PNG too" "is not a PNG .*; --image takes a PNG; to find text: omabox tree --find TEXT$" \
+    "$(ob find -b "$B" --image "$o/x.txt" 2>&1)"
+  check_match "...click --image's: click --find" "no such file: cups; --image takes a PNG; to click text: omabox click --find TEXT$" \
+    "$(ob click -b "$B" --image cups 2>&1)"
+  check_match "...wait image's: wait tree" "no such file: cups; image takes a PNG; to wait for text: omabox wait tree TEXT$" \
+    "$(ob wait -b "$B" --timeout 1s image cups 2>&1)"
   local mark=(foot -T M1 -o colors-dark.background=101418 -o colors-dark.regular3=ff8800 sh -c "printf '\n\n      \033[33mMARK one\033[0m\n\n\n'; sleep 600")
   ob run -b "$B" -d -q --wait -- "${mark[@]}" >/dev/null 2>&1
   ob pointer -b "$B" -- move 5 5 >/dev/null 2>&1

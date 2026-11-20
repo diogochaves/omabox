@@ -14481,6 +14481,13 @@ from them.
     is, anything else a Lua string), each command of a `--batch` too. `help lua` (short and long)
     and `ref/hyprland.md` show the line; SKILL.md's table names options for that page.
 
+728. **An --image that is no PNG names the text route** (2026-11-19, #469). In the benchmark (726)
+    a model took `find --image "cups"` for a text search and got `find: no such file: cups`. The
+    refusals of a template that is missing or no PNG now end with the same question asked of text,
+    for each command that reads one: `find` `; --image takes a PNG; to find text: omabox tree
+    --find TEXT`, `click --image` `omabox click --find TEXT`, `wait image` `omabox wait tree TEXT`
+    (`find::text_route`). Exit 1 as before.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

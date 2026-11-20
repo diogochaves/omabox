@@ -155,7 +155,7 @@ fn read_template(ctx: &Ctx, label: &str, file: &[u8]) -> Res<(Vec<u8>, Vec<u8>)>
         (file.to_vec(), as_)
     } else {
         if !shell::path(file).is_file() {
-            return Err(ctx.die(cat!(label, ": no such file: ", file)));
+            return Err(ctx.die(cat!(label, ": no such file: ", file, text_route(label))));
         }
         (file.to_vec(), file.to_vec())
     };
@@ -179,10 +179,22 @@ fn read_template(ctx: &Ctx, label: &str, file: &[u8]) -> Res<(Vec<u8>, Vec<u8>)>
             label,
             ": ",
             name,
-            " is not a PNG (crop one from a shot: omabox shot -g \"X,Y WxH\" -o FILE)"
+            " is not a PNG (crop one from a shot: omabox shot -g \"X,Y WxH\" -o FILE)",
+            text_route(label)
         )));
     }
     Ok((b, name))
+}
+
+/// After an --image value that is no readable PNG (#469): a model took `find --image "cups"` for a
+/// text search. The same question asked of text, for LABEL's command.
+fn text_route(label: &str) -> &'static str {
+    match label {
+        "find" => "; --image takes a PNG; to find text: omabox tree --find TEXT",
+        "click" => "; --image takes a PNG; to click text: omabox click --find TEXT",
+        "wait image" => "; image takes a PNG; to wait for text: omabox wait tree TEXT",
+        _ => "",
+    }
 }
 
 /// The PNG's pixels and alpha (ImageMagick, its PNG reader only), resized to W x H when asked.
@@ -769,6 +781,18 @@ mod tests {
             note: Vec::new(),
             soften,
         }
+    }
+
+    #[test]
+    fn a_value_that_is_no_png_names_the_text_route() {
+        // #469: each command's own way to the same question asked of text.
+        assert_eq!(
+            text_route("find"),
+            "; --image takes a PNG; to find text: omabox tree --find TEXT"
+        );
+        assert!(text_route("click").ends_with("omabox click --find TEXT"));
+        assert!(text_route("wait image").ends_with("omabox wait tree TEXT"));
+        assert_eq!(text_route("other"), "");
     }
 
     #[test]
