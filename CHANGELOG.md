@@ -59,7 +59,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   When several agents share a box, it says who clicked, typed or reloaded what. A typed text
   (`keys -t`), `--accept`'s password and the values of `--env` are never in it, only their lengths
   or names; a run's environment neither. Kept on the host, out of every box's reach, at most 512
-  KiB a box.
+  KiB a box. A command that reads every box (`ports`, `down --orphans`' search) is in the log
+  of the box it was run against only, not of each box it passed.
 
 ### Fixed
 - **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):

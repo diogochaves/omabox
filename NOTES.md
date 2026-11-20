@@ -14683,6 +14683,20 @@ from them.
     t_look counts the `look-*` boxes left); two unit tests (the window picked, a log since its
     mark).
 
+736. **A command that walks every box is not run against each** (2026-11-20, #447; found by the
+    1.5.0 release suite). The command log gives a command's line to every box it selected
+    (finding 733), and two commands select each box only to read it: `ports` (its table needs every
+    box's ports, `-b NAME` or not) and `down --orphans` (its search). So any session's `ports` put
+    a `ports` line in every box's log, and a `down --orphans` that took nothing down a `down` line
+    in each: t_cmdlog and t_cmdlog_secrets, which read their box's whole log, failed in a full
+    suite (other tests' `ports` and `down --orphans` in it: `want [up keys run run polkit keys] got
+    [ports down ports up ports ...]`) and passed alone. `cmdlog::walking` now covers those two
+    loops: a box passed in a walk is not selected. `ports -b NAME` still logs in NAME's (selected
+    before the walk), and an orphan `down --orphans` does take down gets its line (selected again
+    after the search). t_cmdlog runs `ports` and finds no line of it in its box's log; t_orphan finds `down
+    --orphans`' line in an orphan's log and none in a box it left up (never `down --orphans` in a
+    test of its own: it takes other tests' orphans down, as it did t_orphan's when tried).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

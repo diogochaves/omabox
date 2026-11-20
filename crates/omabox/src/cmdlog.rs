@@ -378,8 +378,20 @@ static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 /// and whether it was the caller's then (`callers`).
 static SELECTED: Mutex<Vec<(Vec<u8>, bool, bool)>> = Mutex::new(Vec::new());
 
+/// While a command walks every box to read each (ports' table, down --orphans' search), the boxes it
+/// passes are not boxes it was run against: no line of it in their logs (finding 736).
+static WALKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A walk over every box begins (ON) or ends.
+pub fn walking(on: bool) {
+    WALKING.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// select_box picked box NAME, its box dir D.
 pub fn selected(name: &[u8], d: &[u8]) {
+    if WALKING.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     if let Ok(mut s) = SELECTED.lock()
         && !s.iter().any(|(n, _, _)| n == name)
     {

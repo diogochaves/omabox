@@ -160,6 +160,8 @@ fn run_with<S: PortsSys>(sys: &S, ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut comms: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
     let mut pnet: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
     let mut serving: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+    // (a walk: the command is run against NAME's box, or none, never each box it reads)
+    crate::cmdlog::walking(true);
     for n in list_names(ctx, false) {
         select_box(ctx, &n)?;
         let Some(pid) = sys.up_pid(&ctx.d) else {

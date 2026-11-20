@@ -321,6 +321,8 @@ fn down_none(ctx: &Ctx) -> bool {
 /// taken down as that box (not a new one that took its name meanwhile).
 fn down_orphans_with<S: BoxSys + ?Sized>(sys: &S, ctx: &mut Ctx) -> Res<()> {
     let mut found: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    // (the search is a walk: only an orphan taken down below gets this command's line)
+    crate::cmdlog::walking(true);
     for n in list_names(ctx, false) {
         select_box(ctx, &n)?;
         if sys.box_state(&ctx.d) != "up" || !crate::ready::box_orphan(ctx) {
@@ -328,6 +330,7 @@ fn down_orphans_with<S: BoxSys + ?Sized>(sys: &S, ctx: &mut Ctx) -> Res<()> {
         }
         found.push((ctx.name.clone(), meta(&ctx.d, "created").0));
     }
+    crate::cmdlog::walking(false);
     if found.is_empty() {
         say("no orphan boxes");
         return Ok(());

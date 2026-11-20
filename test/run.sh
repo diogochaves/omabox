@@ -8974,11 +8974,16 @@ t_cmdlog() {
     check_eq "$c -f ended by SIG${s%%:*}: its exit, its line with the signal's code and words" \
       "$((128 + ${s##*:})) $c $((128 + ${s##*:})) ended by signal ${s##*:}" "$rc $(jq -r '"\(.command) \(.exit) \(.error)"' <<<"$out")"
   done
+  # Finding 736: a command that walks every box (ports' table, down --orphans' search) was run
+  # against none of them: no line of it here (another session's would fill this box's log).
+  ob ports >/dev/null 2>&1
+  check_eq "ports, walking every box: no line in this one's log" 0 \
+    "$(ob log commands -b "$B" --json -n all 2>/dev/null | jq -s '[.[] | select(.command == "ports")] | length')"
   ob down "$B" >/dev/null 2>&1
   check "the box is gone" test ! -e "$(ob path "$B" 2>/dev/null || echo "${L%/.commands/*}/$B")"
   out=$(ob log commands -b "$B" --json 2>&1); rc=$?
   check_eq "log commands after down: exit 0" 0 "$rc"
-  check_eq "...the whole sequence, the down last" "up windows run keys shot tree keys log log log log log log events log down" \
+  check_eq "...the whole sequence, the down last" "up windows run keys shot tree keys log log log log log log events log log down" \
     "$(jq -rs 'map(.command) | join(" ")' <<<"$out")"
   check_eq "...-f of a box that is gone: what there is (a read of it is no line of its), said so" "down" \
     "$(ob log commands -b "$B" -f -n 1 --json 2>"$TMP/cl.err" | jq -r .command)"
@@ -14362,6 +14367,9 @@ t_orphan() {
     check_match "down --orphans names each orphan and its starter" "box '$A': an orphan \(no idle limit; what started it, bash, pid [0-9]+, is gone\): taking it down" "$out"
     check_match "...takes them down" "box '$B' down" "$out"
     check_eq "...them only" "gone gone up up" "$(orphan_of "$A") $(orphan_of "$B") $(orphan_of "$C") $(orphan_of "$T")"
+    # Finding 736: its search walks every box; only one it took down has its line.
+    check_eq "...its line in an orphan's command log, none in a box it left up" "1 0" \
+      "$("$CLI" log commands -b "$A" --json -n all 2>/dev/null | jq -s '[.[] | select(.command == "down")] | length') $("$CLI" log commands -b "$C" --json -n all 2>/dev/null | jq -s '[.[] | select(.command == "down")] | length')"
   fi
   ob down "$A" "$B" "$C" "$T" >/dev/null 2>&1
 }
