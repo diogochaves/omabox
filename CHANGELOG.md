@@ -24,6 +24,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   own box, gone with its look, says so and how to keep one (`--keep-box`); `omabox lua` adds the
   next step after a Lua error about an object's fields or a missing function; `pixel` past 32
   points says to split them or zoom a shot.
+- **The rest of the benchmark's error lines end with the command that fixes it** ([#478](https://github.com/diogochaves/omabox/issues/478)):
+  `look plugin .`/`look theme .` from the folder above names the subfolder that is one, as the
+  look to run; `look shot` and `look --shot` name `omabox look -o FILE`; `up --fresh` names `up
+  --new`, `up --config` the `omabox lua 'hl.config(...)'` line; a throwaway box that failed to
+  start says how its up ended when up said nothing (a run left with `&` goes with its shell) and
+  what to run; `shot --layer` with `-g` gives both as `-g` commands; `--in` a shot of another box
+  names that box (`-b` it, or gone with its look); look plugin `--open`'s `no live bar widget` says
+  the widget has no panel, or is not on the bar; a shot named in a box's command is noted as on the
+  host, `cp` it there.
 - **The agent guard refuses `hyprctl -i`/`--instance SIG`** ([#476](https://github.com/diogochaves/omabox/issues/476)):
   it reached the user's Hyprland past the guard's signature (a benchmark run did). A `hyprctl`
   in `share/guard/`, first on a guarded agent's PATH beside `quickshell` and `omarchy-shell`,

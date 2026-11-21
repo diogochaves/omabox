@@ -597,7 +597,7 @@ pub fn need_box(ctx: &Ctx) -> Res<()> {
 }
 
 /// Whether NAME is a look's own box's (`look-PID`).
-fn is_look_name(name: &[u8]) -> bool {
+pub fn is_look_name(name: &[u8]) -> bool {
     name.strip_prefix(b"look-")
         .is_some_and(|p| !p.is_empty() && p.iter().all(u8::is_ascii_digit))
 }

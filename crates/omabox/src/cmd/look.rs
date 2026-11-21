@@ -188,6 +188,25 @@ fn kind_hint(args: &[Vec<u8>]) -> Vec<u8> {
     }
     let q = shell::quote_q(w);
     let lw = ws.to_ascii_lowercase();
+    // (#478: `look shot -o shot.png`, meaning the box now: look with no kind, its -b and -o kept)
+    if matches!(
+        lw.as_str(),
+        "shot" | "screenshot" | "screen" | "snapshot" | "now"
+    ) {
+        let mut c = b"omabox look".to_vec();
+        for o in args.windows(2) {
+            if matches!(o[0].as_slice(), b"-b" | b"--box" | b"-o") {
+                c.extend(cat!(" ", o[0], " ", shell::quote_q(&o[1])));
+            }
+        }
+        if !args.iter().any(|a| a == b"-o") {
+            c.extend(b" -o FILE");
+        }
+        return cat!(
+            c,
+            " (no kind) is a shot of the box as it is now; omabox shot -o FILE the image alone"
+        );
+    }
     if lw.starts_with("http://")
         || lw.starts_with("https://")
         || lw.ends_with(".html")
@@ -204,6 +223,135 @@ fn kind_hint(args: &[Vec<u8>]) -> Vec<u8> {
     }
     b"omabox look app -- CMD, omabox look plugin DIR, omabox look theme DIR or omabox look page FILE|URL"
         .to_vec()
+}
+
+/// The subfolders of DIR (by name, sorted) that HAS takes for the kind's folder (a plugin's manifest
+/// with an id, a theme's colors.toml).
+fn subfolders_with(dir: &[u8], has: &dyn Fn(&[u8]) -> bool) -> Vec<Vec<u8>> {
+    let base = dir
+        .strip_suffix(b"/")
+        .filter(|b| !b.is_empty())
+        .unwrap_or(dir);
+    shell::glob(&shell::path(base), true)
+        .into_iter()
+        .filter(|n| has(&cat!(base, "/", n)))
+        .collect()
+}
+
+/// After `look KIND DIR`'s refusal of a folder that is not the kind's (#478: `look plugin .` where
+/// the plugin is `./cups`): the subfolders that are, and the look (ARGS, the words after KIND) again
+/// with the first of them in DIR's place. Nothing when none is.
+fn subfolder_hint(kind: &str, args: &[Vec<u8>], dir: &[u8], subs: &[Vec<u8>]) -> Vec<u8> {
+    let Some(first) = subs.first() else {
+        return Vec::new();
+    };
+    let base = dir
+        .strip_suffix(b"/")
+        .filter(|b| !b.is_empty())
+        .unwrap_or(dir);
+    let path = cat!(base, "/", first);
+    let mut cmd = cat!("omabox look ", kind);
+    let mut put = false;
+    for a in args {
+        cmd.push(b' ');
+        if !put && a.as_slice() == dir {
+            cmd.extend(shell::quote_q(&path));
+            put = true;
+        } else {
+            cmd.extend(shell::quote_q(a));
+        }
+    }
+    let shown: Vec<u8> = subs
+        .iter()
+        .take(4)
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>()
+        .join(b", ".as_slice());
+    let more = if subs.len() > 4 {
+        format!(" and {} more", subs.len() - 4)
+    } else {
+        String::new()
+    };
+    let (word, verb) = if subs.len() == 1 {
+        ("subfolder", "is one")
+    } else {
+        ("subfolders", "are")
+    };
+    cat!("; its ", word, " ", shown, more, " ", verb, ": ", cmd)
+}
+
+/// An option look (of KIND, or the plain look) does not take: unknown_opt, but for an option meant
+/// as "take a shot" (#478: `look --shot`, whose nearest name was page's --shots) what every look does.
+fn look_unknown_opt(ctx: &Ctx, kind: Option<&str>, o: &[u8]) -> Exit {
+    match shot_opt_hint(kind, o) {
+        Some(m) => ctx.usage_die(m),
+        None => crate::args::unknown_opt(ctx, "look", o),
+    }
+}
+
+/// look_unknown_opt's line for O when it asks for a shot (`--shot`, `--screenshot`, `--png`): every
+/// look takes one, -o FILE says where.
+fn shot_opt_hint(kind: Option<&str>, o: &[u8]) -> Option<Vec<u8>> {
+    let w = o.split(|&c| c == b'=').next().unwrap_or_default();
+    if !matches!(
+        w,
+        b"--shot" | b"--screenshot" | b"--snapshot" | b"--png" | b"--image"
+    ) {
+        return None;
+    }
+    let (label, cmd) = match kind {
+        Some(k) => (cat!("look ", k), cat!("omabox look ", k, " ... -o FILE")),
+        None => (b"look".to_vec(), b"omabox look -o FILE".to_vec()),
+    };
+    let more: &[u8] = if kind == Some("page") {
+        b"; --shots N takes N over time"
+    } else {
+        b""
+    };
+    Some(cat!(
+        label,
+        ": unknown option ",
+        o,
+        ": every look takes a shot (its report's screenshot: line); -o FILE says where: ",
+        cmd,
+        more,
+        " (omabox help look)"
+    ))
+}
+
+/// The problem a look plugin --open reports when the shell's summon of ID failed, SAID its words.
+/// `no live bar widget` is Omarchy's shell finding no widget of the plugin on the bar with an
+/// `open()`, `close()` and `opened` (Bar.qml's findPanelWidget), which alone says nothing to do
+/// (#478): ON_BAR, the widget has a slot in the bar, so it lacks those: no panel for --open to show;
+/// else it has no slot.
+/// OWN: the box that was up, whose shell log can still be read.
+fn summon_problem(id: &[u8], said: &[u8], on_bar: bool, own: Option<&[u8]>) -> Vec<u8> {
+    let said = said.strip_suffix(b"\n").unwrap_or(said);
+    // (the shell log's warning already starts `summon: `)
+    let head = if said.starts_with(b"summon: ") {
+        said.to_vec()
+    } else {
+        cat!("summon ", id, ": ", said)
+    };
+    if !crate::exit::contains(said, b"no live bar widget") {
+        return head;
+    }
+    if on_bar {
+        return cat!(
+            head,
+            " (the widget is on the bar but is no panel: it lacks open(), close() and opened, which qs.Ui's Panel has; --open shows nothing)"
+        );
+    }
+    let log = match own {
+        Some(n) => cat!("omabox log -b ", shell::quote_q(n), " shell"),
+        None => b"look --keep-box, then omabox log -b BOX shell".to_vec(),
+    };
+    cat!(
+        head,
+        " (no widget of it is on the bar for summon to open: see its plugin: line; the shell's log: ",
+        log,
+        ")"
+    )
 }
 
 /// What `look app` was asked for.
@@ -384,7 +532,7 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>], kind: &str) -> Res<App> {
                     a.up.push(o.clone());
                 }
             }
-            _ if o.starts_with(b"-") => return Err(crate::args::unknown_opt(ctx, "look", o)),
+            _ if o.starts_with(b"-") => return Err(look_unknown_opt(ctx, Some(kind), o)),
             _ if kind != "app" && a.dir.is_none() => a.dir = Some(o.clone()),
             _ if kind != "app" => {
                 return Err(ctx.die(cat!("look ", kind, ": one DIR (its folder), got ", o)));
@@ -494,7 +642,7 @@ fn plain(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 o_file = Some(args[i + 1].clone());
                 i += 1;
             }
-            _ => return Err(crate::args::unknown_opt(ctx, "look", o)),
+            _ => return Err(look_unknown_opt(ctx, None, o)),
         }
         i += 1;
     }
@@ -1451,10 +1599,12 @@ fn plugin(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut a = parse(ctx, args, "plugin")?;
     let dir = a.dir.clone().unwrap_or_default();
     let Some(id) = plugin_id(&dir) else {
+        let subs = subfolders_with(&dir, &|d| plugin_id(d).is_some());
         return Err(ctx.die(cat!(
             "look plugin: ",
             dir,
-            " has no manifest.json with an id: not a plugin's folder"
+            " has no manifest.json with an id: not a plugin's folder",
+            subfolder_hint("plugin", args, &dir, &subs)
         )));
     };
     let me = std::process::id();
@@ -1558,7 +1708,9 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     ]);
     let bar_json = layer_tree(name, BAR_NS);
     let bar = bar_json.as_ref().map(|j| tree_texts(j).0);
-    let text = match bar_json.as_ref().map(|j| widget_text(j, &geom.out, &id_s)) {
+    let wt = bar_json.as_ref().map(|j| widget_text(j, &geom.out, &id_s));
+    let on_bar = matches!(wt, Ok(WidgetText::Shown(..) | WidgetText::Hidden));
+    let text = match wt {
         Err(why) => {
             notes.push(cat!("the bar's text could not be read: ", why));
             b"unknown".to_vec()
@@ -1604,13 +1756,8 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
             id,
         ]);
         if !r.ok {
-            problems.push(cat!(
-                "summon ",
-                id,
-                ": ",
-                shell::subst(&r.err),
-                shell::subst(&r.out)
-            ));
+            let said = cat!(shell::subst(&r.err), shell::subst(&r.out));
+            problems.push(summon_problem(id, &said, on_bar, a.own.then_some(name)));
         }
         ob(&still);
         // Its text: the layers the summon mapped (Omarchy's panels are layers of their own), else
@@ -1661,10 +1808,14 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     // The shell's warnings that name the plugin (its QML's path holds its id): the box's own (no
     // portal, no system bus) are no problem of the plugin's.
     let log = ob(&[b"log", b"-b", name, b"shell", b"-n", b"all", b"--full"]);
-    problems.extend(plugin_warnings(
-        &crate::plugins::shell_warnings_of(&log.out),
-        id,
-    ));
+    // (summon's failure is a warning in the shell's log, its exit 0: said what it means, #478)
+    for w in plugin_warnings(&crate::plugins::shell_warnings_of(&log.out), id) {
+        problems.push(if crate::exit::contains(&w, b"no live bar widget") {
+            summon_problem(id, &w, on_bar, a.own.then_some(name))
+        } else {
+            w
+        });
+    }
     let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
     if let Some(p) = &panel {
         head.push(("panel", p));
@@ -1708,6 +1859,19 @@ fn theme(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     } else {
         return Err(ctx.die(cat!("look theme: ", given, " is no folder")));
     };
+    // A folder with no palette whose subfolder is the theme (#478: `look theme .` beside `./ember`).
+    if let Some(d) = &dir {
+        let colors = |d: &[u8]| shell::path(&cat!(d, "/colors.toml")).is_file();
+        let subs = subfolders_with(&given, &colors);
+        if !colors(d) && !subs.is_empty() {
+            return Err(ctx.die(cat!(
+                "look theme: ",
+                given,
+                " has no colors.toml: not a theme's folder",
+                subfolder_hint("theme", args, &given, &subs)
+            )));
+        }
+    }
     let me = std::process::id();
     let (name, guard) = pick(ctx, &mut a, me)?;
     let r = theme_in(ctx, &a, dir.as_deref(), &given, &name, me);
@@ -2024,6 +2188,124 @@ pub fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #478: a folder whose subfolder is the plugin or theme: the look again with it.
+    #[test]
+    fn a_subfolder_that_is_the_kind_named() {
+        let t = std::env::temp_dir().join(format!("omabox-sub478-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        for d in ["cups", "wifi", "notes", ".hidden"] {
+            std::fs::create_dir_all(t.join(d)).unwrap();
+        }
+        std::fs::write(t.join("cups/manifest.json"), r#"{"id": "example.cups"}"#).unwrap();
+        std::fs::write(t.join("wifi/manifest.json"), r#"{"id": "example.wifi"}"#).unwrap();
+        std::fs::write(t.join(".hidden/manifest.json"), r#"{"id": "x.y"}"#).unwrap();
+        std::fs::write(t.join("notes/manifest.json"), "{}").unwrap();
+        std::fs::write(t.join("ember.toml"), "").unwrap();
+        let dir = t.to_str().unwrap().as_bytes().to_vec();
+        let subs = subfolders_with(&dir, &|d| plugin_id(d).is_some());
+        assert_eq!(
+            subs,
+            w(&["cups", "wifi"]),
+            "...an id's manifest, no dot folder"
+        );
+        let h = |args: &[&str], dir: &str, subs: &[&str]| {
+            String::from_utf8(subfolder_hint("plugin", &w(args), dir.as_bytes(), &w(subs))).unwrap()
+        };
+        assert_eq!(
+            h(&[".", "--open"], ".", &["cups"]),
+            "; its subfolder cups is one: omabox look plugin ./cups --open"
+        );
+        assert_eq!(
+            h(&["-o", "a.png", "x/"], "x/", &["cups", "wifi"]),
+            "; its subfolders cups, wifi are: omabox look plugin -o a.png x/cups"
+        );
+        assert_eq!(
+            h(&["p"], "p", &["a", "b", "c", "d", "e", "f"]),
+            "; its subfolders a, b, c, d and 2 more are: omabox look plugin p/a"
+        );
+        assert_eq!(h(&["."], ".", &[]), "", "...none: nothing");
+        let theme =
+            String::from_utf8(subfolder_hint("theme", &w(&["."]), b".", &w(&["ember"]))).unwrap();
+        assert_eq!(
+            theme,
+            "; its subfolder ember is one: omabox look theme ./ember"
+        );
+        std::fs::remove_dir_all(&t).unwrap();
+    }
+
+    /// #478: `look shot` and `look --shot` meant the box now, or a look's shot.
+    #[test]
+    fn a_shot_asked_for_names_look_dash_o() {
+        let h = |s: &[&str]| String::from_utf8(kind_hint(&w(s))).unwrap();
+        assert_eq!(
+            h(&["shot", "-o", "shot.png"]),
+            "omabox look -o shot.png (no kind) is a shot of the box as it is now; omabox shot -o FILE the image alone"
+        );
+        assert!(
+            h(&["screenshot", "--help"]).starts_with("omabox look -o FILE (no kind)"),
+            "{}",
+            h(&["screenshot", "--help"])
+        );
+        assert!(h(&["shot", "-b", "x"]).starts_with("omabox look -b x -o FILE (no kind)"));
+        let o = |k: Option<&str>, o: &str| {
+            shot_opt_hint(k, o.as_bytes()).map(|v| String::from_utf8(v).unwrap())
+        };
+        assert_eq!(
+            o(None, "--shot").unwrap(),
+            "look: unknown option --shot: every look takes a shot (its report's screenshot: line); -o FILE says where: omabox look -o FILE (omabox help look)"
+        );
+        assert!(
+            o(Some("theme"), "--screenshot=x.png")
+                .unwrap()
+                .contains("look theme: unknown option --screenshot=x.png: every look takes a shot (its report's screenshot: line); -o FILE says where: omabox look theme ... -o FILE (omabox")
+        );
+        assert!(
+            o(Some("page"), "--shot")
+                .unwrap()
+                .contains("; --shots N takes N over time")
+        );
+        assert_eq!(
+            o(None, "--nope"),
+            None,
+            "...another option: unknown_opt's line"
+        );
+    }
+
+    /// #478: summon's `no live bar widget` says what it means and what to do.
+    #[test]
+    fn summon_no_live_widget_explained() {
+        let said = b"summon: no live bar widget for: example.cups\n";
+        let p = |on_bar, own: Option<&[u8]>| {
+            String::from_utf8(summon_problem(b"example.cups", said, on_bar, own)).unwrap()
+        };
+        assert_eq!(
+            p(true, None),
+            "summon: no live bar widget for: example.cups (the widget is on the bar but is no panel: it lacks open(), close() and opened, which qs.Ui's Panel has; --open shows nothing)"
+        );
+        assert!(
+            p(false, None).ends_with("(no widget of it is on the bar for summon to open: see its plugin: line; the shell's log: look --keep-box, then omabox log -b BOX shell)"),
+            "{}",
+            p(false, None)
+        );
+        assert!(p(false, Some(b"dev")).ends_with("the shell's log: omabox log -b dev shell)"));
+        assert!(
+            String::from_utf8(summon_problem(
+                b"x.y",
+                b"summon: no live bar widget for: x.y",
+                true,
+                None
+            ))
+            .unwrap()
+            .starts_with("summon: no live bar widget for: x.y (the widget is on the bar"),
+            "...the shell log's warning, as it came, then what it means"
+        );
+        assert_eq!(
+            summon_problem(b"x.y", b"exit 1\n", true, None),
+            b"summon x.y: exit 1",
+            "...another failure: as it came"
+        );
+    }
 
     fn w(v: &[&str]) -> Vec<Vec<u8>> {
         v.iter().map(|s| s.as_bytes().to_vec()).collect()

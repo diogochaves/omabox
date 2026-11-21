@@ -7,7 +7,7 @@
 //! only through host::HostSilent (S8, as everywhere: #366), and the started box's mounts are checked for the seat's paths
 //! (up_box.rs's seat_check, S1).
 
-use crate::args::{optarg, unknown_opt};
+use crate::args::{optarg, unknown_opt_hint};
 use crate::boxes::{self, box_alive, meta};
 use crate::cat;
 use crate::exit::{self, Ctx, Exit, Res, say};
@@ -556,7 +556,9 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
                         crate::args::usage("up")?;
                         return Ok(true);
                     }
-                    _ if a.starts_with(b"-") => return Err(unknown_opt(ctx, "up", a)),
+                    _ if a.starts_with(b"-") => {
+                        return Err(unknown_opt_hint(ctx, "up", a, up_opt_hint(a)));
+                    }
                     _ => {
                         if !u.name.is_empty() {
                             return Err(ctx.die(cat!(
@@ -2190,9 +2192,37 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
     Ok(())
 }
 
+/// What an option up does not take was meant as, for the ones benchmark runs reached for (#478):
+/// look's --fresh (a new box is `up --new`), a Hyprland config file (a box's Hyprland is set by
+/// `omabox lua`). Nothing for the rest.
+fn up_opt_hint(opt: &[u8]) -> &'static str {
+    match opt.split(|&c| c == b'=').next().unwrap_or_default() {
+        b"--fresh" => {
+            "(--fresh is look's: omabox up --new starts another box under a free name; omabox down NAME, then omabox up NAME, starts it afresh)"
+        }
+        b"--config" | b"--hypr-config" | b"--hyprland-config" => {
+            "(a box's Hyprland runs a Lua config of its own: once it is up, omabox lua 'hl.config({ general = { gaps_out = 40 } })' sets an option, read back with omabox hyprctl getoption general:gaps_out; omabox help lua)"
+        }
+        _ => "",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #478: look's --fresh and a Hyprland config file, refused with what does it.
+    #[test]
+    fn unknown_options_meant_elsewhere() {
+        assert!(up_opt_hint(b"--fresh").starts_with("(--fresh is look's: omabox up --new starts"));
+        let c = up_opt_hint(b"--config=/tmp/gaps.conf");
+        assert!(
+            c.contains("omabox lua 'hl.config({ general = { gaps_out = 40 } })'"),
+            "{c}"
+        );
+        assert_eq!(up_opt_hint(b"--config"), c);
+        assert_eq!(up_opt_hint(b"--nope"), "");
+    }
 
     // #321: a desk box is refused to a jailed caller (S9), with --desk-shell and with --clean;
     // anything else of a plain box's it may have.

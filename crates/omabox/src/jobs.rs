@@ -1352,12 +1352,27 @@ pub fn job_ended(
     }
     say_proto_error(ctx, log);
     if !miss.is_empty() {
+        // (a shot is on the host already: cp it there, #478)
+        let shot = miss
+            .iter()
+            .find(|p| crate::repo::is_shot_path(ctx, p))
+            .map(|p| {
+                cat!(
+                    "; ",
+                    p,
+                    " is a shot, on the host: cp ",
+                    shell::quote_q(p),
+                    " DEST there, no box needed"
+                )
+            })
+            .unwrap_or_default();
         say(cat!(
             "its arguments name host paths box '",
             ctx.name,
             "' does not have: ",
             miss.join(&b' '),
-            " (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME)"
+            " (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME)",
+            shot
         ));
     }
     if tail.is_empty() {
