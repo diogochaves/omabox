@@ -7880,8 +7880,15 @@ t_isolated() {
   check_match "...said, with its log's last lines" \
     "the command exited with status 3 at once in box '$B', and left nothing running \(log: [^)]*\)"$'\n'"omabox: its log ends \(omabox log -b $B run\):"$'\n'"  boom" "$err"
   check_fails "...not as started" grep -q "started in box" <<<"$err"
+  # #471 part 2: a run (no -d) still going after a while says it waits, and what leaves it running
+  # (after 10 s; 1 s here); one that ends first says nothing.
+  err=$(OMABOX_TEST_RUN_NOTE_MS=1000 ob run -b "$B" -- sleep 2 2>&1 >/dev/null </dev/null); rc=$?
+  check_eq "run of a command still going after a while: said once, its status as it was" \
+    "0 omabox: note: sleep 2 still runs after 1 s: run waits for it to exit (an app, until its window is closed); omabox run -d -b $B -- sleep 2 leaves it running and returns" "$rc $err"
+  err=$(OMABOX_TEST_RUN_NOTE_MS=1000 ob run -b "$B" -- true 2>&1 </dev/null); rc=$?
+  check_eq "...nothing for one that ends first" "0 " "$rc $err"
   err=$(ob run -b "$B" -d -- true 2>&1 >/dev/null); rc=$?
-  check_match "...one that exits 0 at once: 0, said" "^0 omabox: the command exited with status 0 at once" "$rc $err"
+  check_match "run -d of one that exits 0 at once: 0, said" "^0 omabox: the command exited with status 0 at once" "$rc $err"
   # #471 part 2: each such end names what to run instead, last.
   check_match "...and that it needs no -d (the run without it)" \
     "omabox: it ended by itself: a command that ends needs no -d, omabox run -b $B -- true waits for it and prints its output \(-d is for an app that stays open\)\$" "$err"

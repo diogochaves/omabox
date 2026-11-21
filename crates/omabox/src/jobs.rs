@@ -1402,7 +1402,7 @@ fn on_machine(name: &str) -> bool {
 
 /// A word of a command for an agent to run again: as it is when the shell takes it so, else in
 /// single quotes.
-fn word(a: &[u8]) -> Vec<u8> {
+pub fn word(a: &[u8]) -> Vec<u8> {
     let plain = !a.is_empty()
         && a.iter()
             .all(|b| b.is_ascii_alphanumeric() || b"_./:=@%+,-".contains(b));

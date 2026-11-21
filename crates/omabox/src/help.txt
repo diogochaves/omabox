@@ -219,7 +219,9 @@ brings it in.
 --net isolated --allow PORTS on a throwaway `run` keeps tests off your real local services.
 `run` exits with the command's status; 125 is run's own failure (no box, a bad option, a throwaway
 that did not start, the box going down while the command ran), never a code of the command's
-(omabox help exit-codes).
+(omabox help exit-codes). Without -d it waits for the command to end: one still running after 10 s
+is said on stderr, with the run -d that leaves it running (not to a terminal). A run -d whose
+command ends at once says its status and log, then what to run instead where it can tell.
 @ up run ports
 Every box has its own network (pasta): by default the internet, the LAN and your servers. Across
 the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
