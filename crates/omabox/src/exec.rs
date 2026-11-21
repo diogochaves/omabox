@@ -1131,6 +1131,17 @@ pub fn caller_path(for_box: bool) -> Vec<u8> {
     } else {
         shell::env_or_empty("PATH")
     };
+    path_without_guard(&p, for_box)
+}
+
+/// own_path: this process's PATH without a guard's directory (#476), for a host program omabox runs
+/// itself (host.rs's hyprctl): the guard's stand-in for it refuses what omabox asks of the real one.
+pub fn own_path() -> Vec<u8> {
+    path_without_guard(&shell::env_or_empty("PATH"), false)
+}
+
+/// caller_path's filter of P.
+fn path_without_guard(p: &[u8], for_box: bool) -> Vec<u8> {
     // (`IFS=: read -ra` of `<<<"$p"`: the first line, split at each :, a last empty field dropped.)
     let line = p.split(|&c| c == b'\n').next().unwrap_or_default();
     let mut dirs: Vec<&[u8]> = if line.is_empty() {
@@ -1945,6 +1956,18 @@ mod tests {
             cp(&format!("{dl}/bin/:/usr/bin"), false),
             format!("{dl}/bin/:/usr/bin"),
             "...host keeps it"
+        );
+        let own = shell::with_env(
+            &[
+                ("PATH", Some("/x/share/guard:/usr/bin")),
+                ("OMABOX_JAIL", Some("{}")),
+                ("OMABOX_RELAY_PATH", Some("/relay")),
+            ],
+            own_path,
+        );
+        assert_eq!(
+            own, b"/usr/bin",
+            "own_path: this process's PATH without the guard's, jailed or not (#476)"
         );
         let _ = std::fs::remove_dir_all(&dl);
     }

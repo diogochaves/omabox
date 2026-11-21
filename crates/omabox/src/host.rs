@@ -23,6 +23,18 @@ pub const PASS_KEY: &str = "SUPER + ALT + ESCAPE";
 /// The signature the instances call is made under (the agent guard's).
 const GUARD: &str = "omabox-guard";
 
+/// The host's hyprctl, found on PATH past a guard's directory: the guard's stand-in refuses
+/// `instances`, which host_session asks (#476).
+fn hyprctl() -> std::process::Command {
+    let mut c = crate::sig::command("hyprctl");
+    // (std looks the program up on the child's PATH when it is set; untouched without a guard on it)
+    let p = crate::exec::own_path();
+    if p != shell::env_or_empty("PATH") {
+        c.env("PATH", OsStr::from_bytes(&p));
+    }
+    c
+}
+
 /// host_session: the user's Hyprland session (its signature): the environment's when it names a
 /// live one, else the only one in the runtime dir; several and none named are refused (finding 65).
 pub fn host_session(ctx: &Ctx) -> Result<Vec<u8>, Vec<u8>> {
@@ -33,7 +45,7 @@ pub fn host_session(ctx: &Ctx) -> Result<Vec<u8>, Vec<u8>> {
 pub fn host_session_wl(ctx: &Ctx) -> Result<(Vec<u8>, Vec<u8>), Vec<u8>> {
     let rt = shell::env_or_empty("XDG_RUNTIME_DIR");
     let sig = shell::env_or_empty("HYPRLAND_INSTANCE_SIGNATURE");
-    let mut c = crate::sig::command("hyprctl");
+    let mut c = hyprctl();
     c.args(["-j", "instances"])
         .env("HYPRLAND_INSTANCE_SIGNATURE", GUARD)
         .stdin(Stdio::inherit())
@@ -139,7 +151,7 @@ fn host_hyprctl(ctx: &Ctx, args: &[&[u8]], quiet: bool) -> (i32, Vec<u8>) {
             return (i32::from(ctx.die_rc.unwrap_or(1)), Vec::new());
         }
     };
-    let mut c = crate::sig::command("hyprctl");
+    let mut c = hyprctl();
     c.args(args.iter().map(|a| OsStr::from_bytes(a)))
         .env("HYPRLAND_INSTANCE_SIGNATURE", OsStr::from_bytes(&sig))
         .stdin(Stdio::inherit())
@@ -173,7 +185,7 @@ fn host_eval_out(sig: &[u8], lua: &[u8]) -> Vec<u8> {
     let Ok(w2) = w.try_clone() else {
         return Vec::new();
     };
-    let mut c = crate::sig::command("hyprctl");
+    let mut c = hyprctl();
     c.arg("eval")
         .arg(OsStr::from_bytes(lua))
         .env("HYPRLAND_INSTANCE_SIGNATURE", OsStr::from_bytes(sig))
@@ -195,7 +207,7 @@ fn host_eval(ctx: &Ctx, lua: &[u8]) -> Res<()> {
     let out = match host_session(ctx) {
         Err(m) => cat!("omabox: ", m),
         Ok(sig) => {
-            let mut c = crate::sig::command("hyprctl");
+            let mut c = hyprctl();
             c.arg("eval")
                 .arg(OsStr::from_bytes(lua))
                 .env("HYPRLAND_INSTANCE_SIGNATURE", OsStr::from_bytes(&sig))
