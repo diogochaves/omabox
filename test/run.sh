@@ -19640,13 +19640,57 @@ t_unit_guard_exec_host() {
   # and each one sees the session omabox finds there, not $HYPRLAND_INSTANCE_SIGNATURE (under the
   # guard, an agent running the suite, that is the guard's).
   local hrt=$TMP/ghost-rt hsig=a_7_7 STANDIN_PID; stand_in_host "$hrt" "$hsig"
+  # (the real hyprctl, past a guard's: an agent running the suite under the guard has one first, #476)
+  local noguard; noguard=$(tr : '\n' <<<"$PATH" | grep -v '/share/guard/\?$' | paste -sd :)
   check_eq "the stand-in session is the only one there" "$hsig wayland-sti" \
-    "$(XDG_RUNTIME_DIR=$hrt hyprctl -j instances | jq -r '.[] | "\(.instance) \(.wl_socket)"' | paste -sd '|')"
+    "$(XDG_RUNTIME_DIR=$hrt PATH=$noguard hyprctl -j instances | jq -r '.[] | "\(.instance) \(.wl_socket)"' | paste -sd '|')"
   local GUARDED=("${GUARDED[@]}" XDG_RUNTIME_DIR="$hrt")
   check_eq "host from a guarded shell: the session's Wayland display and signature" "wayland-sti $hsig" \
     "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo $WAYLAND_DISPLAY $HYPRLAND_INSTANCE_SIGNATURE' 2>/dev/null)"
+  # (host finds the session with the real hyprctl's instances, past the guard's, which refuses it: #476)
   check_match "host: and hyprctl reaches it" '"tag": "stand-in"' "$("${GUARDED[@]}" "$CLI" host -- hyprctl -j version 2>/dev/null)"
   check "...the stand-in heard it" grep -qx j/version "$hrt/requests.log"
+  # #476: the guard's hyprctl. Under the guard HYPRLAND_INSTANCE_SIGNATURE names no session, but
+  # `hyprctl instances` lists the user's and `-i`/`--instance SIG` reaches one (a benchmark run did,
+  # finding 739). Refused, naming omabox hyprctl; the rest goes on to the next hyprctl on PATH, here a
+  # stub first (so a refusal that failed reaches it, never the real one).
+  mkdir -p "$TMP/fakehypr"
+  printf '#!/bin/sh\necho "real hyprctl reached: $*"\n' > "$TMP/fakehypr/hyprctl"; chmod +x "$TMP/fakehypr/hyprctl"
+  local hx=(env PATH="$TMP/fakehypr:$PATH" XDG_RUNTIME_DIR="$hrt" "$CLI" guard exec --) hc
+  hc=$("${hx[@]}" sh -c 'command -v hyprctl')
+  check_eq "guard exec: hyprctl is the guard's (#476)" "$ROOT/share/guard/hyprctl" "$hc"
+  if [ "$hc" = "$ROOT/share/guard/hyprctl" ]; then
+    local a
+    for a in "-i $hsig keyword general:gaps_out 0" "--instance $hsig keyword general:gaps_out 0" "-j -i 0 clients" \
+      "clients -i 0" "--instance=$hsig version" "instances" "-j instances"; do
+      # shellcheck disable=SC2086 # (the words of a)
+      check_match "...hyprctl $a refused, naming omabox hyprctl" \
+        "^omabox guard: not running hyprctl (-i|--instance|instances) here: .*omabox hyprctl -b BOX .*Only when the user asked for their real desktop: omabox host -- hyprctl " \
+        "$("${hx[@]}" hyprctl $a 2>&1)"
+    done
+    check_eq "...with exit 4" 4 "$("${hx[@]}" hyprctl --instance "$hsig" dispatch exec foot >/dev/null 2>&1; echo $?)"
+    check_eq "...one line" 1 "$("${hx[@]}" hyprctl instances 2>&1 | wc -l)"
+    check_eq "...a request goes on, its words whole" "real hyprctl reached: -j clients" "$("${hx[@]}" hyprctl -j clients 2>&1)"
+    check_eq "...and a batch, whose instances is a request to the session (hyprctl lists none)" "real hyprctl reached: --batch instances" \
+      "$("${hx[@]}" hyprctl --batch instances 2>&1 | head -n 1)"
+    check_eq "...so does -i after --, a request's word" "real hyprctl reached: -- dispatch exec foot -i" \
+      "$("${hx[@]}" hyprctl -- dispatch exec foot -i 2>&1)"
+  else
+    no "...which refuses -i, --instance and instances" "not run: hyprctl under guard exec is [$hc], not the guard's"
+  fi
+  if command -v hyprctl >/dev/null; then
+    # The real one, past the guard's: the guard's signature reaches nothing, and the guard says what to
+    # run instead; hyprctl's own line and status stay.
+    local ho; ho=$(env XDG_RUNTIME_DIR="$hrt" "$CLI" guard exec -- hyprctl -j version 2>&1; echo "rc=$?")
+    check_match "...a request the guard's signature cannot reach: hyprctl's line, then the guard's" \
+      "Couldn't connect to $hrt/hypr/omabox-guard/\.socket\.sock\. \(4\)
+omabox guard: hyprctl reaches no Hyprland from this shell .*omabox hyprctl -b BOX .*omabox host -- hyprctl .*
+rc=4$" "$ho"
+    check_eq "...a signature set by hand is not caught (the guard is not a boundary)" '{"tag": "stand-in"}' \
+      "$(env XDG_RUNTIME_DIR="$hrt" "$CLI" guard exec -- env HYPRLAND_INSTANCE_SIGNATURE="$hsig" hyprctl -j version 2>&1)"
+  else
+    skip "the guard's hyprctl and the real one (#476)" "no hyprctl here"
+  fi
   local open; open=$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v xdg-open; echo "${BROWSER-unset}"' 2>/dev/null)
   if command -v xdg-open >/dev/null; then check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
   else skip "host: the real xdg-open (finding 92)" "no xdg-open here"; fi

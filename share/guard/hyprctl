@@ -1,0 +1,53 @@
+#!/bin/sh
+# The agent guard's hyprctl (#476): first on a guarded agent's PATH, as quickshell is. The guard's
+# HYPRLAND_INSTANCE_SIGNATURE names no session, but hyprctl's `instances` lists the user's, and
+# `-i`/`--instance SIG` (or the session's number in that list) talks to one: a benchmark run did
+# (finding 739), and reached the outer Hyprland, on a real machine the user's desktop. Refuse both;
+# the rest goes on to the next hyprctl on PATH, and when the guard's signature could reach nothing,
+# its failure is followed by the command to run instead.
+# hyprctl's parser (0.56, 0.57): -i and --instance only as words of their own, anywhere before a `--`
+# (after it every word is the request's); --instance=SIG is refused too, which hyprctl takes for an
+# unknown option today. The request is `instances` when its words, joined with spaces after a `/`,
+# hold "/instances", as hyprctl looks for it.
+# Not caught (the guard is not a boundary, SECURITY.md): a caller that sets the signature itself,
+# names the binary by its path, or talks to the socket directly. In a box, and for `omabox host`, the
+# guard's directory is off PATH and this is not reached; omabox's own hyprctl skips it (host.rs).
+r=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+what="" req="" opts=1 batch=""
+for a in "$@"; do
+  if [ -n "$opts" ]; then
+    case $a in
+      --) opts=""; continue ;;
+      -i|--instance|--instance=*) what=${a%%=*}; break ;;
+      --batch) batch=1; continue ;;
+      -?*) continue ;;
+    esac
+  fi
+  req="$req $a"
+done
+[ -z "$what" ] && [ -z "$batch" ] && case "/${req# }" in */instances*) what=instances ;; esac
+next="For a box's Hyprland: omabox hyprctl -b BOX ... Only when the user asked for their real desktop: omabox host -- hyprctl ..."
+if [ -n "$what" ]; then
+  echo "omabox guard: not running hyprctl $what here: from this shell it reaches the user's desktop (their Hyprland, not a box's). $next" >&2
+  exit 4
+fi
+# The next hyprctl on PATH that is not a guard's (any checkout's, as caller_path in bin/omabox).
+real=""
+set -f; IFS=:
+for d in $PATH; do
+  case $d in */share/guard|*/share/guard/|"") continue ;; esac
+  [ -x "$d/hyprctl" ] && { real=$d/hyprctl; break; }
+done
+unset IFS
+[ -n "$real" ] || { echo "omabox guard: no hyprctl on PATH" >&2; exit 127; }
+# A signature that is not the guard's, or a guard's session that is there after all: hyprctl as it is.
+if [ "${HYPRLAND_INSTANCE_SIGNATURE:-}" != omabox-guard ] || [ -S "$r/hypr/omabox-guard/.socket.sock" ]; then
+  exec "$real" "$@"
+fi
+# The guard's signature reaches nothing: hyprctl says so (on stdout, `Couldn't connect to ... (4)`),
+# then the guard says what to run. Its status stays hyprctl's (a --batch ends 0 all the same).
+"$real" "$@"
+rc=$?
+[ "$rc" = 0 ] && [ -z "$batch" ] && exit 0
+echo "omabox guard: hyprctl reaches no Hyprland from this shell (its HYPRLAND_INSTANCE_SIGNATURE is the guard's, which names none). $next" >&2
+exit "$rc"
