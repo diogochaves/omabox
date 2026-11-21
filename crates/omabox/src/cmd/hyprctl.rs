@@ -391,6 +391,39 @@ fn config_for(cmd: &str) -> Option<String> {
     Some(format!("hl.config({t})"))
 }
 
+/// What `omabox run` says after a command CMD that runs hyprctl keyword/set in box NAME (#471: the
+/// benchmark's `omabox run hyprctl keyword gaps 0 40` and nine spellings got hyprctl's bare `unknown
+/// request`, which only `omabox hyprctl` explained): config_hint's lines, for hyprctl itself or for a
+/// `hyprctl keyword ...` in a shell's script (its words up to a `;`, `&`, `|`, quote or line end).
+pub(crate) fn run_hint(name: &[u8], cmd: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let Some(first) = cmd.first() else {
+        return Vec::new();
+    };
+    if first.rsplit(|&c| c == b'/').next() == Some(b"hyprctl".as_slice()) {
+        if set_words(&cmd[1..]).is_empty() {
+            return Vec::new();
+        }
+        return config_hint(name, &cmd[1..]);
+    }
+    let Some(re) = crate::shell::Re::new(
+        r#"(^|[^A-Za-z0-9_.-])hyprctl[[:space:]]+((-[^[:space:]]+[[:space:]]+)*)((keyword|set)[[:space:]][^;&|'"[:cntrl:]]*)"#,
+    ) else {
+        return Vec::new();
+    };
+    let words: Vec<Vec<u8>> = cmd[1..]
+        .iter()
+        .filter_map(|a| re.group(a, 4))
+        .map(|w| w.trim_ascii_end().to_vec())
+        .collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+    words
+        .iter()
+        .flat_map(|w| config_hint(name, std::slice::from_ref(w)))
+        .collect()
+}
+
 /// What `hyprctl` says after a `keyword`/`set` Hyprland did not take, for box NAME: one line per
 /// such command in ARGS, with its hl.config and the getoption that reads it back when config_for has
 /// it, else the general form.
@@ -543,7 +576,7 @@ fn temp_file() -> Option<std::fs::File> {
 mod tests {
     use super::{
         commands, config_for, config_hint, dispatch_refused, eval_hint, legacy_hint, lua_for,
-        notify_text, old_dispatches, set_words,
+        notify_text, old_dispatches, run_hint, set_words,
     };
 
     // #471: eval given words that are no Lua names the Lua and the command.
@@ -741,6 +774,36 @@ mod tests {
         assert!(g[1].ends_with("Instead: omabox lua -b b1 'hl.dispatch(hl.dsp.window.close())'"));
         // No dispatch found in the words (hyprctl's own forms): the general line.
         assert!(h(&["-q"])[0].starts_with("hyprctl: that dispatch is the old dispatcher syntax"));
+    }
+
+    /// #471: `omabox run` of a hyprctl keyword, itself or in a shell's script, gets keyword's hint.
+    #[test]
+    fn run_of_hyprctl_keyword() {
+        let one = run_hint(b"b1", &w(&["hyprctl", "keyword", "general:gaps_out", "40"]));
+        assert_eq!(
+            one,
+            config_hint(b"b1", &w(&["keyword", "general:gaps_out", "40"]))
+        );
+        assert_eq!(one.len(), 1);
+        let sh = run_hint(
+            b"b1",
+            &w(&[
+                "bash",
+                "-c",
+                "hyprctl keyword general:gaps_out 40; hyprctl getoption general:gaps_out",
+            ]),
+        );
+        assert_eq!(sh, one);
+        assert_eq!(
+            run_hint(
+                b"b1",
+                &w(&["sh", "-c", "/usr/bin/hyprctl -j set a:b 1 && echo ok"])
+            ),
+            config_hint(b"b1", &w(&["set", "a:b", "1"]))
+        );
+        assert!(run_hint(b"b1", &w(&["hyprctl", "clients"])).is_empty());
+        assert!(run_hint(b"b1", &w(&["bash", "-c", "myhyprctl keyword a 1"])).is_empty());
+        assert!(run_hint(b"b1", &w(&["foot"])).is_empty());
     }
 
     #[test]

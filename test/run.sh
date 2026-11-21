@@ -7882,6 +7882,19 @@ t_isolated() {
   check_fails "...not as started" grep -q "started in box" <<<"$err"
   err=$(ob run -b "$B" -d -- true 2>&1 >/dev/null); rc=$?
   check_match "...one that exits 0 at once: 0, said" "^0 omabox: the command exited with status 0 at once" "$rc $err"
+  # #471 part 2: each such end names what to run instead, last.
+  check_match "...and that it needs no -d (the run without it)" \
+    "omabox: it ended by itself: a command that ends needs no -d, omabox run -b $B -- true waits for it and prints its output \(-d is for an app that stays open\)\$" "$err"
+  local bh; bh=$(ob run -b "$B" -- sh -c 'echo "print(1)" >"$HOME/t471.py"; echo "$HOME"')
+  err=$(ob run -b "$B" -d -- "$bh/t471.py" 2>&1 >/dev/null); rc=$?
+  check_match "...a script that is not executable (126): its interpreter named" \
+    "^126 .*Permission denied.*omabox: $bh/t471\.py is not executable: omabox run -d -b $B -- python3 $bh/t471\.py\$" "$rc $(tr '\n' ' ' <<<"$err" | sed 's/ $//')"
+  err=$(ob run -b "$B" -d -- t471-nosuch.py 2>&1 >/dev/null); rc=$?
+  check_match "...a script named without ./ (127): ./ and its interpreter named" \
+    "^127 .*omabox: t471-nosuch\.py is not a command on the box's PATH: a file in this folder is \./t471-nosuch\.py; omabox run -d -b $B -- python3 t471-nosuch\.py\$" "$rc $(tr '\n' ' ' <<<"$err" | sed 's/ $//')"
+  err=$(ob run -b "$B" -d -- hyprctl keyword general:gaps_out 40 2>&1 >/dev/null); rc=$?
+  check_match "...hyprctl keyword under -d: no -d needed, and the hl.config for it" \
+    "omabox: hyprctl answers and ends, so it needs no run -d: omabox hyprctl -b $B keyword general:gaps_out 40 prints the answer"$'\n'"omabox: hyprctl: keyword general:gaps_out 40 set nothing: .*Instead: omabox lua -b $B 'hl\.config\(\{ general = \{ gaps_out = 40 \} \}\)'" "$err"
   err=$(ob run -b "$B" -d -q -- true 2>&1 >/dev/null); rc=$?
   check_eq "...with -q: nothing said" "0 " "$rc $err"
   err=$(ob run -b "$B" -d -- sh -c 'sleep 600 & exit 0' 2>&1 >/dev/null); rc=$?
@@ -9517,6 +9530,14 @@ t_hypr_old_dispatch() {
   check_eq "...the hl.config for it on stderr" \
     "omabox: hyprctl: keyword general:gaps_out 40 set nothing: a box's Hyprland runs a Lua config, which has no keyword request. Instead: omabox lua -b $B 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b $B getoption general:gaps_out (an option Hyprland does not know is in omabox hyprctl configerrors, not lua's answer)" "$err"
   check_fails "...the option untouched" grep -q "^css gap data: 40 " <<<"$(ob hyprctl -b "$B" getoption general:gaps_out)"
+  # #471 part 2: the same through omabox run (hyprctl's own answer, then keyword's line), and in a
+  # shell's script; its status is hyprctl's, as run's always is.
+  out=$(ob run -b "$B" -- hyprctl keyword general:gaps_out 40 2>"$TMP/hod-err"); rc=$?; err=$(cat "$TMP/hod-err")
+  check_match "omabox run hyprctl keyword: hyprctl's answer as it came" "^0 (unknown request|keyword can't work with non-legacy parsers\. Use eval\.)$" "$rc $out"
+  check_eq "...then keyword's hl.config line" \
+    "omabox: hyprctl: keyword general:gaps_out 40 set nothing: a box's Hyprland runs a Lua config, which has no keyword request. Instead: omabox lua -b $B 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b $B getoption general:gaps_out (an option Hyprland does not know is in omabox hyprctl configerrors, not lua's answer)" "$err"
+  check_match "...in bash -c too" "omabox: hyprctl: keyword general:gaps_out 40 set nothing: " \
+    "$(ob run -b "$B" -- bash -c 'hyprctl keyword general:gaps_out 40; true' 2>&1 >/dev/null)"
   check "...that Lua run" ob lua -b "$B" "$(sed -n "s/.*Instead: omabox lua -b $B '\(.*\)', read back.*/\1/p" <<<"$err")"
   check_match "...sets it" "^css gap data: 40 40 40 40" "$(ob hyprctl -b "$B" getoption general:gaps_out)"
   # #471: eval given the old keyword's words is Lua's syntax error; it names the Lua and the command.

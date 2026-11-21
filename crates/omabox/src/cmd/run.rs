@@ -315,7 +315,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let rc = box_exec(ctx, &cmd, opts)?;
         run_mark_end(ctx, mark);
         touch(&ctx.at("used"));
-        return code(run_gone(ctx, rc)?);
+        let rc = run_gone(ctx, rc)?;
+        // hyprctl keyword in a box: hyprctl's bare `unknown request`, then what sets the option (#471).
+        for l in crate::cmd::hyprctl::run_hint(&ctx.name, &cmd) {
+            say(l);
+        }
+        return code(rc);
     }
     if detach {
         // This session's box, up under another directory's name: named, not an `up` that would
@@ -562,6 +567,7 @@ fn throwaway(ctx: &mut Ctx, up_args: Vec<Vec<u8>>, cmd: &[Vec<u8>]) -> Res<()> {
         say(n);
     }
     // The name keeps its -run<pid> whatever the base's length: two runs in one repo never share a box.
+    let base = ctx.name.clone();
     let me = std::process::id();
     let name = cat!(shell::cut_c(&ctx.name, 28), format!("-run{me}"));
     select_box(ctx, &name)?;
@@ -570,6 +576,18 @@ fn throwaway(ctx: &mut Ctx, up_args: Vec<Vec<u8>>, cmd: &[Vec<u8>]) -> Res<()> {
     let guard = crate::sig::Teardown::new(ctx.name.clone());
     let r = throwaway_run(ctx, overlay, up_args, cmd, me);
     guard.finish();
+    // hyprctl keyword (#471): what sets the option, in a box that stays up.
+    let hint = crate::cmd::hyprctl::run_hint(&base, cmd);
+    if !hint.is_empty() {
+        say(cat!(
+            "with no box up this ran in a box of its own, gone with it: omabox up ",
+            shell::quote_q(&base),
+            " first, then"
+        ));
+        for l in hint {
+            say(l);
+        }
+    }
     r
 }
 

@@ -1366,7 +1366,156 @@ pub fn job_ended(
         say(cat!("its log ends (omabox log -b ", ctx.name, " run):"));
         let _ = std::io::stderr().write_all(&cat!(tail, "\n"));
     }
+    // What to run instead, last, where the model reads (#471).
+    let run = cat!("omabox run -d -b ", shell::quote_q(&ctx.name), " --");
+    let file = |f: &str| std::path::Path::new(f).is_file();
+    for l in exit_hint(&ctx.name, &run, &st, argv, &r.out, &on_machine, &file) {
+        say(l);
+    }
     Ok(Some(rc))
+}
+
+/// The terminals a box may have: the ones a program names, and those looked for when one is not there.
+const TERMINALS: [&str; 14] = [
+    "alacritty",
+    "kitty",
+    "ghostty",
+    "foot",
+    "wezterm",
+    "konsole",
+    "gnome-terminal",
+    "xterm",
+    "terminator",
+    "urxvt",
+    "kgx",
+    "ptyxis",
+    "st",
+    "xdg-terminal-exec",
+];
+
+/// What a box can run of NAME: this machine's program (a box runs its /usr).
+fn on_machine(name: &str) -> bool {
+    ["/usr/bin/", "/usr/local/bin/"]
+        .iter()
+        .any(|d| std::path::Path::new(&format!("{d}{name}")).is_file())
+}
+
+/// A word of a command for an agent to run again: as it is when the shell takes it so, else in
+/// single quotes.
+fn word(a: &[u8]) -> Vec<u8> {
+    let plain = !a.is_empty()
+        && a.iter()
+            .all(|b| b.is_ascii_alphanumeric() || b"_./:=@%+,-".contains(b));
+    if plain {
+        a.to_vec()
+    } else {
+        shell::quote_at(a)
+    }
+}
+
+/// The interpreter for a script FILE by its extension, if it has one of the usual.
+fn interpreter(file: &str) -> Option<&'static str> {
+    let ext = file.rsplit_once('.')?.1;
+    Some(match ext {
+        "py" => "python3",
+        "sh" | "bash" => "bash",
+        "js" | "mjs" => "node",
+        "rb" => "ruby",
+        "pl" => "perl",
+        "lua" => "lua",
+        _ => return None,
+    })
+}
+
+/// The next command after a job of ARGV ended at once with status ST in box NAME, its log ending
+/// TAIL (#471: each such exit the benchmark's runs hit named none). RUN is the command that starts
+/// one (`omabox run -d -b NAME --`); HAS whether this machine has a program (a box runs its /usr);
+/// FILE whether a file is in this directory. hyprctl, which answers and ends, needs no -d; a status 0
+/// is a command that ended by itself; 126 Permission denied a script that is not executable; 127 No
+/// such file a script named without ./, or a terminal that is not installed.
+pub fn exit_hint(
+    name: &[u8],
+    run: &[u8],
+    st: &[u8],
+    argv: &[Vec<u8>],
+    tail: &[u8],
+    has: &dyn Fn(&str) -> bool,
+    file: &dyn Fn(&str) -> bool,
+) -> Vec<Vec<u8>> {
+    let Some(a0) = argv.first() else {
+        return Vec::new();
+    };
+    let prog = String::from_utf8_lossy(a0).into_owned();
+    let base = prog.rsplit('/').next().unwrap_or(&prog).to_string();
+    let q = shell::quote_q(name);
+    let rest: Vec<u8> = argv[1..].iter().flat_map(|a| cat!(" ", word(a))).collect();
+    let mut v = Vec::new();
+    if base == "hyprctl" {
+        v.push(cat!(
+            "hyprctl answers and ends, so it needs no run -d: omabox hyprctl -b ",
+            q,
+            rest,
+            " prints the answer"
+        ));
+        v.extend(crate::cmd::hyprctl::run_hint(name, argv));
+        return v;
+    }
+    let has_t = |w: &[u8]| crate::exit::contains(tail, w);
+    match st {
+        b"0" => v.push(cat!(
+            "it ended by itself: a command that ends needs no -d, omabox run -b ",
+            q,
+            " -- ",
+            word(a0),
+            rest,
+            " waits for it and prints its output (-d is for an app that stays open)"
+        )),
+        b"126" if has_t(b"Permission denied") => {
+            let how = match interpreter(&base) {
+                Some(i) => cat!(run, " ", i, " ", word(a0), rest),
+                None => cat!("chmod +x ", word(a0), ", then the same again"),
+            };
+            v.push(cat!(prog, " is not executable: ", how));
+        }
+        b"127" if has_t(b"No such file or directory") => {
+            if TERMINALS.contains(&base.as_str()) && !prog.contains('/') {
+                let there: Vec<&str> = TERMINALS
+                    .iter()
+                    .copied()
+                    .filter(|t| *t != base && has(t))
+                    .collect();
+                v.push(match there.first() {
+                    Some(t) => cat!(
+                        prog,
+                        " is not installed (a box runs this machine's programs); the terminals there are: ",
+                        there.join(", "),
+                        ": ",
+                        run,
+                        " ",
+                        *t
+                    ),
+                    None => cat!(
+                        prog,
+                        " is not installed, and no other terminal is (a box runs this machine's programs)"
+                    ),
+                });
+            } else if !prog.contains('/') && (file(&prog) || interpreter(&base).is_some()) {
+                let how = match interpreter(&base) {
+                    Some(i) => cat!(run, " ", i, " ", word(a0), rest),
+                    None => cat!(run, " ./", word(a0), rest),
+                };
+                v.push(cat!(
+                    prog,
+                    " is not a command on the box's PATH: a file in this folder is ./",
+                    prog,
+                    "; ",
+                    how
+                ));
+            }
+        }
+        _ => {}
+    }
+    v
 }
 
 /// While an `omabox run` runs in the box, $D/runs/o.PID.START; once it ended, c.START.END (#300);
@@ -1433,6 +1582,79 @@ pub fn run_mark_end(ctx: &Ctx, mark: Option<(i64, bool)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #471: a run -d that ended at once names what to run instead.
+    #[test]
+    fn an_exit_at_once_names_the_next_command() {
+        let w = |v: &[&str]| -> Vec<Vec<u8>> { v.iter().map(|s| s.as_bytes().to_vec()).collect() };
+        let foot_only = |t: &str| t == "foot";
+        let here = |f: &str| f == "hello";
+        let h = |st: &str, argv: &[&str], tail: &str| -> Vec<String> {
+            exit_hint(
+                b"b1",
+                b"omabox run -d -b b1 --",
+                st.as_bytes(),
+                &w(argv),
+                tail.as_bytes(),
+                &foot_only,
+                &here,
+            )
+            .into_iter()
+            .map(|l| String::from_utf8(l).unwrap())
+            .collect()
+        };
+        let denied = "setsid: failed to execute ./hello.py: Permission denied\n";
+        assert_eq!(
+            h("126", &["./hello.py"], denied),
+            ["./hello.py is not executable: omabox run -d -b b1 -- python3 ./hello.py"]
+        );
+        assert_eq!(
+            h(
+                "126",
+                &["/x/tool", "-v"],
+                "setsid: failed to execute /x/tool: Permission denied"
+            ),
+            ["/x/tool is not executable: chmod +x /x/tool, then the same again"]
+        );
+        let missing = |p: &str| format!("setsid: failed to execute {p}: No such file or directory");
+        assert_eq!(
+            h("127", &["hello.py"], &missing("hello.py")),
+            [
+                "hello.py is not a command on the box's PATH: a file in this folder is ./hello.py; omabox run -d -b b1 -- python3 hello.py"
+            ]
+        );
+        assert_eq!(
+            h("127", &["hello"], &missing("hello")),
+            [
+                "hello is not a command on the box's PATH: a file in this folder is ./hello; omabox run -d -b b1 -- ./hello"
+            ]
+        );
+        assert_eq!(
+            h("127", &["alacritty", "-e", "sh"], &missing("alacritty")),
+            [
+                "alacritty is not installed (a box runs this machine's programs); the terminals there are: foot: omabox run -d -b b1 -- foot"
+            ]
+        );
+        // A program that is not there and no file of the name: nothing to add to the log's line.
+        assert!(h("127", &["nosuch"], &missing("nosuch")).is_empty());
+        assert_eq!(
+            h("0", &["notify-send", "a b"], ""),
+            [
+                "it ended by itself: a command that ends needs no -d, omabox run -b b1 -- notify-send 'a b' waits for it and prints its output (-d is for an app that stays open)"
+            ]
+        );
+        let k = h(
+            "0",
+            &["hyprctl", "keyword", "gaps_outer", "40"],
+            "unknown request",
+        );
+        assert_eq!(
+            k[0],
+            "hyprctl answers and ends, so it needs no run -d: omabox hyprctl -b b1 keyword gaps_outer 40 prints the answer"
+        );
+        assert!(k[1].starts_with("hyprctl: keyword gaps_outer 40 set nothing: a box's Hyprland runs a Lua config, which has no keyword request. Instead: omabox lua -b b1 'hl.config({ gaps_outer = 40 })'"), "{k:?}");
+        assert_eq!(h("1", &["hyprctl", "-v"], "usage").len(), 1);
+    }
 
     /// #377: a pid is pinned as the box's only while it is in the box's pid namespace.
     #[test]
