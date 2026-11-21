@@ -10907,7 +10907,8 @@ SH
     "$(grep -E '^(expect|proof)' "$d/base/win.point" 2>&1)"
   check "...the overview drawn" test -s "$d/a/baseline.png"
   rc=0; out=$(MADE=1 ob check run --base "$d/base" -o "$d/b" -- "$d/scenario.sh" 2>&1) || rc=$?
-  check_match "a check, the proofs held: same, exit 0" $'(^|\n)same     win\n.*check: 1 of 1 same; .*\\|0$' "$out|$rc"
+  # (a speck the comparison leaves out is said on the line: `same     win (1 speck left out, the largest 2 px)`)
+  check_match "a check, the proofs held: same, exit 0" $'(^|\n)same     win( \\([^\n]*\\))?\n.*check: 1 of 1 same; .*\\|0$' "$out|$rc"
   rc=0; out=$(ob check run --base "$d/base" -o "$d/c" -- "$d/scenario.sh" 2>&1) || rc=$?
   check_match "the command's file not made: proof failed, though the pixels are the baseline's, exit 1" \
     $'(^|\n)proof    win: proof failed: command test -e /home/sbx/made \\(exit 1\\)\n  expect: the demo window, Beta checked\n  shot: [^\n]*/c/run1/win.png \\(the same as the baseline\'s: the baseline shows it too\\)\n[^|]*\\|1$' "$out|$rc"

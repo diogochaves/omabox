@@ -15053,6 +15053,9 @@ from them.
     crop. **t_unit_install's AUR check** read `packaging/aur/omabox/PKGBUILD`, which a release
     tarball has not had since 7615d52 (`packaging/ export-ignore`); the plain-Arch VM runs from such
     a tarball, so it failed there. It skips without the recipe now.
+    **t_check_proof** (the omarchy-pkgs bump's VM test, Omarchy 4.5) wanted `same     win` to end
+    its line; the check rightly said `same     win (1 speck left out, the largest 2 px)`. The
+    parenthesis is allowed now.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
