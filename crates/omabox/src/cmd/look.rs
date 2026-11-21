@@ -37,6 +37,10 @@ const PROBLEMS_MAX: usize = 20;
 const PROBLEM_RE: &str = r"(^|[^a-z])(error|errors|critical|fatal|traceback|panicked|exception|segmentation fault|core dumped|aborted)([^a-z]|$)|\.qml:[0-9]+";
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    // `look -b NAME page FILE`, and `omabox -b NAME look page FILE`, which front.rs makes that
+    // (#471): the kind after -b NAME is the kind, -b NAME its option.
+    let moved = kind_first(args);
+    let args = moved.as_deref().unwrap_or(args);
     match args.first().map(Vec::as_slice) {
         Some(b"app") => app(ctx, &args[1..]),
         Some(b"plugin") => plugin(ctx, &args[1..]),
@@ -51,6 +55,38 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ": ",
             kind_hint(args)
         ))),
+    }
+}
+
+/// ARGS that start `-b NAME KIND`, as `KIND -b NAME ...`; None for any others.
+fn kind_first(args: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
+    match args {
+        [b, n, k, rest @ ..]
+            if matches!(b.as_slice(), b"-b" | b"--box")
+                && matches!(k.as_slice(), b"app" | b"plugin" | b"theme" | b"page") =>
+        {
+            Some([&[k.clone(), b.clone(), n.clone()], rest].concat())
+        }
+        _ => None,
+    }
+}
+
+/// The report's `window:` line, `CLASS "TITLE" WxH (LAYOUT)`. A page's window is called chromium,
+/// and Chromium gives an --app window a class of its own (`chrome-<the page's path>-Default`) that
+/// `--window chromium` does not select (#471): its address is said as the selector.
+fn report_window_line(
+    page: bool,
+    class: &str,
+    title: &str,
+    size: &str,
+    layout: &str,
+    addr: &str,
+) -> Vec<u8> {
+    if page {
+        format!("chromium \"{title}\" {size} ({layout}; select it with --window {addr})")
+            .into_bytes()
+    } else {
+        format!("{class} \"{title}\" {size} ({layout})").into_bytes()
     }
 }
 
@@ -1010,20 +1046,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             } else {
                 "tiled"
             };
-            window_line = cat!(
-                if a.page {
-                    "chromium".to_string()
-                } else {
-                    s("class")
-                },
-                " \"",
-                s("title"),
-                "\" ",
-                size,
-                " (",
-                layout,
-                ")"
-            );
+            window_line = report_window_line(a.page, &s("class"), &s("title"), &size, layout, addr);
             // Ended meanwhile (a crash after its first frame).
             if pid.is_some() && job_pid(name, &log).is_none() {
                 if let Some(e) = pid.and_then(|p| job_end(name, p)) {
@@ -1872,6 +1895,45 @@ pub fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn w(v: &[&str]) -> Vec<Vec<u8>> {
+        v.iter().map(|s| s.as_bytes().to_vec()).collect()
+    }
+
+    /// #471: `-b NAME` before the kind (as `omabox -b NAME look page FILE` arrives) is the kind's.
+    #[test]
+    fn b_before_the_kind() {
+        assert_eq!(
+            kind_first(&w(&["-b", "x", "page", "f.html"])),
+            Some(w(&["page", "-b", "x", "f.html"]))
+        );
+        assert_eq!(
+            kind_first(&w(&["--box", "x", "app", "--", "foot"])),
+            Some(w(&["app", "--box", "x", "--", "foot"]))
+        );
+        assert_eq!(kind_first(&w(&["-b", "x", "-o", "f.png"])), None);
+        assert_eq!(kind_first(&w(&["page", "f.html", "-b", "x"])), None);
+    }
+
+    /// #471: a page's window line names a selector that picks it, not the word chromium.
+    #[test]
+    fn a_page_window_names_its_selector() {
+        assert_eq!(
+            report_window_line(
+                true,
+                "chrome-__x_index.html-Default",
+                "Rocks",
+                "800x600",
+                "tiled",
+                "0xab"
+            ),
+            b"chromium \"Rocks\" 800x600 (tiled; select it with --window 0xab)"
+        );
+        assert_eq!(
+            report_window_line(false, "foot", "t", "800x600", "tiled", "0xab"),
+            b"foot \"t\" 800x600 (tiled)"
+        );
+    }
 
     /// In a box that stays up a program's window is its own (its pid), else one that was not there
     /// when it was started; a throwaway box has none before, so any.

@@ -1275,6 +1275,12 @@ t_unit_exit_codes() {
     "$(ob look hello -- python3 hello.py 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
   check_match "...a page" "got rocks\.html: omabox look page rocks\.html \(" "$(ob look rocks.html 2>&1)"
   check_match "...none to guess: the four" "got x: omabox look app -- CMD, omabox look plugin DIR, omabox look theme DIR or omabox look page FILE\|URL \(" "$(ob look x 2>&1)"
+  # #471 part 2: -b NAME before look's kind is the kind's -b (it was `look: unknown option page`).
+  : >"$TMP/$P-lookb.html"
+  check_match "omabox -b NAME look page FILE: the box asked for" "no box '$P-x' is up" "$(ob -b "$P-x" look page "$TMP/$P-lookb.html" 2>&1)"
+  check_match "...look -b NAME page FILE too" "no box '$P-x' is up" "$(ob look -b "$P-x" page "$TMP/$P-lookb.html" 2>&1)"
+  check_match "...look -b NAME app -- CMD too" "no box '$P-x' is up" "$(ob look -b "$P-x" app -- foot 2>&1)"
+  rm -f -- "$TMP/$P-lookb.html"
   # (#473: shot --layer is a layer's shot now; t_shot_layer)
   check_eq "shot --layer with --window: one of them" \
     "omabox: shot: --window or --layer, not both (omabox help shot)|2" "$(ob shot --layer omarchy-bar --window x 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
