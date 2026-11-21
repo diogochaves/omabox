@@ -14998,6 +14998,52 @@ from them.
     --since` its earlier shot, click --in it, then nothing changed). Not arranged: the
     missing-terminal line's form for a machine with no terminal at all (a box needs foot).
 
+744. **The nine error lines 740 left: each ends with the command that fixes it** (2026-11-21, #478;
+    739's list item 10, one benchmark hit each). **`look plugin .` / `look theme .`** from the folder
+    above the plugin or theme: the refusal (a plugin's, as before; a theme's is new, made before any
+    box starts, and only when a subfolder has a colors.toml: a folder with none and no such
+    subfolder is still looked at and reported) names the subfolders that are one (four at most) and
+    the look again with the first in the folder's place, the other words kept (`its subfolder cups
+    is one: omabox look plugin ./cups --open`). **`look shot`** (or `screenshot`, `screen`,
+    `snapshot`, `now`) as the kind: `omabox look -o FILE (no kind) is a shot of the box as it is
+    now`, its -b and -o kept; **`look --shot`** (`--screenshot`, `--snapshot`, `--png`, `--image`),
+    whose nearest name was page's `--shots`, for any kind: every look takes a shot, `-o FILE says
+    where` (page: `--shots N` too). **`up --fresh`**: look's; `up --new` for another box, `down`
+    then `up` for it afresh. **`up --config`** (`--hypr-config`, `--hyprland-config`): a box's
+    Hyprland runs a Lua config of its own, `omabox lua 'hl.config(...)'` once it is up, read back
+    with `hyprctl getoption`. **`throwaway box failed to start`** said nothing when up did not:
+    the benchmark's `omabox run hyprland &` had its up killed with the shell that left it in the
+    background, empty-handed. Now: up said why → `its up said why, above`; killed by HUP, INT or
+    TERM → that, and that run and its box go with the shell or job that started them, `omabox up,
+    then omabox run -- CMD (run -d for an app ...)`; another signal or a silent status → how it
+    ended and the same commands; the kept logs `(box.log first)`. **`shot --layer X -g G`** is
+    refused (exit 2) once the layer is found, not at parse: both commands, `-g alone is that
+    rectangle of the screen, omabox shot -b NAME -g "G"; layer ... is omabox shot -b NAME -g
+    "X,Y WxH" (or --layer alone)`, and for a layer spanning its monitor the strip it reserves as a
+    third. **`--in` (and `wait --since`, `shot --since`) a shot of another box**: accepting it was
+    no fix (the image maps to its own box's screen, a look's gone with it), so the box is named:
+    another box up whose shots.tsv records it (`it is box 'Y''s, so -b Y goes with it`), else the
+    box shot's default name gives (`omabox-NAME-HHMMSS-mmm.png`), gone (a look's: `gone with its
+    look (look --keep-box keeps a look's box ...); a shot of box 'X' now: omabox shot -b X`). **look
+    plugin --open's `summon: no live bar widget for: ID`** (a warning in the shell's log, which the
+    report lists; summon itself ends 0) is Omarchy's shell finding no bar slot of
+    the plugin whose item has `open()`, `close()` and `opened` (Bar.qml's findPanelWidget): with the
+    widget's slot in the bar (its text read) it says the widget has no panel, as a qs.Ui Panel has;
+    with none, that no widget of it is on the bar, its plugin: line, and the shell's log (`omabox log
+    -b NAME shell` in a box that was up, else `--keep-box` first). **`run -d -- cat $(shot path)`**:
+    a path that is a shot (this box's shots.tsv records it, or shot's default name) gets, in place
+    of the `not in box` note, `is a shot, which omabox wrote on the host ...: it needs no box; read
+    or copy it there: cp FILE DEST`, and the line after the command ended adds the same `cp`.
+    Checks: cargo (`a_subfolder_that_is_the_kind_named`, `a_shot_asked_for_names_look_dash_o`,
+    `summon_no_live_widget_explained`, `unknown_options_meant_elsewhere`, `a_failed_start_said`,
+    `layer_and_g_names_both`, `a_shot_of_another_box_named`, `a_shot_named_in_a_box_is_on_the_host`);
+    `t_unit_exit_codes` (look shot, look --shot, up --fresh, up --config); t_look (plugin and theme
+    from the folder above; `--open` on a bar widget that is no panel); t_shot_layer (--layer with
+    -g, a spanning layer's strip; `pixel`/`click --in` a gone box's and a look's shot by name; `run
+    -d -- cat SHOT`'s note and line); t_unit_broker_side's throwaway that fails (its up said why).
+    Not arranged in a box: up killed by a signal (the pure line
+    only; up refusing with its reason was run by hand), `--in` a shot of another box that is up.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

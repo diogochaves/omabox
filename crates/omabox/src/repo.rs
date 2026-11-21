@@ -945,6 +945,29 @@ pub fn host_path_text(
     ))
 }
 
+/// Whether host path P is one of omabox's shots: box CTX's (its shots.tsv records it) or any box's
+/// by the name shot gives one with no -o.
+pub fn is_shot_path(ctx: &Ctx, p: &[u8]) -> bool {
+    let real = readlink_f(p).unwrap_or_else(|| p.to_vec());
+    crate::shotcmp::shot_name_box(&real).is_some()
+        || !crate::screen::tsv_last(&ctx.at("shots.tsv"), &real).is_empty()
+}
+
+/// What a command naming shot P in box NAME is told (#478): a shot is a file on the host, read or
+/// copied there, no box needed.
+pub fn shot_on_host_text(name: &[u8], p: &[u8]) -> Vec<u8> {
+    let q = shell::quote_q(p);
+    cat!(
+        "note: ",
+        no_cntrl(p),
+        " is a shot, which omabox wrote on the host, not in box '",
+        no_cntrl(name),
+        "': it needs no box; read or copy it there: cp ",
+        q,
+        " DEST"
+    )
+}
+
 /// host_path_notes HOW WORD... (#301): each absolute host path the command names (host_path_words)
 /// that the box has elsewhere or not at all, said before it runs; 3 at most. A path the box HOME's
 /// host path, a /tmp scratch file, a build dir in LD_LIBRARY_PATH: the command fails in the box, or
@@ -978,8 +1001,14 @@ pub fn host_path_notes(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
     let uid = crate::procfs::uid();
     let (mut n, mut more) = (0, 0);
     for p in &paths {
-        let Some(t) = host_path_text(&ctx.name, how, p, &ctx.d, uid, &maps, &in_box, &on_host)
-        else {
+        // (a shot, which is on the host already: #478's `run -d -- cat $(shot path) > x.png`)
+        let shot = is_shot_path(ctx, p) && on_host(p) && !in_box(p);
+        let t = if shot {
+            Some(shot_on_host_text(&ctx.name, p))
+        } else {
+            host_path_text(&ctx.name, how, p, &ctx.d, uid, &maps, &in_box, &on_host)
+        };
+        let Some(t) = t else {
             continue;
         };
         if n >= 3 {
@@ -1096,6 +1125,23 @@ pub fn cwd_note_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #478: a shot named in a box's command is on the host: cp it there.
+    #[test]
+    fn a_shot_named_in_a_box_is_on_the_host() {
+        assert_eq!(
+            String::from_utf8(shot_on_host_text(b"dev", b"/tmp/omabox-dev-101010-001.png"))
+                .unwrap(),
+            "note: /tmp/omabox-dev-101010-001.png is a shot, which omabox wrote on the host, not in box 'dev': it needs no box; read or copy it there: cp /tmp/omabox-dev-101010-001.png DEST"
+        );
+        let mut ctx = Ctx::new(b"run", b"/nonexistent-478".to_vec());
+        ctx.d = b"/nonexistent-478/dev".to_vec();
+        assert!(is_shot_path(
+            &ctx,
+            b"/nonexistent-478/omabox-dev-101010-001.png"
+        ));
+        assert!(!is_shot_path(&ctx, b"/nonexistent-478/gaps.png"));
+    }
 
     proptest::proptest! {
         // S3 (#355): every path at or under HOME's secret stores, ~/.config/omarchy outside plugins/

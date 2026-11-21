@@ -1275,6 +1275,15 @@ t_unit_exit_codes() {
     "$(ob look hello -- python3 hello.py 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
   check_match "...a page" "got rocks\.html: omabox look page rocks\.html \(" "$(ob look rocks.html 2>&1)"
   check_match "...none to guess: the four" "got x: omabox look app -- CMD, omabox look plugin DIR, omabox look theme DIR or omabox look page FILE\|URL \(" "$(ob look x 2>&1)"
+  # #478: the rest of the benchmark's refusals, each ending with the command that does what was meant
+  check_eq "...look shot: the box now, look -o FILE" \
+    "omabox: look: app, plugin, theme or page, got shot: omabox look -o shot.png (no kind) is a shot of the box as it is now; omabox shot -o FILE the image alone (omabox help look)|2" \
+    "$(ob look shot -o shot.png 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
+  check_eq "look --shot: every look takes one, -o names it (not page's --shots)" \
+    "omabox: look: unknown option --shot: every look takes a shot (its report's screenshot: line); -o FILE says where: omabox look -o FILE (omabox help look)|2" \
+    "$(ob look --shot 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
+  check_match "up --fresh: up --new, or down then up" "up: unknown option --fresh \(--fresh is look's: omabox up --new starts another box under a free name; omabox down NAME, then omabox up NAME, starts it afresh\)" "$(ob up --fresh 2>&1)"
+  check_match "up --config FILE: the hl.config line" "up: unknown option --config \(a box's Hyprland runs a Lua config of its own: once it is up, omabox lua 'hl.config\(\{ general = \{ gaps_out = 40 \} \}\)' sets an option" "$(ob up --config /tmp/gaps.conf 2>&1)"
   # #471 part 2: -b NAME before look's kind is the kind's -b (it was `look: unknown option page`).
   : >"$TMP/$P-lookb.html"
   check_match "omabox -b NAME look page FILE: the box asked for" "no box '$P-x' is up" "$(ob -b "$P-x" look page "$TMP/$P-lookb.html" 2>&1)"
@@ -4936,7 +4945,7 @@ EOF
   # (it fails for want of an Omarchy theme in the broker's HOME; a plain box wants none and would
   # start, which a unit test does not do, #247)
   if omarchy_here; then
-    cx_want=(rc=125 out= 'err~^omabox: throwaway box failed to start$'); cx_case "broker: run from a jail with no box: run's 125" run -- true
+    cx_want=(rc=125 out= 'err~^omabox: throwaway box failed to start: its up said why, above$'); cx_case "broker: run from a jail with no box: run's 125" run -- true
   else
     skip "broker: run from a jail with no box: run's 125" "$NO_OMARCHY: its throwaway would start"
   fi
@@ -22164,7 +22173,27 @@ QML
     "$(magick identify -format %wx%h "$o/strip.png" 2>&1) $(magick compare -metric AE "$o/strip.png" "$o/bar2.png" null: 2>&1 | cut -d' ' -f1)"
   out=$(ob shot -b "$B" --layer nope 2>&1); rc=$?
   check_match "--layer naming none: exit 2, the box's layers listed" "^2 omabox: shot: no layer matches nope .*\"t-shotbar\"  pid [0-9]+  top ${lw}x$lh" "$rc $(tr '\n' ' ' <<<"$out")"
-  check_match "--layer with -g: refused" "shot: --layer or -g, not both" "$(ob shot -b "$B" --layer t-shotbar -g "0,0 10x10" 2>&1)"
+  # #478: --layer with -g: refused, exit 2, both as commands (the -g given, the layer's own); for a
+  # layer spanning its monitor, the strip it reserves too
+  out=$(ob shot -b "$B" --layer t-shotbar -g "0,0 10x10" 2>&1); rc=$?
+  check_match "--layer with -g: refused, exit 2, the -g given and the layer's as commands" \
+    "^2 omabox: shot: --layer or -g, not both: -g alone is that rectangle of the screen, omabox shot -b $B -g \"0,0 10x10\"; layer \"t-shotbar\" \(pid [0-9]+, ${lw}x$lh at $lx,$ly\) is omabox shot -b $B -g \"$lx,$ly ${lw}x$lh\" \(or --layer alone\) \(omabox help shot\)$" "$rc $out"
+  out=$(ob shot -b "$B" --layer omarchy-bar -g "0,0 10x10" 2>&1)
+  check_match "...a layer spanning its monitor: the strip it reserves as a command too" \
+    "is omabox shot -b $B -g \"0,0 ${W}x$H\" \(or --layer alone\); its bar, the strip [A-Z0-9-]+ reserves for it, is omabox shot -b $B -g \"0,0 ${W}x$lh\"" "$out"
+  # #478: a shot of another box (a look's, gone with it; by shot's default name) given to --in
+  cp "$o/bar.png" "$o/omabox-look-99999999-101010-001.png"; cp "$o/bar.png" "$o/omabox-$P-shl-gone-101010-001.png"
+  out=$(ob pixel -b "$B" --in "$o/omabox-look-99999999-101010-001.png" 1 1 2>&1); rc=$?
+  check_match "pixel --in a look's shot, its box gone: refused, the box named, and the shot to take" \
+    "^1 omabox: --in: $o/omabox-look-99999999-101010-001\.png is not a shot of box '$B': it is box 'look-99999999''s, gone with its look \(look --keep-box keeps a look's box, then -b BOX\); a shot of box '$B' now: omabox shot -b $B$" "$rc $out"
+  check_match "...another box's, gone" "it is box '$P-shl-gone''s, gone; a shot of box '$B' now: omabox shot -b $B$" \
+    "$(ob click -b "$B" --in "$o/omabox-$P-shl-gone-101010-001.png" 1 1 2>&1)"
+  # #478: a shot named in a box's command: the note before it runs, and after it ends, says cp
+  err=$(ob run -b "$B" -d -- cat "$o/bar.png" 2>&1 >/dev/null)
+  check_match "run -d -- cat SHOT: noted as on the host, cp named" \
+    "note: $o/bar\.png is a shot, which omabox wrote on the host, not in box '$B': it needs no box; read or copy it there: cp $o/bar\.png DEST" "$err"
+  check_match "...after it ended: the same, on the line of host paths" \
+    "its arguments name host paths box '$B' does not have: $o/bar\.png .*; $o/bar\.png is a shot, on the host: cp $o/bar\.png DEST there, no box needed" "$err"
   # two monitors, a bar on each: --monitor picks, as in wait layer
   m2=$(ob monitor -b "$B" add "800x600,$W,0" 2>/dev/null)
   if ! ob wait -b "$B" --timeout 10s layer t-shotbar --monitor "$m2" >/dev/null 2>&1; then
@@ -24109,7 +24138,32 @@ look_plugin_checks() {
   check_eq "a plugin with a QML error: 1" 1 "$rc"
   check_match "...the error named, with its file and line" $'\n''problems:'$'\n''  .*chaves\.omabox/Panel\.qml\[[0-9]+:.*undefinedThing is not defined' "$out"
   check_match "a folder with no manifest: refused" "has no manifest.json with an id: not a plugin's folder" "$(ob look plugin "$TMP" 2>&1)"
+  # #478: a folder whose subfolder is the plugin: that subfolder named, as the look to run
+  rm -rf "$TMP/$P-lookp-par"; mkdir -p "$TMP/$P-lookp-par"; cp -r "$ROOT/plugin" "$TMP/$P-lookp-par/widget"
+  out=$(cd "$TMP/$P-lookp-par" && ob look plugin . --open 2>&1); rc=$?
+  check_eq "...the folder above a plugin: refused, its subfolder's look named, no box started" \
+    "2 omabox: look plugin: . has no manifest.json with an id: not a plugin's folder; its subfolder widget is one: omabox look plugin ./widget --open (omabox help look)" "$rc $out"
   check_match "...no folder: refused" "look plugin: its folder" "$(ob look plugin 2>&1)"
+  # #478: --open on a widget that is no panel (no open(), close(), opened): what summon's line means
+  if omarchy45; then
+    local npd=$TMP/$P-lookp-nopanel
+    t467_plugin "$npd"
+    cat > "$npd/Widget.qml" <<'QML'
+import QtQuick
+import qs.Ui
+Item {
+  id: root
+  property var bar
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+  WidgetButton { id: button; bar: root.bar; text: "plain 7" }
+}
+QML
+    out=$(ob look plugin "$npd" --stock-bar --open 2>&1); rc=$?
+    check_eq "look plugin --open on a widget with no panel: 1 ($out)" 1 "$rc"
+    check_match "...its text read" $'\n''text: plain 7'$'\n' "$out"
+    check_match "...summon's line, said what it means" $'\n''  summon: no live bar widget for: t467\.tally \(the widget is on the bar but is no panel: it lacks open\(\), close\(\) and opened, which qs\.Ui.s Panel has; --open shows nothing\)$' "$out"
+  else skip "look plugin --open on a widget with no panel" "the fixture's widget is Omarchy 4.5's"; fi
   left=$(ob ls --json | jq -r '.[].name' | grep -c '^look-' || true)
   check_eq "no look box left" 0 "$left"
 }
@@ -24253,6 +24307,10 @@ look_theme_checks() {
   out=$(ob look theme "$d/bad" 2>&1); rc=$?
   check_eq "a theme missing a key: 1" 1 "$rc"
   check_match "...named" $'\n''  colors.toml: no accent' "$out"
+  # #478: the folder above a theme: its subfolder named, as the look to run, no box started
+  out=$(cd "$d" && ob look theme . 2>&1); rc=$?
+  check_eq "the folder above themes: refused, the first subfolder's look named" \
+    "2 omabox: look theme: . has no colors.toml: not a theme's folder; its subfolders bad, catp are: omabox look theme ./bad (omabox help look)" "$rc $out"
   # An installed theme by its NAME (#462): up checks it, look reports what up noted
   out=$(cd "$TMP" && ob look theme catppuccin-latte 2>&1); rc=$?
   check_eq "look theme NAME, a stock light theme: 0 ($out)" 0 "$rc"

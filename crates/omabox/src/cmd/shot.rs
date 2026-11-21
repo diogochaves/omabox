@@ -64,6 +64,48 @@ pub fn hms_ms() -> Vec<u8> {
     .into_bytes()
 }
 
+/// shot's refusal of --layer with -g (#478: a model gave both, the layer's name and the strip its
+/// first shot named): the -g alone, as given (G), and the -g the layer's own rectangle R is (for one
+/// spanning its monitor, STRIP: that monitor and the strip it reserves for the bar), as commands in
+/// box NAME. DESC: the layer, as layer_desc says it.
+fn layer_and_g_text(
+    name: &[u8],
+    desc: &[u8],
+    r: &[Vec<u8>; 4],
+    g: &[u8],
+    strip: Option<(&[u8], &[u8])>,
+) -> Vec<u8> {
+    let cmd = cat!("omabox shot -b ", shell::quote_q(name), " -g \"");
+    let mut m = cat!(
+        "shot: --layer or -g, not both: -g alone is that rectangle of the screen, ",
+        cmd,
+        g,
+        "\"; layer ",
+        desc,
+        " is ",
+        cmd,
+        &r[0],
+        ",",
+        &r[1],
+        " ",
+        &r[2],
+        "x",
+        &r[3],
+        "\" (or --layer alone)"
+    );
+    if let Some((mon, st)) = strip {
+        m.extend(cat!(
+            "; its bar, the strip ",
+            mon,
+            " reserves for it, is ",
+            cmd,
+            st,
+            "\""
+        ));
+    }
+    m
+}
+
 /// V as a number (decimal, whatever its zeros); one that is none ends the command, said, 1 (finding
 /// 448: bash's arithmetic read a 0 in front as octal and ended it at an 08 in its own words).
 fn bi(v: &[u8]) -> Res<i64> {
@@ -657,15 +699,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // --layer (#473): its rectangle of the screen; --monitor picks among one namespace's layers, as
     // in `wait layer`, instead of cropping to that monitor.
     let mut lmon = Vec::new();
+    let mut both_g = Vec::new();
     if !s.lsel.is_empty() {
         if !sels.is_empty() {
             return Err(ctx.die("shot: --window or --layer, not both"));
         }
-        if !geom.is_empty() {
-            return Err(ctx.die(
-                "shot: --layer or -g, not both (the layer's place is on its shot's stderr line; -g takes the screen's coordinates)",
-            ));
-        }
+        // (refused once the layer is found, #478: with the -g its rectangle would be)
+        both_g = geom.clone();
         lmon = std::mem::take(&mut s.monitor);
     }
     if !geom.is_empty() {
@@ -889,11 +929,23 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .arg(format!("{JQ_MON}{}", crate::jqprog::SHOT_LAYER_SPAN_JQ))
             .run(Some(&mons), jq::Err::Null)
             .text();
-        if let Some(rest) = sp.strip_prefix(b"spans ".as_slice()) {
-            let (mon, strip) = match rest.iter().position(|&c| c == b' ') {
+        let spans = sp.strip_prefix(b"spans ".as_slice()).map(|rest| {
+            match rest.iter().position(|&c| c == b' ') {
                 Some(i) => (rest[..i].to_vec(), rest[i + 1..].to_vec()),
                 None => (rest.to_vec(), Vec::new()),
-            };
+            }
+        });
+        if !both_g.is_empty() {
+            let strip = spans.as_ref().filter(|(_, st)| !st.is_empty());
+            return Err(ctx.usage_die(layer_and_g_text(
+                &ctx.name,
+                &crate::layer::layer_desc(&l),
+                &r,
+                &both_g,
+                strip.map(|(m, st)| (m.as_slice(), st.as_slice())),
+            )));
+        }
+        if let Some((mon, strip)) = spans {
             let part = if strip.is_empty() {
                 b"a part of it: shot -g \"X,Y WxH\" (the screen's coordinates)".to_vec()
             } else {
@@ -929,12 +981,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         };
         let rec = tsv_last(&ctx.at("shots.tsv"), &sf);
         if rec.is_empty() {
-            return Err(ctx.die(cat!(
-                "shot --since: ",
-                since,
-                " is not a shot of box '",
-                ctx.name,
-                "' (take one with omabox shot)"
+            let owner = crate::shotcmp::shot_owner(ctx, &sf);
+            return Err(ctx.die(crate::shotcmp::not_shot_text(
+                "shot --since",
+                &since,
+                &ctx.name,
+                owner.as_ref(),
             )));
         }
         let r = shell::read_ifs(&rec, 6, b"\t");
@@ -2835,6 +2887,32 @@ fn burst_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #478: --layer with -g names both as commands: the -g given, the layer's rectangle as -g.
+    #[test]
+    fn layer_and_g_names_both() {
+        let r = [
+            b"0".to_vec(),
+            b"0".to_vec(),
+            b"1920".to_vec(),
+            b"1080".to_vec(),
+        ];
+        let d = br#""omarchy-bar" (pid 7, 1920x1080 at 0,0)"#;
+        let m = String::from_utf8(layer_and_g_text(
+            b"b1",
+            d,
+            &r,
+            b"0,0 1920x26",
+            Some((b"HEADLESS-2", b"0,0 1920x26")),
+        ))
+        .unwrap();
+        assert_eq!(
+            m,
+            r#"shot: --layer or -g, not both: -g alone is that rectangle of the screen, omabox shot -b b1 -g "0,0 1920x26"; layer "omarchy-bar" (pid 7, 1920x1080 at 0,0) is omabox shot -b b1 -g "0,0 1920x1080" (or --layer alone); its bar, the strip HEADLESS-2 reserves for it, is omabox shot -b b1 -g "0,0 1920x26""#
+        );
+        let m = String::from_utf8(layer_and_g_text(b"b1", d, &r, b"1,1 2x2", None)).unwrap();
+        assert!(m.ends_with("(or --layer alone)"), "{m}");
+    }
 
     // #346: a name of another image format gets the note; .png, no extension or a dot folder none.
     #[test]

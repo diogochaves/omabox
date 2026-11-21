@@ -79,14 +79,8 @@ pub fn load(ctx: &Ctx, file: &[u8], label: &str) -> Res<ShotRef> {
     };
     let rec = tsv_last(&ctx.at("shots.tsv"), &key);
     if rec.is_empty() {
-        return Err(ctx.die(cat!(
-            label,
-            ": ",
-            file,
-            " is not a shot of box '",
-            ctx.name,
-            "' (take one with omabox shot)"
-        )));
+        let owner = shot_owner(ctx, &key);
+        return Err(ctx.die(not_shot_text(label, file, &ctx.name, owner.as_ref())));
     }
     // (a grid shot's record has a sixth field, "grid N M": kept apart, never part of the sizes)
     let r = shell::read_ifs(&rec, 6, b"\t");
@@ -121,6 +115,70 @@ pub fn load(ctx: &Ctx, file: &[u8], label: &str) -> Res<ShotRef> {
         geo: r[4].clone(),
         grid: r[5].clone(),
     })
+}
+
+/// The box a shot's default name says it is of: `omabox-NAME-HHMMSS-mmm.png`, as shot names one
+/// with no -o (in $TMPDIR, or /tmp). None for any other name.
+pub fn shot_name_box(path: &[u8]) -> Option<Vec<u8>> {
+    let b = path.rsplit(|&c| c == b'/').next().unwrap_or(path);
+    let re = shell::Re::new(r"^omabox-([A-Za-z0-9][A-Za-z0-9_.-]*)-[0-9]{6}-[0-9]{3}\.png$")?;
+    re.group(b, 1)
+}
+
+/// Whose shot KEY is, when it is not the selected box's (#478: a look's shot, its box gone with it,
+/// given to `pixel --in` in the box up after): another box's that records it (up), else the box
+/// its default name names (up or gone).
+pub fn shot_owner(ctx: &Ctx, key: &[u8]) -> Option<(Vec<u8>, bool)> {
+    for n in crate::boxes::list_names(ctx, false) {
+        if n != ctx.name && !tsv_last(&ctx.in_boxes(cat!(n, "/shots.tsv")), key).is_empty() {
+            return Some((n, true));
+        }
+    }
+    let n = shot_name_box(key).filter(|n| *n != ctx.name)?;
+    let up = ctx.in_boxes(&n).is_dir();
+    Some((n, up))
+}
+
+/// What LABEL (`--in`, `wait --since`) says of FILE, no shot of box NAME: OWNER the box it is a
+/// shot of (shot_owner), with -b for one that is up and, for one gone, that a look's box goes with
+/// its look and the shot of this box to take instead.
+pub fn not_shot_text(
+    label: &str,
+    file: &[u8],
+    name: &[u8],
+    owner: Option<&(Vec<u8>, bool)>,
+) -> Vec<u8> {
+    let head = cat!(label, ": ", file, " is not a shot of box '", name, "'");
+    let q = shell::quote_q(name);
+    match owner {
+        Some((o, true)) => cat!(
+            head,
+            ": it is box '",
+            o,
+            "''s, so -b ",
+            shell::quote_q(o),
+            " goes with it"
+        ),
+        Some((o, false)) => {
+            let look = if crate::boxes::is_look_name(o) {
+                " with its look (look --keep-box keeps a look's box, then -b BOX)"
+            } else {
+                ""
+            };
+            cat!(
+                head,
+                ": it is box '",
+                o,
+                "''s, gone",
+                look,
+                "; a shot of box '",
+                name,
+                "' now: omabox shot -b ",
+                q
+            )
+        }
+        None => cat!(head, " (take one with omabox shot -b ", q, ")"),
+    }
 }
 
 /// layout_save PATH FILE POINTER SNAPSHOT: a screen shot's desktop (desk_snap, read just before the
@@ -500,6 +558,41 @@ pub fn outside(r: [i64; 4], w: i64, h: i64) -> Vec<[i64; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #478: a shot of another box (a look's, gone with it) names that box.
+    #[test]
+    fn a_shot_of_another_box_named() {
+        assert_eq!(
+            shot_name_box(b"/tmp/omabox-look-4242-153012-007.png"),
+            Some(b"look-4242".to_vec())
+        );
+        assert_eq!(
+            shot_name_box(b"omabox-my-box.2-000000-999.png"),
+            Some(b"my-box.2".to_vec())
+        );
+        assert_eq!(shot_name_box(b"/tmp/shot.png"), None);
+        assert_eq!(shot_name_box(b"/tmp/omabox-x-1530-007.png"), None);
+        let t = |o: Option<(&str, bool)>| {
+            let o = o.map(|(n, up)| (n.as_bytes().to_vec(), up));
+            String::from_utf8(not_shot_text("--in", b"/tmp/s.png", b"dev", o.as_ref())).unwrap()
+        };
+        assert_eq!(
+            t(None),
+            "--in: /tmp/s.png is not a shot of box 'dev' (take one with omabox shot -b dev)"
+        );
+        assert_eq!(
+            t(Some(("other", true))),
+            "--in: /tmp/s.png is not a shot of box 'dev': it is box 'other''s, so -b other goes with it"
+        );
+        assert_eq!(
+            t(Some(("look-42", false))),
+            "--in: /tmp/s.png is not a shot of box 'dev': it is box 'look-42''s, gone with its look (look --keep-box keeps a look's box, then -b BOX); a shot of box 'dev' now: omabox shot -b dev"
+        );
+        assert_eq!(
+            t(Some(("old", false))),
+            "--in: /tmp/s.png is not a shot of box 'dev': it is box 'old''s, gone; a shot of box 'dev' now: omabox shot -b dev"
+        );
+    }
 
     /// A snapshot as desk_snap has it: one monitor 1920x1080, windows (address, at, size) on
     /// workspace 1, the last on top and focused, LAYERS the top level's.

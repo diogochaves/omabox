@@ -18,6 +18,7 @@ use crate::select::{env_names_box, select_box, session_boxes};
 use crate::settle::{Settle, cursor_now, cursor_rect, settle_sent};
 use crate::shell::{self, Re};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::process::ExitStatusExt;
 use std::time::Duration;
 
 /// up's options, for a throwaway box: those that take a value, and the flags.
@@ -611,9 +612,17 @@ fn throwaway_run(
     c.stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::null());
     let o = c.output();
-    let (ok, err) = match o {
-        Ok(o) => (o.status.success(), shell::subst(&o.stderr)),
-        Err(_) => (false, Vec::new()),
+    let (ok, err, how) = match o {
+        Ok(o) => (
+            o.status.success(),
+            shell::subst(&o.stderr),
+            match (o.status.code(), o.status.signal()) {
+                (Some(n), _) => UpEnd::Status(n),
+                (None, Some(s)) => UpEnd::Signal(s),
+                _ => UpEnd::NotStarted,
+            },
+        ),
+        Err(_) => (false, Vec::new(), UpEnd::NotStarted),
     };
     if !ok {
         // Its logs, out of the dir the teardown removes: the message names the copies.
@@ -634,10 +643,8 @@ fn throwaway_run(
             }
         }
         let _ = std::io::Write::write_all(&mut std::io::stderr(), &text);
-        let k = kept
-            .map(|k| cat!("; its logs are kept in ", k))
-            .unwrap_or_default();
-        return Err(ctx.die(cat!("throwaway box failed to start", k)));
+        let said = text.iter().any(|c| !c.is_ascii_whitespace());
+        return Err(ctx.die(failed_start_text(said, &how, kept.as_deref(), cmd)));
     }
     // Its warnings and notes still reach the caller (finding 116).
     let mut notes = Vec::new();
@@ -669,6 +676,68 @@ fn throwaway_run(
     let rc = box_exec(ctx, cmd, opts);
     note.stop();
     code(run_gone(ctx, rc?)?)
+}
+
+/// How a throwaway box's `up` ended.
+enum UpEnd {
+    Status(i32),
+    Signal(i32),
+    NotStarted,
+}
+
+/// run's line when its throwaway box's up failed (#478: `omabox run hyprland &` got only `throwaway
+/// box failed to start`: its up was killed with the shell that left it in the background, and said
+/// nothing). SAID: up said why (its lines are above); else how it ended, and what to run instead.
+/// KEPT: where its logs were kept. CMD: the command run was to run.
+fn failed_start_text(said: bool, how: &UpEnd, kept: Option<&[u8]>, cmd: &[Vec<u8>]) -> Vec<u8> {
+    let k = kept
+        .map(|k| cat!("; its logs are kept in ", k, " (box.log first)"))
+        .unwrap_or_default();
+    if said {
+        return cat!("throwaway box failed to start: its up said why, above", k);
+    }
+    let words: Vec<u8> = cmd
+        .iter()
+        .map(|a| crate::jobs::word(a))
+        .collect::<Vec<_>>()
+        .join(&b' ');
+    let shown = crate::cmd::log::cut_line(&words, 60);
+    let then = cat!(
+        "omabox up, then omabox run -- ",
+        shown,
+        " (run -d for an app, to leave it running)"
+    );
+    let why = match how {
+        UpEnd::Signal(s @ (1 | 2 | 15)) => {
+            let n = match s {
+                1 => "HUP",
+                2 => "INT",
+                _ => "TERM",
+            };
+            cat!(
+                "its up was killed by signal ",
+                s.to_string(),
+                " (",
+                n,
+                ") before it said why: run and its box go with the shell or job that started them (a run left with & ends with its shell); a box that stays: ",
+                then
+            )
+        }
+        UpEnd::Signal(s) => cat!(
+            "its up was killed by signal ",
+            s.to_string(),
+            " before it said why; its start, by hand: ",
+            then
+        ),
+        UpEnd::Status(n) => cat!(
+            "its up ended with status ",
+            n.to_string(),
+            " and said nothing; its start, by hand: ",
+            then
+        ),
+        UpEnd::NotStarted => b"its up could not be started (omabox doctor)".to_vec(),
+    };
+    cat!("throwaway box failed to start: ", why, k)
 }
 
 /// How long `omabox run` (no -d) waits on its command before it says so: 10 s, or under the suite
@@ -852,6 +921,34 @@ fn keep_run_logs(ctx: &Ctx) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #478: a throwaway box whose up failed says why, or how up ended and what to run.
+    #[test]
+    fn a_failed_start_said() {
+        let cmd = vec![b"hyprland".to_vec()];
+        let t = |said, how: UpEnd, kept: Option<&[u8]>| {
+            String::from_utf8(failed_start_text(said, &how, kept, &cmd)).unwrap()
+        };
+        assert_eq!(
+            t(true, UpEnd::Status(1), Some(b"/s/fr/x")),
+            "throwaway box failed to start: its up said why, above; its logs are kept in /s/fr/x (box.log first)"
+        );
+        assert_eq!(
+            t(false, UpEnd::Signal(1), None),
+            "throwaway box failed to start: its up was killed by signal 1 (HUP) before it said why: run and its box go with the shell or job that started them (a run left with & ends with its shell); a box that stays: omabox up, then omabox run -- hyprland (run -d for an app, to leave it running)"
+        );
+        assert!(
+            t(false, UpEnd::Signal(9), None).starts_with(
+                "throwaway box failed to start: its up was killed by signal 9 before it said why; its start, by hand: omabox up, then"
+            )
+        );
+        assert!(
+            t(false, UpEnd::Status(3), Some(b"/k")).starts_with(
+                "throwaway box failed to start: its up ended with status 3 and said nothing; its start, by hand: omabox up, then omabox run -- hyprland"
+            )
+        );
+        assert!(t(false, UpEnd::NotStarted, None).contains("could not be started"));
+    }
 
     #[test]
     fn reserved() {
