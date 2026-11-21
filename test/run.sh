@@ -12102,8 +12102,8 @@ t_failed_up() {
   local repo st=$TMP/state-fr kept; repo=$(tmp_repo fr)
   out=$(cd "$repo" && exec env -u OMABOX XDG_STATE_HOME="$st" OMABOX_READY_TIMEOUT=2 "$CLI" run "${never[@]}" -- true 2>&1) &&
     no "a throwaway whose up fails fails" "$out"
-  check_match "a failed throwaway says where its logs are kept" "logs are kept in $st/omabox/failed-runs/$P-fr-run[0-9]+-[0-9]{8}-[0-9]{6}$" "$out"
-  kept=${out##*logs are kept in }
+  check_match "a failed throwaway says where its logs are kept" "logs are kept in $st/omabox/failed-runs/$P-fr-run[0-9]+-[0-9]{8}-[0-9]{6} \(box\.log first\)$" "$out"
+  kept=${out##*logs are kept in } kept=${kept% (box.log first)}
   check "...a dir with its Hyprland log or box.log" bash -c '[ -f "$1/hyprland.log" ] || [ -f "$1/box.log" ]' _ "$kept"
   check_eq "...and no box of it is left" "" "$(ob ls --json | jq -r --arg p "$P-fr-run" '.[] | select(.name | startswith($p)) | .name')"
   # (Past 10 kept dirs the oldest go, and only dirs a box name can have: run.rs
