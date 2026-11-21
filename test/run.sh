@@ -15206,7 +15206,8 @@ t_hung() {
   check_match "...said in words" "^omabox: box '$B': its Hyprland did not answer( in 10 s)? \(hung\? omabox log -b $B; omabox down $B\)$" "$out"
   check "...within 12 s ($took ms)" test "$took" -lt 12000
   # The tool `wait` runs, in the box: its first round trip has a deadline (on 0.4.8 it never returned).
-  t0=$(now_ms); out=$(timeout 40 "$CLI" run -b "$B" -- /opt/omabox/bin/omabox-still still --timeout 3000 2>&1); rc=$?
+  # (run's 10 s "still runs" note, #471, is not what this checks: put off past the call.)
+  t0=$(now_ms); out=$(OMABOX_TEST_RUN_NOTE_MS=60000 timeout 40 "$CLI" run -b "$B" -- /opt/omabox/bin/omabox-still still --timeout 3000 2>&1); rc=$?
   took=$(($(now_ms) - t0))
   check_eq "omabox-still on a stopped Hyprland: unknown, exit 1 (not timeout's 124)" 1 "$rc"
   check_match "...hung" "^unknown hung " "$out"
