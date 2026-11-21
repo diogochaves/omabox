@@ -46,7 +46,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`look app` from a folder in no repo gave a 127 hint that failed again**: its throwaway box
   runs the program in its HOME, without the folder. The report says so and names the look that
   mounts it (`omabox look app --overlay DIR -- python3 hello.py`); a script that ends at once gets
-  its 126/127 note too.
+  its 126/127 note too, and one that ends with status 0 at once is said so, not as `no window
+  within 10s` after the whole timeout.
 - **`diff` on Omarchy 4.0 listed Hyprland's `lastNag`** in an idle box (`+ ~/.local/share/hyprland/`):
   it is noise, as `lastVersion` beside it already was.
 

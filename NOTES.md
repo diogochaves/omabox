@@ -14981,7 +14981,9 @@ from them.
     said why, was in the stderr the look drops. The look now reads that note from run's stderr and
     says it as its own, with `--overlay DIR` on the look (a box that was up: down, then up with it),
     and puts its 126/127 hint on that look: `omabox look app --overlay DIR -- python3 hello.py`, which
-    runs it. Box
+    runs it. And a program that ended before the look read its pid (a script, at once, status 0) was
+    reported as `no window within 10s` after the whole timeout: `jobs` no longer lists it, so the look
+    never saw it end; it now asks `wait job` for the box's latest job's end. Box
     cases now: t_look (126, 127, a terminal this machine lacks, the next command after a look naming
     its box by derived name and by its own, another folder's plain line; look page's `select it with
     --window 0xADDR` picks the page's window in a `--keep-box` box, `--window chromium` does not),

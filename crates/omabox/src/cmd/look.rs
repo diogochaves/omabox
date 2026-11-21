@@ -811,19 +811,15 @@ fn job_pid(name: &[u8], log: &[u8]) -> Option<i64> {
         .and_then(|j| j.get("pid").and_then(Value::as_i64))
 }
 
-/// How the job PID ended ("exited with status 3"), once it has.
-fn job_end(name: &[u8], pid: i64) -> Option<Vec<u8>> {
-    let p = pid.to_string();
-    let r = ob(&[
-        b"wait",
-        b"-b",
-        name,
-        b"--json",
-        b"--timeout",
-        b"1s",
-        b"job",
-        p.as_bytes(),
-    ]);
+/// How the job PID ended ("exited with status 3"), once it has; None: the box's latest job, the
+/// look's own when it ended before its pid was read.
+fn job_end(name: &[u8], pid: Option<i64>) -> Option<Vec<u8>> {
+    let p = pid.map(|p| p.to_string());
+    let mut w: Vec<&[u8]> = vec![b"wait", b"-b", name, b"--json", b"--timeout", b"1s", b"job"];
+    if let Some(p) = &p {
+        w.push(p.as_bytes());
+    }
+    let r = ob(&w);
     let v: Value = serde_json::from_slice(&r.out).ok()?;
     (v.get("result").and_then(Value::as_str) == Some("satisfied")).then(|| {
         v.get("detail")
@@ -998,14 +994,20 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     // Its window, or its end, or the timeout.
     let start = Instant::now();
     let mut win = None;
-    let mut ended = None;
-    while start.elapsed() < a.timeout {
+    // (one that ended before its pid was read, as a script does at once, has ended: its end now,
+    // not a wait for a window to the timeout)
+    let mut ended = if pid.is_none() {
+        job_end(name, None)
+    } else {
+        None
+    };
+    while ended.is_none() && start.elapsed() < a.timeout {
         win = window_of(&ob(&[b"windows", b"-b", name, b"--json"]).out, pid, &before);
         if win.is_some() {
             break;
         }
         if pid.is_some() && job_pid(name, &log).is_none() {
-            ended = pid.and_then(|p| job_end(name, p));
+            ended = job_end(name, pid);
             break;
         }
         std::thread::sleep(Duration::from_millis(150));
@@ -1149,7 +1151,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             window_line = report_window_line(a.page, &s("class"), &s("title"), &size, layout, addr);
             // Ended meanwhile (a crash after its first frame).
             if pid.is_some() && job_pid(name, &log).is_none() {
-                if let Some(e) = pid.and_then(|p| job_end(name, p)) {
+                if let Some(e) = pid.and_then(|p| job_end(name, Some(p))) {
                     problems.push(cat!("it ", e, " after opening its window"));
                 }
             }

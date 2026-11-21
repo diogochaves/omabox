@@ -24066,7 +24066,10 @@ look_exit_checks() {
     "note: hello.py is relative to $proj-nogit, which box 'look-[0-9]+' does not have: the command runs in the box HOME \(/home/sbx\); --overlay $proj-nogit on the look mounts it" "$out"
   check_match "...and the 127 hint on that look" \
     "note: hello.py is not a command on the box's PATH: a file in this folder is \./hello\.py; omabox look app --overlay $proj-nogit -- python3 hello\.py" "$out"
-  check_eq "...which runs it" "  hi" "$(cd "$proj-nogit" && env -u OMABOX "$CLI" look app --overlay "$proj-nogit" -- python3 hello.py 2>&1 | grep -x '  hi')"
+  out=$(cd "$proj-nogit" && env -u OMABOX "$CLI" look app --overlay "$proj-nogit" -- python3 hello.py 2>&1)
+  check_eq "...which runs it" "  hi" "$(grep -x '  hi' <<<"$out")"
+  # (it ended before the look read its pid: its end, not a wait for a window to the timeout)
+  check_match "...its end said, not a window's timeout" "it exited with status 0 before opening a window" "$out"
 }
 
 # #461 (finding 719): look plugin, a plugin in one call: up --plugin in a throwaway box, its state, the
