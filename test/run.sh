@@ -16843,7 +16843,7 @@ t_cli_box() {
   cx_case "drag --shot" drag -b "$B" --shot "$o3/d.png" --shot-fit 300 --window rp-k 10 10 60 60
   cx_want=(rc=0 "out=$o3/s.png" err= 'state~^s\.png [0-9]+ [0-9]+$' 'state~	screen 0,0	')
   cx_case "shot -o" shot -b "$B" -o "$o3/s.png"
-  cx_want=(rc=0 "out={\"path\":\"$o3/g.png\",\"kind\":\"region\",\"region\":{\"x\":100,\"y\":100,\"w\":200,\"h\":100},\"image\":{\"w\":200,\"h\":100},\"scale\":1,\"window\":null,\"monitor\":null,\"fit\":null,\"zoom\":null,\"grid\":null,\"changed\":null}" "err=omabox: 200x100 image of the screen's G; click with --in $o3/g.png" 'state~^g\.png 200 100$')
+  cx_want=(rc=0 "out={\"path\":\"$o3/g.png\",\"kind\":\"region\",\"region\":{\"x\":100,\"y\":100,\"w\":200,\"h\":100},\"image\":{\"w\":200,\"h\":100},\"scale\":1,\"window\":null,\"layer\":null,\"monitor\":null,\"fit\":null,\"zoom\":null,\"grid\":null,\"changed\":null}" "err=omabox: 200x100 image of the screen's G; click with --in $o3/g.png" 'state~^g\.png 200 100$')
   cx_case "shot --json -g" shot -b "$B" --json -g '100,100 200x100' -o "$o3/g.png"
   cx_want=(rc=0 "out~^\\{\"path\":\"$o3/w\\.png\",\"kind\":\"window\",.*\"window\":\\{\"address\":\"0xA\",\"class\":\"rp-k\",\"title\":\"rpk\"," 'state~^w\.png [0-9]+ [0-9]+$')
   cx_case "shot --window --json" shot -b "$B" --window rp-k --json -o "$o3/w.png"
