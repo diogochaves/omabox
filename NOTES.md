@@ -14964,6 +14964,10 @@ from them.
     of a later step. Left: OpenCode's exit 1 after a permission it could not ask for
     (theme.gpt-oss.opencode.2), the sixth bench error. `t_unit_bench_checks` feeds recorded lines
     to each check.
+    The sixth (#479): OpenCode's `websearch` asks for input a run cannot give ("Cancelled a request for
+    input this run cannot answer: Web Search"), despite `permission: {"*": "allow"}`, and the run ends
+    with exit 1. The seeded config denies `websearch` and `webfetch`; its rules come last in every
+    agent's (`opencode debug agents`, OpenCode 2.3.2), so the denials win over Explore's built-in allows.
 
 743. **740's and 738's lines in a box: `look app`'s 126/127 note was never shown, and `wait --since`
     refused a bar's shot; a look from a folder in no repo** (2026-11-21, #477). 740's look app note was checked by a cargo test of

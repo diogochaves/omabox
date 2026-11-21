@@ -2026,6 +2026,10 @@ EOF
   check_eq "...another one answering: it was restarted" "the model server was restarted during the run (pid 4242, now 4343)" "$(lost 4242 4343)"
   unset -f hits used cleanup_run lost
   rm -rf "$d"
+  # #479: the OpenCode config a run gets denies web search and fetch (websearch's prompt for input
+  # ended a run); a denial in the config wins, as its rules come last in every agent's.
+  check_eq "bench: OpenCode's seeded config denies websearch and webfetch (#479)" 1 \
+    "$(grep -c '"\*": "allow", websearch: "deny", webfetch: "deny"' "$ROOT/test/bench/run.sh")"
 }
 
 # #366, S8: every dispatch to the user's Hyprland goes through host.rs's typed handles (HostSilent:

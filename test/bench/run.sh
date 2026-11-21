@@ -167,8 +167,11 @@ seed_home() {
       skills_dir=$h/.pi/agent/skills ;;
     opencode)
       mkdir -p "$h/.config/opencode"
+      # (no web search or fetch: the box reaches only the model's port, and OpenCode's websearch asks
+      # for input a run cannot give, which ends the run: #479. The config's rules come last in every
+      # agent's, so these denials win over its built-in allows, as `opencode debug agents` shows.)
       jq '{"$schema": "https://opencode.ai/config.json", autoupdate: false, share: "disabled",
-          permission: {"*": "allow"}, provider: {local: .provider.local}}' \
+          permission: {"*": "allow", websearch: "deny", webfetch: "deny"}, provider: {local: .provider.local}}' \
         "$HOME/.config/opencode/opencode.json" > "$h/.config/opencode/opencode.json"
       skills_dir=$h/.config/opencode/skills ;;
     oracle) skills_dir=$h/.agents/skills ;;
