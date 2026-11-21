@@ -37,6 +37,10 @@ const PROBLEMS_MAX: usize = 20;
 const PROBLEM_RE: &str = r"(^|[^a-z])(error|errors|critical|fatal|traceback|panicked|exception|segmentation fault|core dumped|aborted)([^a-z]|$)|\.qml:[0-9]+";
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    // `look -b NAME page FILE`, and `omabox -b NAME look page FILE`, which front.rs makes that
+    // (#471): the kind after -b NAME is the kind, -b NAME its option.
+    let moved = kind_first(args);
+    let args = moved.as_deref().unwrap_or(args);
     match args.first().map(Vec::as_slice) {
         Some(b"app") => app(ctx, &args[1..]),
         Some(b"plugin") => plugin(ctx, &args[1..]),
@@ -51,6 +55,58 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ": ",
             kind_hint(args)
         ))),
+    }
+}
+
+/// After a look app's program ended before its window, as E (`exited with status 126`), its log
+/// TAIL: jobs::exit_hint's line for 126 and 127, as the look that runs it.
+fn look_exit_hint(e: &[u8], cmd: &[Vec<u8>], tail: &[u8]) -> Vec<Vec<u8>> {
+    // (wait job's detail: `exited with status N`, maybe more after it)
+    let st: &[u8] = if crate::exit::contains(e, b"exited with status 126") {
+        b"126"
+    } else if crate::exit::contains(e, b"exited with status 127") {
+        b"127"
+    } else {
+        return Vec::new();
+    };
+    let file = |f: &str| std::path::Path::new(f).is_file();
+    let has = |t: &str| {
+        ["/usr/bin/", "/usr/local/bin/"]
+            .iter()
+            .any(|d| std::path::Path::new(&format!("{d}{t}")).is_file())
+    };
+    crate::jobs::exit_hint(b"", b"omabox look app --", st, cmd, tail, &has, &file)
+}
+
+/// ARGS that start `-b NAME KIND`, as `KIND -b NAME ...`; None for any others.
+fn kind_first(args: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
+    match args {
+        [b, n, k, rest @ ..]
+            if matches!(b.as_slice(), b"-b" | b"--box")
+                && matches!(k.as_slice(), b"app" | b"plugin" | b"theme" | b"page") =>
+        {
+            Some([&[k.clone(), b.clone(), n.clone()], rest].concat())
+        }
+        _ => None,
+    }
+}
+
+/// The report's `window:` line, `CLASS "TITLE" WxH (LAYOUT)`. A page's window is called chromium,
+/// and Chromium gives an --app window a class of its own (`chrome-<the page's path>-Default`) that
+/// `--window chromium` does not select (#471): its address is said as the selector.
+fn report_window_line(
+    page: bool,
+    class: &str,
+    title: &str,
+    size: &str,
+    layout: &str,
+    addr: &str,
+) -> Vec<u8> {
+    if page {
+        format!("chromium \"{title}\" {size} ({layout}; select it with --window {addr})")
+            .into_bytes()
+    } else {
+        format!("{class} \"{title}\" {size} ({layout})").into_bytes()
     }
 }
 
@@ -154,6 +210,10 @@ fn pick(ctx: &mut Ctx, a: &mut App, me: u32) -> Res<(Vec<u8>, Option<Teardown>)>
     let name = format!("look-{me}").into_bytes();
     select_box(ctx, &name)?;
     let guard = (!a.keep).then(|| Teardown::new(name.clone()));
+    // (for the caller's next command, which may look for it: need_box names it, #471)
+    if guard.is_some() {
+        crate::whose::write_look(ctx, &name, &crate::whose::me());
+    }
     Ok((name, guard))
 }
 
@@ -892,6 +952,11 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
                 ),
             };
             problems.push(why);
+            // A script not executable (126) or named without ./ (127): the look that runs it (#471).
+            if let Some(e) = &ended {
+                let tail = std::fs::read(shell::path(&log)).unwrap_or_default();
+                notes.extend(look_exit_hint(e, &a.cmd, &tail));
+            }
         }
         Some(w) => {
             let addr = w.get("address").and_then(Value::as_str).unwrap_or("active");
@@ -1010,20 +1075,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             } else {
                 "tiled"
             };
-            window_line = cat!(
-                if a.page {
-                    "chromium".to_string()
-                } else {
-                    s("class")
-                },
-                " \"",
-                s("title"),
-                "\" ",
-                size,
-                " (",
-                layout,
-                ")"
-            );
+            window_line = report_window_line(a.page, &s("class"), &s("title"), &size, layout, addr);
             // Ended meanwhile (a crash after its first frame).
             if pid.is_some() && job_pid(name, &log).is_none() {
                 if let Some(e) = pid.and_then(|p| job_end(name, p)) {
@@ -1806,6 +1858,29 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
     }
 }
 
+/// A problem's LINE cut to WIDTH characters as cut_line cuts it, except the commands it ends with: a
+/// last `(...)` that names an omabox command is kept whole after the cut (#471: `its Hyprland did not
+/// answer (h… (+62 chars)` lost `omabox log -b NAME; omabox down NAME`).
+pub fn cut_keep_command(l: &[u8], width: usize) -> Vec<u8> {
+    let plain = crate::cmd::log::cut_line(l, width);
+    if plain.len() == l.len() || !l.ends_with(b")") {
+        return plain;
+    }
+    let Some(open) = l.iter().rposition(|&c| c == b'(') else {
+        return plain;
+    };
+    let tail = &l[open..];
+    let n = |v: &[u8]| v.iter().filter(|&&b| (b & 0xc0) != 0x80).count();
+    if !crate::exit::contains(tail, b"omabox ") || n(tail) * 2 > width {
+        return plain;
+    }
+    let head = l[..open].strip_suffix(b" ").unwrap_or(&l[..open]);
+    let mut v = crate::cmd::log::cut_line(head, width - n(tail) - 1);
+    v.push(b' ');
+    v.extend_from_slice(tail);
+    v
+}
+
 /// The report, as the issue drew it: HEAD's lines (`screenshot: PATH`, `window: ...`), the problems,
 /// notes, OUTPUT's first lines (none: no such part), the box kept.
 pub fn report(
@@ -1824,8 +1899,12 @@ pub fn report(
         r.extend(b"problems: none\n");
     } else {
         r.extend(b"problems:\n");
+        // (one of several lines, as a command's stderr can be: each line cut on its own)
         for p in problems.iter().take(PROBLEMS_MAX) {
-            r.extend(cat!("  ", cut(p), "\n"));
+            let p = p.strip_suffix(b"\n").unwrap_or(p);
+            for l in p.split(|&c| c == b'\n').filter(|l| !l.is_empty()) {
+                r.extend(cat!("  ", cut_keep_command(l, LINE_WIDTH), "\n"));
+            }
         }
         if problems.len() > PROBLEMS_MAX {
             r.extend(format!("  ... and {} more\n", problems.len() - PROBLEMS_MAX).into_bytes());
@@ -1872,6 +1951,100 @@ pub fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn w(v: &[&str]) -> Vec<Vec<u8>> {
+        v.iter().map(|s| s.as_bytes().to_vec()).collect()
+    }
+
+    /// #471: `-b NAME` before the kind (as `omabox -b NAME look page FILE` arrives) is the kind's.
+    #[test]
+    fn b_before_the_kind() {
+        assert_eq!(
+            kind_first(&w(&["-b", "x", "page", "f.html"])),
+            Some(w(&["page", "-b", "x", "f.html"]))
+        );
+        assert_eq!(
+            kind_first(&w(&["--box", "x", "app", "--", "foot"])),
+            Some(w(&["app", "--box", "x", "--", "foot"]))
+        );
+        assert_eq!(kind_first(&w(&["-b", "x", "-o", "f.png"])), None);
+        assert_eq!(kind_first(&w(&["page", "f.html", "-b", "x"])), None);
+    }
+
+    /// #471: a problem shortened keeps the commands it ends with; each of its lines is cut on its
+    /// own.
+    #[test]
+    fn a_cut_problem_keeps_its_commands() {
+        let hung = format!(
+            "omabox: box 'look-1': {} its Hyprland did not answer (hung? omabox log -b look-1; omabox down look-1)",
+            "x".repeat(190)
+        );
+        let c = String::from_utf8(cut_keep_command(hung.as_bytes(), 200)).unwrap();
+        assert!(
+            c.ends_with(" (hung? omabox log -b look-1; omabox down look-1)"),
+            "{c}"
+        );
+        assert!(c.contains("… (+"), "{c}");
+        // Short enough: as it is; no omabox command at its end: cut_line's cut.
+        assert_eq!(
+            cut_keep_command(b"short (omabox x)", 200),
+            b"short (omabox x)"
+        );
+        let long = "y".repeat(250) + " (not a command)";
+        assert_eq!(
+            cut_keep_command(long.as_bytes(), 200),
+            crate::cmd::log::cut_line(long.as_bytes(), 200)
+        );
+        let two = format!("shot: omabox: warning: the shell is gone\n{hung}\n");
+        let r = String::from_utf8(report(&[], &[two.into_bytes()], &[], None, None)).unwrap();
+        assert!(
+            r.starts_with(
+                "problems:\n  shot: omabox: warning: the shell is gone\n  omabox: box 'look-1': x"
+            ),
+            "{r}"
+        );
+        assert!(
+            r.ends_with("(hung? omabox log -b look-1; omabox down look-1)\n"),
+            "{r}"
+        );
+    }
+
+    /// #471: a look app whose program was not executable names the look that runs it.
+    #[test]
+    fn a_look_at_a_script_not_executable() {
+        let cmd = w(&["./hello.py"]);
+        let tail = b"setsid: failed to execute ./hello.py: Permission denied\n";
+        assert_eq!(
+            look_exit_hint(b"exited with status 126", &cmd, tail),
+            [b"./hello.py is not executable: omabox look app -- python3 ./hello.py".to_vec()]
+        );
+        assert!(look_exit_hint(b"exited with status 0", &cmd, tail).is_empty());
+        assert!(look_exit_hint(b"exited with status 1", &cmd, tail).is_empty());
+        assert_eq!(
+            look_exit_hint(b"exited with status 126, x", &cmd, tail).len(),
+            1
+        );
+    }
+
+    /// #471: a page's window line names a selector that picks it, not the word chromium.
+    #[test]
+    fn a_page_window_names_its_selector() {
+        assert_eq!(
+            report_window_line(
+                true,
+                "chrome-__x_index.html-Default",
+                "Rocks",
+                "800x600",
+                "tiled",
+                "0xab"
+            ),
+            b"chromium \"Rocks\" 800x600 (tiled; select it with --window 0xab)"
+        );
+        assert_eq!(
+            report_window_line(false, "foot", "t", "800x600", "tiled", "0xab"),
+            b"foot \"t\" 800x600 (tiled)"
+        );
+    }
 
     /// In a box that stays up a program's window is its own (its pid), else one that was not there
     /// when it was started; a throwaway box has none before, so any.

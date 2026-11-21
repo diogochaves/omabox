@@ -312,10 +312,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             kill_say: true,
             ..ExecOpts::default()
         };
-        let rc = box_exec(ctx, &cmd, opts)?;
+        let note = WaitNote::start(wait_note_text(&ctx.name, &cmd, false));
+        let rc = box_exec(ctx, &cmd, opts);
+        note.stop();
+        let rc = rc?;
         run_mark_end(ctx, mark);
         touch(&ctx.at("used"));
-        return code(run_gone(ctx, rc)?);
+        let rc = run_gone(ctx, rc)?;
+        // hyprctl keyword in a box: hyprctl's bare `unknown request`, then what sets the option (#471).
+        for l in crate::cmd::hyprctl::run_hint(&ctx.name, &cmd) {
+            say(l);
+        }
+        return code(rc);
     }
     if detach {
         // This session's box, up under another directory's name: named, not an `up` that would
@@ -562,6 +570,7 @@ fn throwaway(ctx: &mut Ctx, up_args: Vec<Vec<u8>>, cmd: &[Vec<u8>]) -> Res<()> {
         say(n);
     }
     // The name keeps its -run<pid> whatever the base's length: two runs in one repo never share a box.
+    let base = ctx.name.clone();
     let me = std::process::id();
     let name = cat!(shell::cut_c(&ctx.name, 28), format!("-run{me}"));
     select_box(ctx, &name)?;
@@ -570,6 +579,18 @@ fn throwaway(ctx: &mut Ctx, up_args: Vec<Vec<u8>>, cmd: &[Vec<u8>]) -> Res<()> {
     let guard = crate::sig::Teardown::new(ctx.name.clone());
     let r = throwaway_run(ctx, overlay, up_args, cmd, me);
     guard.finish();
+    // hyprctl keyword (#471): what sets the option, in a box that stays up.
+    let hint = crate::cmd::hyprctl::run_hint(&base, cmd);
+    if !hint.is_empty() {
+        say(cat!(
+            "with no box up this ran in a box of its own, gone with it: omabox up ",
+            shell::quote_q(&base),
+            " first, then"
+        ));
+        for l in hint {
+            say(l);
+        }
+    }
     r
 }
 
@@ -644,8 +665,85 @@ fn throwaway_run(
         kill_say: true,
         ..ExecOpts::default()
     };
-    let rc = box_exec(ctx, cmd, opts)?;
-    code(run_gone(ctx, rc)?)
+    let note = WaitNote::start(wait_note_text(&ctx.name, cmd, true));
+    let rc = box_exec(ctx, cmd, opts);
+    note.stop();
+    code(run_gone(ctx, rc?)?)
+}
+
+/// How long `omabox run` (no -d) waits on its command before it says so: 10 s, or under the suite
+/// OMABOX_TEST_RUN_NOTE_MS.
+fn wait_note_after() -> Duration {
+    let ms = Some(shell::env_or_empty("OMABOX_TEST_RUN_NOTE_MS"))
+        .filter(|v| !shell::env_or_empty("OMABOX_SUITE").is_empty() && !v.is_empty())
+        .and_then(|v| std::str::from_utf8(&v).ok()?.parse::<u64>().ok())
+        .unwrap_or(10_000);
+    Duration::from_millis(ms)
+}
+
+/// What `omabox run` says when its command CMD still runs after wait_note_after (#471: a benchmark
+/// model's `omabox run python3 hello.py` waited on the GTK app, silent, until its harness killed it
+/// at 120 s). In box NAME, or in a throwaway box of its own (THROWAWAY), where -d is not there.
+fn wait_note_text(name: &[u8], cmd: &[Vec<u8>], throwaway: bool) -> Vec<u8> {
+    let words: Vec<u8> = cmd
+        .iter()
+        .map(|a| crate::jobs::word(a))
+        .collect::<Vec<_>>()
+        .join(&b' ');
+    let shown = crate::cmd::log::cut_line(&words, 80);
+    let secs = wait_note_after().as_secs_f64();
+    let head = cat!(
+        "note: ",
+        shown,
+        format!(
+            " still runs after {secs:.0} s: run waits for it to exit (an app, until its window is closed); "
+        )
+    );
+    if throwaway {
+        cat!(
+            head,
+            "with no box up it runs in a box of its own; to leave an app running: omabox up, then omabox run -d -- ",
+            words,
+            "; to see it once: omabox look app -- ",
+            words
+        )
+    } else {
+        cat!(
+            head,
+            "omabox run -d -b ",
+            shell::quote_q(name),
+            " -- ",
+            words,
+            " leaves it running and returns"
+        )
+    }
+}
+
+/// The note wait_note_text makes, said on stderr once the command has run wait_note_after, unless
+/// it ended first; never to a terminal (a person running an interactive program knows).
+struct WaitNote(Option<(std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>)>);
+
+impl WaitNote {
+    fn start(text: Vec<u8>) -> WaitNote {
+        if crate::exec::isatty(0) {
+            return WaitNote(None);
+        }
+        let after = wait_note_after();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let h = std::thread::spawn(move || {
+            if rx.recv_timeout(after) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                say(text);
+            }
+        });
+        WaitNote(Some((tx, h)))
+    }
+
+    fn stop(self) {
+        if let Some((tx, h)) = self.0 {
+            drop(tx);
+            let _ = h.join();
+        }
+    }
 }
 
 /// `${V//FROM/TO}`.
@@ -761,6 +859,21 @@ mod tests {
         assert!(env_reserved(b"OMABOX_BOX"));
         assert!(!env_reserved(b"OMABOX_X"));
         assert!(!env_reserved(b"FOO"));
+    }
+
+    /// #471: run without -d says, once its command has run a while, that it waits, and what leaves
+    /// an app running.
+    #[test]
+    fn a_long_run_says_it_waits() {
+        let cmd: Vec<Vec<u8>> = vec![b"python3".to_vec(), b"hello world.py".to_vec()];
+        assert_eq!(
+            String::from_utf8(wait_note_text(b"b1", &cmd, false)).unwrap(),
+            "note: python3 'hello world.py' still runs after 10 s: run waits for it to exit (an app, until its window is closed); omabox run -d -b b1 -- python3 'hello world.py' leaves it running and returns"
+        );
+        assert_eq!(
+            String::from_utf8(wait_note_text(b"b1", &cmd, true)).unwrap(),
+            "note: python3 'hello world.py' still runs after 10 s: run waits for it to exit (an app, until its window is closed); with no box up it runs in a box of its own; to leave an app running: omabox up, then omabox run -d -- python3 'hello world.py'; to see it once: omabox look app -- python3 'hello world.py'"
+        );
     }
 
     #[test]

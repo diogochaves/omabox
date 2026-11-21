@@ -256,7 +256,8 @@ fn user_marker(m: &[u8]) -> bool {
     !t.is_empty() && !t.contains(&b'\n')
 }
 
-/// The markers nobody reads any more: a down's after 10 minutes, and an idle box's note
+/// The markers nobody reads any more: a down's after 10 minutes, the last look's (.last-look,
+/// whose::look_gone) after 30, and an idle box's note
 /// (.expired-NAME) and a down's (.taken-NAME, #295) after a day (finding 237).
 pub fn prune_marks(ctx: &Ctx) {
     let Ok(rd) = std::fs::read_dir(shell::path(&ctx.boxes)) else {
@@ -267,6 +268,8 @@ pub fn prune_marks(ctx: &Ctx) {
         let n = e.file_name().into_encoded_bytes();
         let max = if n.starts_with(b".down-") {
             600
+        } else if n == b".last-look" {
+            1800
         } else if n.starts_with(b".expired-") || n.starts_with(b".taken-") {
             86_400
         } else {

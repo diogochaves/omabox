@@ -98,7 +98,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Err(ctx.die("pixel: need X Y (several: X1 Y1 X2 Y2 ...)"));
     }
     if xy.len() > 64 {
-        return Err(ctx.die("pixel: at most 32 points"));
+        return Err(ctx.die(format!(
+            "pixel: at most 32 points, got {}: split them over several calls of 32 (omabox pixel X1 Y1 ... X32 Y32, then the rest), or for an area take a zoomed shot of it: omabox shot -g \"X,Y WxH\" --zoom 4",
+            xy.len() / 2
+        )));
     }
     if !inp.is_empty() && !sels.is_empty() {
         return Err(ctx.die("pixel: --in or --window, not both"));

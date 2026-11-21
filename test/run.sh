@@ -1275,6 +1275,18 @@ t_unit_exit_codes() {
     "$(ob look hello -- python3 hello.py 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
   check_match "...a page" "got rocks\.html: omabox look page rocks\.html \(" "$(ob look rocks.html 2>&1)"
   check_match "...none to guess: the four" "got x: omabox look app -- CMD, omabox look plugin DIR, omabox look theme DIR or omabox look page FILE\|URL \(" "$(ob look x 2>&1)"
+  # #471 part 2: -b NAME before look's kind is the kind's -b (it was `look: unknown option page`).
+  : >"$TMP/$P-lookb.html"
+  check_match "omabox -b NAME look page FILE: the box asked for" "no box '$P-x' is up" "$(ob -b "$P-x" look page "$TMP/$P-lookb.html" 2>&1)"
+  check_match "...look -b NAME page FILE too" "no box '$P-x' is up" "$(ob look -b "$P-x" page "$TMP/$P-lookb.html" 2>&1)"
+  check_match "...look -b NAME app -- CMD too" "no box '$P-x' is up" "$(ob look -b "$P-x" app -- foot 2>&1)"
+  rm -f -- "$TMP/$P-lookb.html"
+  # #471 part 2: a look's own box, gone with its look, is named for what it is (the caller's last
+  # look's, unnamed: whose.rs a_look_gone_named_to_its_caller).
+  # (the boxes up beside it are listed, "up: A B ; ", and the user's own may be up during the suite)
+  check_match "no box: a look's own box (look-PID), and how to keep one" \
+    "^omabox: no box 'look-999999999' is up: it was a look's own box, taken down when the look ended \\((up: [^;]*; )?--keep-box keeps a look's box: omabox look \\.\\.\\. --keep-box, then -b BOX; or start a box first, omabox up, and a look works in it\\)\$" \
+    "$(ob windows -b look-999999999 2>&1)"
   # (#473: shot --layer is a layer's shot now; t_shot_layer)
   check_eq "shot --layer with --window: one of them" \
     "omabox: shot: --window or --layer, not both (omabox help shot)|2" "$(ob shot --layer omarchy-bar --window x 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
@@ -7874,8 +7886,28 @@ t_isolated() {
   check_match "...said, with its log's last lines" \
     "the command exited with status 3 at once in box '$B', and left nothing running \(log: [^)]*\)"$'\n'"omabox: its log ends \(omabox log -b $B run\):"$'\n'"  boom" "$err"
   check_fails "...not as started" grep -q "started in box" <<<"$err"
+  # #471 part 2: a run (no -d) still going after a while says it waits, and what leaves it running
+  # (after 10 s; 1 s here); one that ends first says nothing.
+  err=$(OMABOX_TEST_RUN_NOTE_MS=1000 ob run -b "$B" -- sleep 2 2>&1 >/dev/null </dev/null); rc=$?
+  check_eq "run of a command still going after a while: said once, its status as it was" \
+    "0 omabox: note: sleep 2 still runs after 1 s: run waits for it to exit (an app, until its window is closed); omabox run -d -b $B -- sleep 2 leaves it running and returns" "$rc $err"
+  err=$(OMABOX_TEST_RUN_NOTE_MS=1000 ob run -b "$B" -- true 2>&1 </dev/null); rc=$?
+  check_eq "...nothing for one that ends first" "0 " "$rc $err"
   err=$(ob run -b "$B" -d -- true 2>&1 >/dev/null); rc=$?
-  check_match "...one that exits 0 at once: 0, said" "^0 omabox: the command exited with status 0 at once" "$rc $err"
+  check_match "run -d of one that exits 0 at once: 0, said" "^0 omabox: the command exited with status 0 at once" "$rc $err"
+  # #471 part 2: each such end names what to run instead, last.
+  check_match "...and that it needs no -d (the run without it)" \
+    "omabox: it ended by itself: a command that ends needs no -d, omabox run -b $B -- true waits for it and prints its output \(-d is for an app that stays open\)\$" "$err"
+  local bh; bh=$(ob run -b "$B" -- sh -c 'echo "print(1)" >"$HOME/t471.py"; echo "$HOME"')
+  err=$(ob run -b "$B" -d -- "$bh/t471.py" 2>&1 >/dev/null); rc=$?
+  check_match "...a script that is not executable (126): its interpreter named" \
+    "^126 .*Permission denied.*omabox: $bh/t471\.py is not executable: omabox run -d -b $B -- python3 $bh/t471\.py\$" "$rc $(tr '\n' ' ' <<<"$err" | sed 's/ $//')"
+  err=$(ob run -b "$B" -d -- t471-nosuch.py 2>&1 >/dev/null); rc=$?
+  check_match "...a script named without ./ (127): ./ and its interpreter named" \
+    "^127 .*omabox: t471-nosuch\.py is not a command on the box's PATH: a file in this folder is \./t471-nosuch\.py; omabox run -d -b $B -- python3 t471-nosuch\.py\$" "$rc $(tr '\n' ' ' <<<"$err" | sed 's/ $//')"
+  err=$(ob run -b "$B" -d -- hyprctl keyword general:gaps_out 40 2>&1 >/dev/null); rc=$?
+  check_match "...hyprctl keyword under -d: no -d needed, and the hl.config for it" \
+    "omabox: hyprctl answers and ends, so it needs no run -d: omabox hyprctl -b $B keyword general:gaps_out 40 prints the answer"$'\n'"omabox: hyprctl: keyword general:gaps_out 40 set nothing: .*Instead: omabox lua -b $B 'hl\.config\(\{ general = \{ gaps_out = 40 \} \}\)'" "$err"
   err=$(ob run -b "$B" -d -q -- true 2>&1 >/dev/null); rc=$?
   check_eq "...with -q: nothing said" "0 " "$rc $err"
   err=$(ob run -b "$B" -d -- sh -c 'sleep 600 & exit 0' 2>&1 >/dev/null); rc=$?
@@ -9511,6 +9543,14 @@ t_hypr_old_dispatch() {
   check_eq "...the hl.config for it on stderr" \
     "omabox: hyprctl: keyword general:gaps_out 40 set nothing: a box's Hyprland runs a Lua config, which has no keyword request. Instead: omabox lua -b $B 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b $B getoption general:gaps_out (an option Hyprland does not know is in omabox hyprctl configerrors, not lua's answer)" "$err"
   check_fails "...the option untouched" grep -q "^css gap data: 40 " <<<"$(ob hyprctl -b "$B" getoption general:gaps_out)"
+  # #471 part 2: the same through omabox run (hyprctl's own answer, then keyword's line), and in a
+  # shell's script; its status is hyprctl's, as run's always is.
+  out=$(ob run -b "$B" -- hyprctl keyword general:gaps_out 40 2>"$TMP/hod-err"); rc=$?; err=$(cat "$TMP/hod-err")
+  check_match "omabox run hyprctl keyword: hyprctl's answer as it came" "^0 (unknown request|keyword can't work with non-legacy parsers\. Use eval\.)$" "$rc $out"
+  check_eq "...then keyword's hl.config line" \
+    "omabox: hyprctl: keyword general:gaps_out 40 set nothing: a box's Hyprland runs a Lua config, which has no keyword request. Instead: omabox lua -b $B 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b $B getoption general:gaps_out (an option Hyprland does not know is in omabox hyprctl configerrors, not lua's answer)" "$err"
+  check_match "...in bash -c too" "omabox: hyprctl: keyword general:gaps_out 40 set nothing: " \
+    "$(ob run -b "$B" -- bash -c 'hyprctl keyword general:gaps_out 40; true' 2>&1 >/dev/null)"
   check "...that Lua run" ob lua -b "$B" "$(sed -n "s/.*Instead: omabox lua -b $B '\(.*\)', read back.*/\1/p" <<<"$err")"
   check_match "...sets it" "^css gap data: 40 40 40 40" "$(ob hyprctl -b "$B" getoption general:gaps_out)"
   # #471: eval given the old keyword's words is Lua's syntax error; it names the Lua and the command.
@@ -21558,7 +21598,10 @@ t_unit_pixel() {
   check_match "pixel: X Y needed" "need X Y" "$(ob pixel -b "$P-x" 5 2>&1)"
   check_match "pixel: a bad coordinate" "bad argument" "$(ob pixel -b "$P-x" 1 x 2>&1)"
   check_match "pixel: --in or --window" "not both" "$(ob pixel -b "$P-x" --in a.png -w x 1 1 2>&1)"
-  check_match "pixel: at most 32 points" "at most 32" "$(ob pixel -b "$P-x" $(seq 66) 2>&1)"
+  # #471 part 2: and the way to more: calls of 32, or a zoomed shot of the area.
+  check_eq "pixel: at most 32 points, and the way to more" \
+    "omabox: pixel: at most 32 points, got 33: split them over several calls of 32 (omabox pixel X1 Y1 ... X32 Y32, then the rest), or for an area take a zoomed shot of it: omabox shot -g \"X,Y WxH\" --zoom 4 (omabox help pixel)" \
+    "$(ob pixel -b "$P-x" $(seq 66) 2>&1)"
   # (pixel is a jailed agent's: broker_side.rs's broker_check_allows_and_refuses)
   # (tree is a jailed agent's (#178): broker_side.rs's broker_check_allows_and_refuses)
   check_match "shot --zoom needs -g" "goes with -g" "$(ob shot -b "$P-x" --zoom 4 2>&1)"

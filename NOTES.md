@@ -14832,6 +14832,62 @@ from them.
     option page`, and `look page` reports its window as `chromium` while its class is
     `chrome-...-Default`, so `--window chromium` matches nothing.
 
+740. **Every error line the benchmark's runs hit names its next command, or is listed as one that
+    cannot** (2026-11-21, #471 part 2; the lines are 739's, read in each run's tool output). Changed
+    here, each with its check: **`omabox run hyprctl keyword ...`** (24 hits, two runs: hyprctl's
+    bare `unknown request`, which only `omabox hyprctl keyword` explained, 728) adds keyword's
+    hl.config line after it, for hyprctl itself or a `hyprctl keyword|set ...` in a shell's `-c`
+    script (its words up to a `;`, `&`, `|`, quote or control character); run's status stays
+    hyprctl's. With no box up, the throwaway's line says to `omabox up` first. **A `run -d` that
+    ends at once** (`job_ended`, with or without `--wait`) says, after its status and log tail, what
+    to run instead (`jobs::exit_hint`): hyprctl `answers and ends, so it needs no run -d: omabox
+    hyprctl -b NAME ARGS`, with keyword's line for a keyword (also the five `--wait` hits of status
+    0, 1 and 255 that left a model probing hyprctl); a status 0 `ended by itself: a command that
+    ends needs no -d, omabox run -b NAME -- CMD`; 126 with `Permission denied` names the script's
+    interpreter by its extension (`python3 ./hello.py`; else `chmod +x FILE`); 127 with `No such
+    file or directory` names `./FILE` and the interpreter for a bare name that is a file here or
+    has a script's extension, and for a terminal that is not installed the ones this machine has
+    (`alacritty is not installed ...; the terminals there are: foot: omabox run -d -b NAME --
+    foot`; a box runs the machine's /usr). The "(124 is about the screen)" line stays; the line
+    after it is the step. `look app`'s report gets the same 126/127 line as a note, as the look
+    (`omabox look app -- python3 ./hello.py`). **`run` without `-d`** (one run lost: a GTK app
+    waited on, silent, until the harness killed it at 120 s) keeps its default and says on stderr,
+    once its command has run 10 s, `note: CMD still runs after 10 s: run waits for it to exit (an
+    app, until its window is closed); omabox run -d -b NAME -- CMD leaves it running and returns`
+    (in a throwaway: `omabox up`, then `run -d`, or `look app`); never when stdin is a terminal,
+    and nothing for a command that ends first (`OMABOX_TEST_RUN_NOTE_MS` under the suite). **`no box
+    'NAME' is up`** (14 hits, half after a look whose box went with it) says, for a `look-PID` name
+    or an unnamed box within 30 min of the same caller's look (`.last-look` beside the boxes, the
+    look's box name and caller, as `.taken-NAME` holds a down's; pruned by down's prune_marks), that
+    the box was the look's, taken down when it ended, `omabox look ... --keep-box, then -b BOX; or
+    start a box first, omabox up, and a look works in it`; a name given that is no look's stays as
+    it was. **`omabox lua`** prints Lua's error as it came and then, for an object's
+    (`got HL.Window`, `method 'pos'`, `index a nil value`), `omabox lua -b NAME 'return
+    hl.get_active_window()' prints them; a window's place and size: omabox hyprctl -b NAME
+    activewindow -j`, and for a nil function the call that lists hl's. **`pixel: at most 32
+    points, got N: split them over several calls of 32 ..., or for an area take a zoomed shot of
+    it: omabox shot -g "X,Y WxH" --zoom 4`**. Two bugs: **`omabox -b NAME look page FILE`** (front.rs
+    moves -b after the command) and `look -b NAME page FILE` were `look: unknown option page`:
+    `-b NAME KIND` is now `KIND -b NAME`; **`look page`'s `window:` line** called the window
+    `chromium`, while Chromium gives an `--app` window the class `chrome-<path>-Default`, which
+    `--window chromium` does not select (WIN_SEL_JQ's loose match splits on `-`; the title matched):
+    the line now ends `select it with --window 0xADDR`. And **a look's report cut a problem at 200
+    characters as one line**, a shot's two-line stderr included, so `its Hyprland did not answer
+    (hung? omabox log -b NAME; omabox down NAME)` came out `(h… (+62 chars)`: each line of a problem
+    is cut on its own, and a last `(...)` that names an omabox command is kept whole after the cut
+    (`cut_keep_command`). **Cannot be ours as text**, left as they are: Hyprland's `unknown
+    request` and `no such option` (hyprctl's stdout; run and `omabox hyprctl` add a line where
+    omabox ran it), Lua's own error text (a line after it, above), GTK's `couldn't be initialized`,
+    grim's `failed to create display` and hyprctl's socket error under the guard (`guard exec` only
+    sets the session's variables; a line inside each program's own error would need a wrapper
+    around every command an agent runs, not cheap and not safe), `omarchy-launch-shell`'s silent
+    exit. **Not done here** (one hit each, 739's list item 10): `look plugin .`/`look theme .`
+    naming the subfolder that is one, `look shot`/`--shot` naming `look -o FILE`, `up --fresh`
+    (`up --new`), `up --config` (the hl.config line), `throwaway box failed to start` with no
+    reason, `shot: --layer or -g, not both` giving the `-g` command, `--in: ... is not a shot of
+    box` for a look's shot, look's `summon: no live bar widget`, and `run -d -- cat $(shot path)`'s
+    plainer `cp` on the host.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
