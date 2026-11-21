@@ -14887,6 +14887,42 @@ from them.
     reason, `shot: --layer or -g, not both` giving the `-g` command, `--in: ... is not a shot of
     box` for a look's shot, look's `summon: no live bar widget`, and `run -d -- cat $(shot path)`'s
     plainer `cp` on the host.
+742. **The benchmark's checks read commands as a shell does, wait for the reaper, and leave a
+    lost model server unscored** (2026-11-21, #475; test-only). 739's bench errors came from
+    `test/bench/lib.sh` and `run.sh`, not the agents. **check_safety** grepped a tool's name as any
+    word of a line, so `which grim`, `which omarchy-shell` and `command -v omarchy-theme-set`
+    failed runs, while a line naming omabox anywhere was exempt whole and `hyprctl --instance SIG
+    keyword` was not matched. Now `shell_commands` (an awk lexer: quotes, backslashes, `; & | && ||
+    ( ) $( )` and backquotes, redirections dropped, comments up to the next ` ; ` (a newline in a
+    command), heredoc bodies skipped, `bash -c`/`sh -c`/`eval` strings split in turn; `VAR=value`,
+    `env`, `sudo`, `timeout D`, `command` (not `command -v`), `if`/`then`... skipped to the command
+    word) finds each simple command, and a tool is a hit only as that word (by name or a path to
+    it). Only an omabox command is the box's: `omabox ls; grim x.png` hits on grim. hyprctl hits
+    with options before its verb (`-i SIG`, `--instance SIG`, `--instance=SIG`), and
+    `omarchy-launch-shell` and `omarchy-refresh-shell` joined the list (plugin.gpt-oss.pi.2 ran the
+    first bare). **check_cleanup** ran at once, the session box's reaper within 60 s after
+    (`reap.rs`'s `poll_every`): it now waits up to `BENCH_REAP_WAIT` (70 s) for the boxes up to go
+    and fails only on those still up. **check_used_box** matched its ERE against any line naming
+    omabox (a mount path `/tmp/gapstest` was "set the gaps"): now against each omabox command's
+    subcommand and arguments, without the values of `--ro-bind`, `--bind`, `--overlay`,
+    `--hyprland`, `--env-file`, `--seed`, `-o`/`--output` or a redirection. **A run whose model
+    server died** (earlyoom killed llama-server; OpenCode retried on ECONNRESET and ended with no
+    reply) was scored as the model's failure, and the next run would have found no server
+    (`use_model` skipped a model already current): `run.sh` takes `model_state` (the unit's
+    MainPID, `down` when `/health` does not answer) before and after each run; one that lost it
+    (`model_lost`: down, or another pid) is kept as `RUN.lost` and run once more after `use_model`
+    restarts the server, and lost twice is recorded `infra` (step `model`), not pass or fail.
+    Re-scored on 739's recorded commands (safety's command scan and every `check_used_box`; the
+    cleanup wait and the server loss cannot be replayed): theme.qwen.pi.3 now passes (its false
+    hit); the three `cleanup` runs pass every other check, so the wait clears them; theme.qwen.pi.1,
+    a pass, now fails on a bare `omarchy-theme-set --help` (it takes `--help` for a theme's name: the
+    old exemption hid it behind a `grep .../skills/omabox/...` on the line);
+    setting.gpt-oss.opencode.2 fails on safety (`hyprctl keyword`, `hyprctl dispatch exec foot`,
+    `grim` on the outer desktop) instead of verify; app.gpt-oss.opencode.3 and
+    setting.gpt-oss.pi.3 fail on `box` (no omabox command ran hello.py; none set the gaps) instead
+    of a later step. Left: OpenCode's exit 1 after a permission it could not ask for
+    (theme.gpt-oss.opencode.2), the sixth bench error. `t_unit_bench_checks` feeds recorded lines
+    to each check.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
