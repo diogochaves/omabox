@@ -21564,7 +21564,10 @@ t_unit_pixel() {
   check_match "pixel: X Y needed" "need X Y" "$(ob pixel -b "$P-x" 5 2>&1)"
   check_match "pixel: a bad coordinate" "bad argument" "$(ob pixel -b "$P-x" 1 x 2>&1)"
   check_match "pixel: --in or --window" "not both" "$(ob pixel -b "$P-x" --in a.png -w x 1 1 2>&1)"
-  check_match "pixel: at most 32 points" "at most 32" "$(ob pixel -b "$P-x" $(seq 66) 2>&1)"
+  # #471 part 2: and the way to more: calls of 32, or a zoomed shot of the area.
+  check_eq "pixel: at most 32 points, and the way to more" \
+    "omabox: pixel: at most 32 points, got 33: split them over several calls of 32 (omabox pixel X1 Y1 ... X32 Y32, then the rest), or for an area take a zoomed shot of it: omabox shot -g \"X,Y WxH\" --zoom 4 (omabox help pixel)" \
+    "$(ob pixel -b "$P-x" $(seq 66) 2>&1)"
   # (pixel is a jailed agent's: broker_side.rs's broker_check_allows_and_refuses)
   # (tree is a jailed agent's (#178): broker_side.rs's broker_check_allows_and_refuses)
   check_match "shot --zoom needs -g" "goes with -g" "$(ob shot -b "$P-x" --zoom 4 2>&1)"
