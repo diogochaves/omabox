@@ -1281,6 +1281,12 @@ t_unit_exit_codes() {
   check_match "...look -b NAME page FILE too" "no box '$P-x' is up" "$(ob look -b "$P-x" page "$TMP/$P-lookb.html" 2>&1)"
   check_match "...look -b NAME app -- CMD too" "no box '$P-x' is up" "$(ob look -b "$P-x" app -- foot 2>&1)"
   rm -f -- "$TMP/$P-lookb.html"
+  # #471 part 2: a look's own box, gone with its look, is named for what it is (the caller's last
+  # look's, unnamed: whose.rs a_look_gone_named_to_its_caller).
+  # (the boxes up beside it are listed, "up: A B ; ", and the user's own may be up during the suite)
+  check_match "no box: a look's own box (look-PID), and how to keep one" \
+    "^omabox: no box 'look-999999999' is up: it was a look's own box, taken down when the look ended \\((up: [^;]*; )?--keep-box keeps a look's box: omabox look \\.\\.\\. --keep-box, then -b BOX; or start a box first, omabox up, and a look works in it\\)\$" \
+    "$(ob windows -b look-999999999 2>&1)"
   # (#473: shot --layer is a layer's shot now; t_shot_layer)
   check_eq "shot --layer with --window: one of them" \
     "omabox: shot: --window or --layer, not both (omabox help shot)|2" "$(ob shot --layer omarchy-bar --window x 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"

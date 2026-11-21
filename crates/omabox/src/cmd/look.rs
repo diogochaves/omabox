@@ -210,6 +210,10 @@ fn pick(ctx: &mut Ctx, a: &mut App, me: u32) -> Res<(Vec<u8>, Option<Teardown>)>
     let name = format!("look-{me}").into_bytes();
     select_box(ctx, &name)?;
     let guard = (!a.keep).then(|| Teardown::new(name.clone()));
+    // (for the caller's next command, which may look for it: need_box names it, #471)
+    if guard.is_some() {
+        crate::whose::write_look(ctx, &name, &crate::whose::me());
+    }
     Ok((name, guard))
 }
 

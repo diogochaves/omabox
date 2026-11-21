@@ -220,6 +220,37 @@ pub fn taken_note(ctx: &Ctx, me: &Caller) -> Option<Vec<u8>> {
     ))
 }
 
+/// How long a look's mark (`.last-look`) is read after it was written.
+const LOOK_S: u64 = 1800;
+
+/// A look by ME started its throwaway box NAME (#471): `.last-look` beside the boxes, `NAME<TAB>
+/// SESSION<TAB>DIR`, one for all callers (the last look's), for the next command of this caller
+/// that finds no box (look_gone). Not for a jailed caller.
+pub fn write_look(ctx: &Ctx, name: &[u8], me: &Caller) {
+    if in_jail() {
+        return;
+    }
+    let _ = std::fs::write(ctx.in_boxes(".last-look"), cat!(name, "\t", line(me)));
+}
+
+/// The throwaway box of ME's last look, when it was within LOOK_S and that box is gone: what a
+/// command that found no box says beside it (half the benchmark's `no box is up` came after a look
+/// whose box had gone with it).
+pub fn look_gone(ctx: &Ctx, me: &Caller) -> Option<Vec<u8>> {
+    let p = ctx.in_boxes(".last-look");
+    let age = std::fs::symlink_metadata(&p).ok()?.modified().ok()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(age)
+        .map_or(0, |d| d.as_secs());
+    if age > LOOK_S {
+        return None;
+    }
+    let v = std::fs::read(&p).ok()?;
+    let i = v.iter().position(|&c| c == b'\t')?;
+    let (name, by) = (v[..i].to_vec(), parse(&v[i + 1..])?);
+    (by == *me && !name.is_empty() && !ctx.in_boxes(&name).exists()).then_some(name)
+}
+
 /// ls's line under a box: who started it, and who used it last when that is another caller.
 pub fn ls_line(d: &[u8], me: &Caller) -> Option<Vec<u8>> {
     let st = started(d)?;
@@ -259,6 +290,29 @@ mod tests {
     fn said(v: Option<Vec<u8>>) -> String {
         v.map(|v| String::from_utf8(v).unwrap())
             .unwrap_or_else(|| "none".into())
+    }
+
+    /// #471: a look's throwaway box, for the same caller's next command once it is gone.
+    #[test]
+    fn a_look_gone_named_to_its_caller() {
+        let b = tmp("look");
+        let ctx = ctx_in(&b);
+        let me = c(Some("1a2b3c4d"), "/repo");
+        assert_eq!(said(look_gone(&ctx, &me)), "none");
+        write_look(&ctx, b"look-42", &me);
+        assert_eq!(said(look_gone(&ctx, &me)), "look-42");
+        assert_eq!(
+            said(look_gone(&ctx, &c(Some("9z9z9z9z"), "/repo"))),
+            "none",
+            "...not to another caller"
+        );
+        std::fs::create_dir(format!("{b}/look-42")).unwrap();
+        assert_eq!(
+            said(look_gone(&ctx, &me)),
+            "none",
+            "...nor while it is there"
+        );
+        std::fs::remove_dir_all(&b).unwrap();
     }
 
     #[test]

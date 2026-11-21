@@ -572,6 +572,19 @@ pub fn need_box(ctx: &Ctx) -> Res<()> {
     } else {
         cat!("up: ", have, "; ")
     };
+    // A look's own box, gone with its look (#471), named for what it is: by its name, or as the
+    // last look of this caller's when the name was not given.
+    let me = crate::whose::me();
+    let gone = if is_look_name(&ctx.name) {
+        Some(ctx.name.clone())
+    } else if ctx.name_derived {
+        crate::whose::look_gone(ctx, &me)
+    } else {
+        None
+    };
+    if let Some(l) = gone {
+        return Err(ctx.die(look_gone_text(&ctx.name, &l, &up)));
+    }
     Err(ctx.die(cat!(
         "no box '",
         ctx.name,
@@ -581,6 +594,38 @@ pub fn need_box(ctx: &Ctx) -> Res<()> {
         ctx.name,
         ")"
     )))
+}
+
+/// Whether NAME is a look's own box's (`look-PID`).
+fn is_look_name(name: &[u8]) -> bool {
+    name.strip_prefix(b"look-")
+        .is_some_and(|p| !p.is_empty() && p.iter().all(u8::is_ascii_digit))
+}
+
+/// need_box's words when box NAME is not up and LOOK, a look's own box, was meant or was the
+/// caller's last (UP: need_box's `up: A B; `, or nothing).
+fn look_gone_text(name: &[u8], look: &[u8], up: &[u8]) -> Vec<u8> {
+    let head = if name == look {
+        cat!(
+            "no box '",
+            name,
+            "' is up: it was a look's own box, taken down when the look ended"
+        )
+    } else {
+        cat!(
+            "no box '",
+            name,
+            "' is up; your last look ran in a box of its own, ",
+            look,
+            ", taken down when it ended"
+        )
+    };
+    cat!(
+        head,
+        " (",
+        up,
+        "--keep-box keeps a look's box: omabox look ... --keep-box, then -b BOX; or start a box first, omabox up, and a look works in it)"
+    )
 }
 
 /// Whether the agent `up` recorded for this box still runs: its pid, started when it was then, and
@@ -722,6 +767,26 @@ pub fn box_file(ctx: &Ctx, p: &std::path::Path, value: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #471: no box up where a look's own box was meant says so, and how to keep or start one.
+    #[test]
+    fn a_looks_box_gone_said() {
+        assert!(is_look_name(b"look-123"));
+        assert!(!is_look_name(b"look-"));
+        assert!(!is_look_name(b"look-a1"));
+        assert!(!is_look_name(b"mylook-1"));
+        let s = |n: &str, l: &str, up: &str| {
+            String::from_utf8(look_gone_text(n.as_bytes(), l.as_bytes(), up.as_bytes())).unwrap()
+        };
+        assert_eq!(
+            s("look-7", "look-7", ""),
+            "no box 'look-7' is up: it was a look's own box, taken down when the look ended (--keep-box keeps a look's box: omabox look ... --keep-box, then -b BOX; or start a box first, omabox up, and a look works in it)"
+        );
+        assert_eq!(
+            s("proj", "look-7", "up: a b ; "),
+            "no box 'proj' is up; your last look ran in a box of its own, look-7, taken down when it ended (up: a b ; --keep-box keeps a look's box: omabox look ... --keep-box, then -b BOX; or start a box first, omabox up, and a look works in it)"
+        );
+    }
 
     // box_home (#321): box.json's `home` when it is a clean absolute path, else /home/sbx.
     #[test]
