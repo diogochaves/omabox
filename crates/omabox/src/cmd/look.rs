@@ -58,6 +58,26 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
 }
 
+/// After a look app's program ended before its window, as E (`exited with status 126`), its log
+/// TAIL: jobs::exit_hint's line for 126 and 127, as the look that runs it.
+fn look_exit_hint(e: &[u8], cmd: &[Vec<u8>], tail: &[u8]) -> Vec<Vec<u8>> {
+    // (wait job's detail: `exited with status N`, maybe more after it)
+    let st: &[u8] = if crate::exit::contains(e, b"exited with status 126") {
+        b"126"
+    } else if crate::exit::contains(e, b"exited with status 127") {
+        b"127"
+    } else {
+        return Vec::new();
+    };
+    let file = |f: &str| std::path::Path::new(f).is_file();
+    let has = |t: &str| {
+        ["/usr/bin/", "/usr/local/bin/"]
+            .iter()
+            .any(|d| std::path::Path::new(&format!("{d}{t}")).is_file())
+    };
+    crate::jobs::exit_hint(b"", b"omabox look app --", st, cmd, tail, &has, &file)
+}
+
 /// ARGS that start `-b NAME KIND`, as `KIND -b NAME ...`; None for any others.
 fn kind_first(args: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
     match args {
@@ -928,6 +948,11 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
                 ),
             };
             problems.push(why);
+            // A script not executable (126) or named without ./ (127): the look that runs it (#471).
+            if let Some(e) = &ended {
+                let tail = std::fs::read(shell::path(&log)).unwrap_or_default();
+                notes.extend(look_exit_hint(e, &a.cmd, &tail));
+            }
         }
         Some(w) => {
             let addr = w.get("address").and_then(Value::as_str).unwrap_or("active");
@@ -1977,6 +2002,23 @@ mod tests {
         assert!(
             r.ends_with("(hung? omabox log -b look-1; omabox down look-1)\n"),
             "{r}"
+        );
+    }
+
+    /// #471: a look app whose program was not executable names the look that runs it.
+    #[test]
+    fn a_look_at_a_script_not_executable() {
+        let cmd = w(&["./hello.py"]);
+        let tail = b"setsid: failed to execute ./hello.py: Permission denied\n";
+        assert_eq!(
+            look_exit_hint(b"exited with status 126", &cmd, tail),
+            [b"./hello.py is not executable: omabox look app -- python3 ./hello.py".to_vec()]
+        );
+        assert!(look_exit_hint(b"exited with status 0", &cmd, tail).is_empty());
+        assert!(look_exit_hint(b"exited with status 1", &cmd, tail).is_empty());
+        assert_eq!(
+            look_exit_hint(b"exited with status 126, x", &cmd, tail).len(),
+            1
         );
     }
 
