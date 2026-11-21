@@ -34,6 +34,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A look's report cut a problem before the commands it ends with** (`its Hyprland did not
   answer (h… (+62 chars)`): each line of a problem is cut on its own, its last `(... omabox ...)`
   kept whole.
+- **`wait change --since` and `wait still --like` refused a shot of a strip as wide as the screen at
+  its top** (`shot -g "0,0 1920x30"`, a top bar's `shot --layer`) as scaled: it was taken for a
+  whole screen by its width alone.
 - **`diff` on Omarchy 4.0 listed Hyprland's `lastNag`** in an idle box (`+ ~/.local/share/hyprland/`):
   it is noise, as `lastVersion` beside it already was.
 
