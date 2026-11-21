@@ -24,6 +24,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   own box, gone with its look, says so and how to keep one (`--keep-box`); `omabox lua` adds the
   next step after a Lua error about an object's fields or a missing function; `pixel` past 32
   points says to split them or zoom a shot.
+- **The agent guard refuses `hyprctl instances` and `hyprctl -i`/`--instance SIG`** ([#476](https://github.com/diogochaves/omabox/issues/476)):
+  they reached the user's Hyprland past the guard's signature (a benchmark run did). A `hyprctl`
+  in `share/guard/`, first on a guarded agent's PATH beside `quickshell` and `omarchy-shell`,
+  refuses them naming `omabox hyprctl -b BOX ...` (and `omabox host -- hyprctl ...` when the user
+  asked for their desktop), passes the rest to the real hyprctl, and after a request the guard's
+  signature cannot reach (`Couldn't connect to .../omabox-guard/.socket.sock`) adds the same line.
 
 ### Fixed
 - **`omabox -b NAME look page FILE` and `look -b NAME page FILE` were refused** as `look: unknown

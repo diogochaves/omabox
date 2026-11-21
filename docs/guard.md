@@ -34,7 +34,11 @@ PATH puts `share/guard/quickshell` and `qs` first, which refuse `kill` and `ipc`
 Omarchy 4.5's `omarchy-shell` goes further: given a display that does not exist, it finds your
 session's and talks to the shell's own socket. The guard leaves an empty `omabox-guard` file in your
 runtime directory, so the guard's display exists and `omarchy-shell` stays with it, and its own
-`share/guard/omarchy-shell` refuses with a reason.
+`share/guard/omarchy-shell` refuses with a reason. `hyprctl` has its own way past the signature:
+`hyprctl instances` lists your sessions and `-i`/`--instance SIG` talks to one. The same PATH puts
+`share/guard/hyprctl` first, which refuses both and names `omabox hyprctl` (and `omabox host --
+hyprctl` for your own desktop, when you asked), and after a request that the guard's signature
+cannot reach, says the same.
 
 - **Claude Code**: one `SessionStart` hook in `~/.claude/settings.json` (merged with yours). Every
   shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a
@@ -69,7 +73,9 @@ record.
 
 It stops accidents. It does not stop:
 
-- an agent that sets the variables back, or runs `omabox host` unasked, on purpose;
+- an agent that sets the variables back, or runs `omabox host` unasked, on purpose (a
+  `HYPRLAND_INSTANCE_SIGNATURE` set by hand, a hyprctl named by its path or Hyprland's socket used
+  directly reach your session);
 - processes the agent starts itself rather than through its shell (MCP servers: a headed browser
   MCP opens on your desktop);
 - file writes: your shell watches `~/.config/omarchy/shell.json` and `~/.config/omarchy/plugins/`,

@@ -14888,6 +14888,42 @@ from them.
     box` for a look's shot, look's `summon: no live bar widget`, and `run -d -- cat $(shot path)`'s
     plainer `cp` on the host.
 
+741. **The guard's hyprctl: no `instances`, no `-i`/`--instance`** (2026-11-21, #476). Under the
+    guard `HYPRLAND_INSTANCE_SIGNATURE=omabox-guard` names no session, so a bare `hyprctl` fails
+    with `Couldn't connect to $XDG_RUNTIME_DIR/hypr/omabox-guard/.socket.sock. (4)`; a benchmark
+    run (739) then ran `hyprctl instances` and `hyprctl --instance SIG keyword ...`, which reached
+    the outer Hyprland, on a real machine the user's desktop. `share/guard/hyprctl`, first on the
+    guard's PATH as `quickshell` (#141) and `omarchy-shell` (#290) are, refuses both on stderr,
+    exit 4, in one line: `omabox guard: not running hyprctl -i|--instance|instances here: ...
+    For a box's Hyprland: omabox hyprctl -b BOX ... Only when the user asked for their real
+    desktop: omabox host -- hyprctl ...`. It reads hyprctl's words as hyprctl 0.56/0.57's parser
+    does (`hyprctl/src/main.cpp`): `-i` and `--instance` only as words of their own, anywhere
+    before a `--` (after it each word is the request's); `--instance=SIG`, which hyprctl takes for
+    an unknown option, is refused too, so a later hyprctl that accepts it is covered; no bundled
+    short options (hyprctl has none). The request is `instances` when its words, joined after a
+    `/`, hold `/instances`, as hyprctl tests it; a `--batch instances` is a request to the session
+    (hyprctl lists nothing) and goes on. The rest goes to the next hyprctl on PATH that is not in a
+    `share/guard` (the other stand-ins' loop): `exec`'d when the signature is not the guard's (or
+    its socket exists after all); else run as a child, and when it ends non-zero (or after a
+    `--batch`, which ends 0 whatever it hit) the same next-command line follows hyprctl's own
+    (which is on stdout), its status kept. 740 left hyprctl's socket error alone because a line
+    inside a program's error needs a wrapper; this is that wrapper for hyprctl only. **omabox's own
+    hyprctl on the host** (`host.rs`: `host_session`'s `hyprctl -j instances`, then each request to
+    the session) ran from the caller's PATH, so `omabox host` from a guarded shell would have hit
+    the refusal: it now looks hyprctl up on its PATH without a guard's directory (`exec::own_path`,
+    caller_path's filter; nothing else's PATH changes). Every other hyprctl omabox runs is inside a
+    box, whose PATH has no guard. The suite's own `hyprctl -j instances` on its stand-in session
+    (`t_unit_guard_exec_host`) runs past the guard's too, for an agent that runs the suite under
+    the guard. The packages copy `share/` whole, and `share/guard/hook-version` hashes what `guard
+    on` writes, not the folder, so neither changed. **Not caught** (the guard is not a boundary,
+    SECURITY.md): a `HYPRLAND_INSTANCE_SIGNATURE` set by hand (checked: it reaches the stand-in
+    session), the real hyprctl named by its path, Hyprland's socket used directly (`socat`,
+    Python), and Codex, whose guard sets the variables but not the PATH entry. Checks:
+    `t_unit_guard_exec_host` (the guard's is first under `guard exec`; seven spellings refused;
+    exit 4, one line; a request, `-i` after `--` and a batch go on to a stub, whole; the real
+    hyprctl's line then the guard's, status 4; `omabox host` still finds the stand-in session from
+    a guarded shell), `exec.rs`'s `caller_path_as_bash` (`own_path`).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
