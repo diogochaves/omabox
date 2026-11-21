@@ -14889,7 +14889,7 @@ from them.
     plainer `cp` on the host.
 
 743. **740's and 738's lines in a box: `look app`'s 126/127 note was never shown, and `wait --since`
-    refused a bar's shot** (2026-11-21, #477). 740's look app note was checked by a cargo test of
+    refused a bar's shot; a look from a folder in no repo** (2026-11-21, #477). 740's look app note was checked by a cargo test of
     look_exit_hint only, and it sat on one of the two paths a program's end takes: a program that
     ends before `run -d` returns (the case the benchmark hit, `look app -- ./hello.py`) is reported
     by app_in's early return, which had no note; only one ended during the look's wait for a window
@@ -14897,11 +14897,14 @@ from them.
     refused a crop at 0,0 as wide as the screen** (`shot -g "0,0 1920x30"`, and so `shot --layer` of
     any top bar): shotcmp's grab took a `screen 0,0` record as a whole screen by its width alone
     (since #333), grabbed the whole screen and refused the 1920x30 image as "a shot scaled or
-    zoomed". It compares the size (WxH) now. Still open: from a folder in no repo a throwaway look
-    runs its program in the box HOME (63, 251: a throwaway mounts only the repo it runs from), so
-    `look app -- hello.py` there gets the 127 note `a file in this folder is ./hello.py; omabox look
-    app -- python3 hello.py`, which fails again (`can't open file '/home/sbx/hello.py'`), and run's
-    cwd note, which says why, is in the stderr the look drops; t_look carries the failing case. Box
+    zoomed". It compares the size (WxH) now. **From a folder in no repo a throwaway look runs its
+    program in the box HOME** (63, 251: a throwaway mounts only the repo it runs from), so `look app --
+    hello.py` there got the 127 note `a file in this folder is ./hello.py; omabox look app -- python3
+    hello.py`, which failed again (`can't open file '/home/sbx/hello.py'`), and run's cwd note, which
+    said why, was in the stderr the look drops. The look now reads that note from run's stderr and
+    says it as its own, with `--overlay DIR` on the look (a box that was up: down, then up with it),
+    and puts its 126/127 hint on that look: `omabox look app --overlay DIR -- python3 hello.py`, which
+    runs it. Box
     cases now: t_look (126, 127, a terminal this machine lacks, the next command after a look naming
     its box by derived name and by its own, another folder's plain line; look page's `select it with
     --window 0xADDR` picks the page's window in a `--keep-box` box, `--window chromium` does not),

@@ -23940,11 +23940,15 @@ look_exit_checks() {
   check_match "...that box by its name: a look's own box" \
     "^omabox: no box '${look:-look-1}' is up: it was a look's own box, taken down when the look ended \(.*--keep-box keeps" "$(ob shot -b "${look:-look-1}" 2>&1)"
   check_match "...another caller (another folder): the plain line" "^omabox: no box '$P-lookgone' is up \(" "$(OMABOX=$P-lookgone ob shot 2>&1)"
-  # Fails (finding 743, open): from a folder in no repo the program runs in the box HOME, so the 127
-  # note's `python3 hello.py` fails again; run's cwd note, which says why, is in the stderr look drops.
+  # Finding 743: from a folder in no repo the program runs in the box HOME; the report says so, and
+  # its 127 hint is on the look that mounts the folder, which then runs it.
   mkdir -p "$proj-nogit"; cp "$proj/hello.py" "$proj-nogit/"
-  out=$(cd "$proj-nogit" && ob look app -- hello.py 2>&1)
-  check_match "a script named without ./ from a folder in no repo: the report says the box does not have it (finding 743)" "in no repo|--overlay" "$out"
+  out=$(cd "$proj-nogit" && env -u OMABOX "$CLI" look app -- hello.py 2>&1)
+  check_match "a script named without ./ from a folder in no repo: the box lacks the folder, --overlay on the look (finding 743)" \
+    "note: hello.py is relative to $proj-nogit, which box 'look-[0-9]+' does not have: the command runs in the box HOME \(/home/sbx\); --overlay $proj-nogit on the look mounts it" "$out"
+  check_match "...and the 127 hint on that look" \
+    "note: hello.py is not a command on the box's PATH: a file in this folder is \./hello\.py; omabox look app --overlay $proj-nogit -- python3 hello\.py" "$out"
+  check_match "...which runs it" "^  hi$" "$(cd "$proj-nogit" && env -u OMABOX "$CLI" look app --overlay "$proj-nogit" -- python3 hello.py 2>&1)"
 }
 
 # #461 (finding 719): look plugin, a plugin in one call: up --plugin in a throwaway box, its state, the

@@ -37,6 +37,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`wait change --since` and `wait still --like` refused a shot of a strip as wide as the screen at
   its top** (`shot -g "0,0 1920x30"`, a top bar's `shot --layer`) as scaled: it was taken for a
   whole screen by its width alone.
+- **`look app` from a folder in no repo gave a 127 hint that failed again**: its throwaway box
+  runs the program in its HOME, without the folder. The report says so and names the look that
+  mounts it (`omabox look app --overlay DIR -- python3 hello.py`); a script that ends at once gets
+  its 126/127 note too.
 - **`diff` on Omarchy 4.0 listed Hyprland's `lastNag`** in an idle box (`+ ~/.local/share/hyprland/`):
   it is noise, as `lastVersion` beside it already was.
 

@@ -61,6 +61,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 /// After a look app's program ended before its window, as E (`exited with status 126`), its log
 /// TAIL: jobs::exit_hint's line for 126 and 127, as the look that runs it.
 fn look_exit_hint(e: &[u8], cmd: &[Vec<u8>], tail: &[u8]) -> Vec<Vec<u8>> {
+    look_exit_hint_as(e, b"omabox look app --", cmd, tail)
+}
+
+/// look_exit_hint with RUN the look that runs the command again (`omabox look app --overlay DIR --`).
+fn look_exit_hint_as(e: &[u8], run: &[u8], cmd: &[Vec<u8>], tail: &[u8]) -> Vec<Vec<u8>> {
     // (wait job's detail: `exited with status N`, maybe more after it)
     let st: &[u8] = if crate::exit::contains(e, b"exited with status 126") {
         b"126"
@@ -75,7 +80,62 @@ fn look_exit_hint(e: &[u8], cmd: &[Vec<u8>], tail: &[u8]) -> Vec<Vec<u8>> {
             .iter()
             .any(|d| std::path::Path::new(&format!("{d}{t}")).is_file())
     };
-    crate::jobs::exit_hint(b"", b"omabox look app --", st, cmd, tail, &has, &file)
+    crate::jobs::exit_hint(b"", run, st, cmd, tail, &has, &file)
+}
+
+/// run's note that the program's path is relative to a folder the box does not have (ERR, its
+/// stderr; finding 743): the note up to its fix, and the folder. None without that note.
+fn run_cwd_said(err: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let l = err.split(|&c| c == b'\n').find(|l| {
+        crate::exit::contains(l, b" is relative to ")
+            && crate::exit::contains(l, b"runs in the box HOME (")
+    })?;
+    let l = &l[pos(l, b"note: ")? + 6..];
+    let i = pos(l, b" is relative to ")? + 16;
+    let dir = l[i..i + pos(&l[i..], b", which ")?].to_vec();
+    Some((l[..pos(l, b"); ")? + 1].to_vec(), dir))
+}
+
+/// The notes on a program that ended (E, how; TAIL its output), in a box that lacked the folder its
+/// path is relative to (CWD, run_cwd_said's; finding 743): the folder mounted, and the 126/127 hint
+/// on the look that mounts it, which would fail again in the box HOME otherwise. A look's own box
+/// takes `--overlay DIR` on the look; a box that was up (OWN, NAME) is started again with it.
+fn look_exit_notes(
+    e: &[u8],
+    cwd: Option<&(Vec<u8>, Vec<u8>)>,
+    own: bool,
+    name: &[u8],
+    cmd: &[Vec<u8>],
+    tail: &[u8],
+) -> Vec<Vec<u8>> {
+    let Some((head, dir)) = cwd else {
+        return look_exit_hint(e, cmd, tail);
+    };
+    let run = if own {
+        cat!("omabox look app -b ", name, " --")
+    } else {
+        cat!("omabox look app --overlay ", dir, " --")
+    };
+    let hint = look_exit_hint_as(e, &run, cmd, tail);
+    let fix = match (own, hint.is_empty()) {
+        (true, _) => cat!(
+            "down, then up -b ",
+            name,
+            " --overlay ",
+            dir,
+            " (or --ro-bind, read-only) mounts it"
+        ),
+        (false, true) => cat!(run, " ", cmd.join(&b' '), " mounts it"),
+        (false, false) => cat!("--overlay ", dir, " on the look mounts it"),
+    };
+    let mut v = vec![cat!(head, "; ", fix)];
+    v.extend(hint);
+    v
+}
+
+/// Where NEEDLE first is in HAY.
+fn pos(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 /// ARGS that start `-b NAME KIND`, as `KIND -b NAME ...`; None for any others.
@@ -904,13 +964,23 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     run.push(b"--");
     run.extend(a.cmd.iter().map(Vec::as_slice));
     let r = ob(&run);
+    // A program named relative to a folder the box lacks: run's note, as the look's (finding 743),
+    // in place of a 126/127 hint that would fail again in the box HOME.
+    let cwd = run_cwd_said(&r.err);
     if !r.ok {
         // One that ended at once ran: its end and its output are the report.
         if let Some((end, log)) = ended_at_once(&r.err) {
             problems.push(cat!("it ", end, ", before opening a window"));
             let output = std::fs::read(shell::path(&log)).unwrap_or_default();
             problems.extend(problem_lines(&output));
-            notes.extend(look_exit_hint(&end, &a.cmd, &output));
+            notes.extend(look_exit_notes(
+                &end,
+                cwd.as_ref(),
+                a.own,
+                name,
+                &a.cmd,
+                &output,
+            ));
             out(report(
                 &[("screenshot", b"none")],
                 &problems,
@@ -956,7 +1026,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             // A script not executable (126) or named without ./ (127): the look that runs it (#471).
             if let Some(e) = &ended {
                 let tail = std::fs::read(shell::path(&log)).unwrap_or_default();
-                notes.extend(look_exit_hint(e, &a.cmd, &tail));
+                notes.extend(look_exit_notes(e, cwd.as_ref(), a.own, name, &a.cmd, &tail));
             }
         }
         Some(w) => {
@@ -2024,6 +2094,68 @@ mod tests {
         assert_eq!(
             look_exit_hint(b"exited with status 126, x", &cmd, tail).len(),
             1
+        );
+    }
+
+    /// Finding 743: a look's program named relative to a folder its box does not have: run's note,
+    /// with the look that mounts it, and a 126/127 hint on that look, not one that fails again.
+    #[test]
+    fn a_look_from_a_folder_its_box_lacks() {
+        let err = b"omabox: note: hello.py is relative to /p/x, which box 'look-1' does not have: the command runs in the box HOME (/home/sbx); run --overlay /p/x (or --ro-bind, read-only) mounts it\nomabox: run: other\n";
+        let cwd = run_cwd_said(err);
+        let head = b"hello.py is relative to /p/x, which box 'look-1' does not have: the command runs in the box HOME (/home/sbx)";
+        assert_eq!(cwd, Some((head.to_vec(), b"/p/x".to_vec())));
+        assert!(run_cwd_said(b"omabox: run: x\n").is_none());
+        let tail = b"setsid: failed to execute hello.py: No such file or directory\n";
+        let cmd = w(&["hello.py"]);
+        let v = look_exit_notes(
+            b"exited with status 127",
+            cwd.as_ref(),
+            false,
+            b"look-1",
+            &cmd,
+            tail,
+        );
+        assert_eq!(
+            v[0],
+            cat!(head, "; --overlay /p/x on the look mounts it"),
+            "{v:?}"
+        );
+        assert_eq!(v.len(), 2, "{v:?}");
+        // (the 127 hint names a file in the caller's folder only when there is one: here, none)
+        let v = look_exit_notes(
+            b"exited with status 2",
+            cwd.as_ref(),
+            false,
+            b"look-1",
+            &cmd,
+            b"",
+        );
+        assert_eq!(
+            v,
+            [cat!(
+                head,
+                "; omabox look app --overlay /p/x -- hello.py mounts it"
+            )]
+        );
+        let v = look_exit_notes(
+            b"exited with status 2",
+            cwd.as_ref(),
+            true,
+            b"mine",
+            &cmd,
+            b"",
+        );
+        assert_eq!(
+            v,
+            [cat!(
+                head,
+                "; down, then up -b mine --overlay /p/x (or --ro-bind, read-only) mounts it"
+            )]
+        );
+        assert_eq!(
+            look_exit_notes(b"exited with status 2", None, false, b"look-1", &cmd, b""),
+            Vec::<Vec<u8>>::new()
         );
     }
 
