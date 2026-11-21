@@ -14776,6 +14776,62 @@ from them.
     bar on each monitor and a scrim: sizes at scale 1 and 1.25, `-g`'s pixels, --json, click --in,
     --fit, --grid, --changed, --burst, --monitor, the scrim); layer_pick's unit test.
 
+739. **The benchmark at three runs: qwen 14/15 in both harnesses, gpt-oss 7/15 and 2/15**
+    (2026-11-21, #471 part 1; the bench is 726's). omabox 1.5.0 (4a2c218) and its skill as
+    shipped, qwen3.8-27b (IQ3_S) and gpt-oss-20b (MXFP4), both text only, x pi and OpenCode x the
+    five tasks x 3 runs: 60 runs, boxes on the iGPU, guard on. Pass, then the median tool calls
+    and seconds of a run:
+
+    | Task | qwen / pi | qwen / OpenCode | gpt-oss / pi | gpt-oss / OpenCode |
+    |---|---|---|---|---|
+    | app | 3/3, 9, 78 s | 3/3, 10, 104 s | 0/3, 11, 28 s | 1/3, 6, 19 s |
+    | page | 3/3, 12, 87 s | 3/3, 16, 184 s | 2/3, 7, 18 s | 0/3, 11, 51 s |
+    | plugin | 3/3, 8, 40 s | 3/3, 9, 81 s | 2/3, 7, 13 s | 1/3, 12, 22 s |
+    | setting | 3/3, 14, 90 s | 3/3, 18, 185 s | 0/3, 24, 41 s | 0/3, 31, 101 s |
+    | theme | 2/3, 25, 269 s | 2/3, 22, 441 s | 3/3, 7, 20 s | 0/3, 8, 24 s |
+    | all | 14/15, 12, 87 s | 14/15, 14, 154 s | 7/15, 7, 19 s | 2/15, 11, 25 s |
+
+    By task over all four: app 7/12, page 8/12, plugin 9/12, setting 6/12, theme 7/12. Of the 23
+    failures, read in their transcripts (the run's `results.md`): **15 model errors**, all
+    gpt-oss's (8 of its 15 OpenCode runs ran no omabox command at all: headless Chromium outside a
+    box, a greeting decoded from the source, OpenCode's image generator asked for the screenshot,
+    the right command written into a file instead of run; three setting runs set the gaps and
+    never read them back, which the same line of hyprland.md says); **6 bench errors**; one
+    **wrong default** (`omabox run python3 hello.py`, no box and no `-d`, waits for the GTK app to
+    end and says nothing: the harness killed it at 120 s); one **confusing message** (`omabox run
+    hyprctl keyword gaps 0 40` and nine spellings: Hyprland's bare `unknown request`, while 728's
+    hint is only on `omabox hyprctl keyword`). No missing doc, no run lost to too many steps.
+    Without the bench errors: qwen 15/15 and 14/14 (one run lost), gpt-oss 10/15 and 3/15.
+    *The bench errors*: (1) `check_safety`'s tool pattern (`test/bench/lib.sh`: the class before
+    the tool names holds a space) takes any word for a command's start, so a name matches as an
+    argument too: theme.qwen.pi.3 failed on
+    `command -v omarchy-theme-set` alone (the rest of its check passes), plugin.gpt-oss.pi.2 on
+    `which omarchy-shell` (that run did reach for the desktop, by a bare `omarchy-launch-shell`
+    the list lacks, so its verdict stands); the other way, a line that calls omabox anywhere is
+    exempt whole (a bare `hyprctl keyword` and `dispatch` joined with ` ; ` after an `omabox
+    run`, an `omarchy-theme-set --help` on a line grepping `skills/omabox/ref`), and `hyprctl
+    --instance SIG keyword` is not matched (that run reached the outer Hyprland past the guard,
+    which only changes `HYPRLAND_INSTANCE_SIGNATURE`). (2) `check_cleanup` runs as the agent
+    exits, but a session's own box goes at its reaper's next look, 60 s at most (`poll_every`):
+    three gpt-oss runs that did the task in a bare `up` box and never called `down` failed on it.
+    (3) OpenCode exits 1 when a tool asked for a permission (a web search), whatever the task
+    did: a run that passed every check failed on `harness`. (4) earlyoom killed llama-server
+    once, mid-run (host memory at 5 %). lib.sh is not changed here. *Against 726* (qwen, one run,
+    the then-short skill: pi 5/5 in 60 calls, OpenCode 5/5 in 83): three runs give the same pass
+    rate once the bench's errors are out, and 65-96 calls a set of five in either harness; **no
+    run OCR'd** (726: every plugin run), plugin went from 17-18 calls to a median of 8-9 (727's
+    `text:`), setting to 14-18 (726: 19-28) with every qwen run finding `lua 'hl.config(...)'`
+    and `getoption` (728); `look` was the first omabox command in 9 and 11 of 15 (726: 3-4 of
+    5). Theme is now qwen's costliest task
+    (median 22-25 calls): all six ran `look theme`, five then sampled its shot's pixels to check
+    what the report had said. Every qwen run still Read a PNG it cannot see. The error lines the
+    runs hit, with what each model did next, are listed for #471 part 2; the ones that name no
+    next command lead with `run`'s hyprctl output (24 hits in two runs), `no box 'NAME' is up`
+    after a look's throwaway box was gone (half of its 14), `run -d` exits 126/127 with no
+    `python3 FILE`, and two of omabox's own: `-b NAME look page FILE` is refused as `unknown
+    option page`, and `look page` reports its window as `chromium` while its class is
+    `chrome-...-Default`, so `--window chromium` matches nothing.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
