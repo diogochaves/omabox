@@ -5,6 +5,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+## 1.5.1 — 2026-11-21
+
+`omabox shot --layer SEL`: a shot of the bar, a panel or a menu by the selector `tree`, `click` and
+`wait` take. Every error line agents hit in a three-run benchmark with local models now ends with
+the command that fixes it, and the agent guard refuses `hyprctl --instance`, which reached the
+user's Hyprland past it. Update.
+
 ### Added
 - **`omabox shot --layer SEL`: a shot of the bar, a panel or a menu** ([#473](https://github.com/diogochaves/omabox/issues/473)):
   the layer's rectangle of the screen, by the selector `tree`, `click` and `wait` take (its
