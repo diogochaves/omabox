@@ -1,19 +1,19 @@
 #!/bin/sh
 # The agent guard's hyprctl (#476): first on a guarded agent's PATH, as quickshell is. The guard's
-# HYPRLAND_INSTANCE_SIGNATURE names no session, but hyprctl's `instances` lists the user's, and
-# `-i`/`--instance SIG` (or the session's number in that list) talks to one: a benchmark run did
-# (finding 739), and reached the outer Hyprland, on a real machine the user's desktop. Refuse both;
-# the rest goes on to the next hyprctl on PATH, and when the guard's signature could reach nothing,
+# HYPRLAND_INSTANCE_SIGNATURE names no session, but `-i`/`--instance SIG` (or a session's number in
+# `hyprctl instances`) talks to one: a benchmark run did (finding 739), and reached the outer
+# Hyprland, on a real machine the user's desktop. Refuse it. `instances` itself only reads, and
+# every omabox before 1.5.1 finds the host session with it from a guarded shell (`omabox host`, the
+# suite): it goes on, as the rest goes on to the next hyprctl on PATH, and when the guard's signature could reach nothing,
 # its failure is followed by the command to run instead.
 # hyprctl's parser (0.56, 0.57): -i and --instance only as words of their own, anywhere before a `--`
 # (after it every word is the request's); --instance=SIG is refused too, which hyprctl takes for an
-# unknown option today. The request is `instances` when its words, joined with spaces after a `/`,
-# hold "/instances", as hyprctl looks for it.
+# unknown option today.
 # Not caught (the guard is not a boundary, SECURITY.md): a caller that sets the signature itself,
 # names the binary by its path, or talks to the socket directly. In a box, and for `omabox host`, the
 # guard's directory is off PATH and this is not reached; omabox's own hyprctl skips it (host.rs).
 r=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-what="" req="" opts=1 batch=""
+what="" opts=1 batch=""
 for a in "$@"; do
   if [ -n "$opts" ]; then
     case $a in
@@ -23,9 +23,7 @@ for a in "$@"; do
       -?*) continue ;;
     esac
   fi
-  req="$req $a"
 done
-[ -z "$what" ] && [ -z "$batch" ] && case "/${req# }" in */instances*) what=instances ;; esac
 next="For a box's Hyprland: omabox hyprctl -b BOX ... Only when the user asked for their real desktop: omabox host -- hyprctl ..."
 if [ -n "$what" ]; then
   echo "omabox guard: not running hyprctl $what here: from this shell it reaches the user's desktop (their Hyprland, not a box's). $next" >&2

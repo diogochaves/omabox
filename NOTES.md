@@ -14887,7 +14887,7 @@ from them.
     reason, `shot: --layer or -g, not both` giving the `-g` command, `--in: ... is not a shot of
     box` for a look's shot, look's `summon: no live bar widget`, and `run -d -- cat $(shot path)`'s
     plainer `cp` on the host.
-741. **The guard's hyprctl: no `instances`, no `-i`/`--instance`** (2026-11-21, #476). Under the
+741. **The guard's hyprctl: no `-i`/`--instance`** (2026-11-21, #476). Under the
     guard `HYPRLAND_INSTANCE_SIGNATURE=omabox-guard` names no session, so a bare `hyprctl` fails
     with `Couldn't connect to $XDG_RUNTIME_DIR/hypr/omabox-guard/.socket.sock. (4)`; a benchmark
     run (739) then ran `hyprctl instances` and `hyprctl --instance SIG keyword ...`, which reached
@@ -14922,6 +14922,11 @@ from them.
     exit 4, one line; a request, `-i` after `--` and a batch go on to a stub, whole; the real
     hyprctl's line then the guard's, status 4; `omabox host` still finds the stand-in session from
     a guarded shell), `exec.rs`'s `caller_path_as_bash` (`own_path`).
+    Amended the same day: `instances` goes on. It only reads, and every omabox built before this
+    (the main checkout's own build until rebuilt, worktrees, an installed 1.5.0) finds the host
+    session with `hyprctl -j instances` from a guarded shell: refusing it broke `omabox host` and
+    the suite's preflight in every guarded shell the moment the stand-in reached main. `-i`/
+    `--instance` alone stops what the benchmark run did.
 
 742. **The benchmark's checks read commands as a shell does, wait for the reaper, and leave a
     lost model server unscored** (2026-11-21, #475; test-only). 739's bench errors came from

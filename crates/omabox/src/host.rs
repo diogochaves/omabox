@@ -23,8 +23,8 @@ pub const PASS_KEY: &str = "SUPER + ALT + ESCAPE";
 /// The signature the instances call is made under (the agent guard's).
 const GUARD: &str = "omabox-guard";
 
-/// The host's hyprctl, found on PATH past a guard's directory: the guard's stand-in refuses
-/// `instances`, which host_session asks (#476).
+/// The host's hyprctl, found on PATH past a guard's directory (#476): what omabox asks of the
+/// user's session is its own, not the agent's, so the guard's stand-in is no part of it.
 fn hyprctl() -> std::process::Command {
     let mut c = crate::sig::command("hyprctl");
     // (std looks the program up on the child's PATH when it is set; untouched without a guard on it)

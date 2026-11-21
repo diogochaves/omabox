@@ -19647,7 +19647,7 @@ t_unit_guard_exec_host() {
   local GUARDED=("${GUARDED[@]}" XDG_RUNTIME_DIR="$hrt")
   check_eq "host from a guarded shell: the session's Wayland display and signature" "wayland-sti $hsig" \
     "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo $WAYLAND_DISPLAY $HYPRLAND_INSTANCE_SIGNATURE' 2>/dev/null)"
-  # (host finds the session with the real hyprctl's instances, past the guard's, which refuses it: #476)
+  # (host finds the session with the real hyprctl's instances, past the guard's: #476)
   check_match "host: and hyprctl reaches it" '"tag": "stand-in"' "$("${GUARDED[@]}" "$CLI" host -- hyprctl -j version 2>/dev/null)"
   check "...the stand-in heard it" grep -qx j/version "$hrt/requests.log"
   # #476: the guard's hyprctl. Under the guard HYPRLAND_INSTANCE_SIGNATURE names no session, but
@@ -19662,21 +19662,23 @@ t_unit_guard_exec_host() {
   if [ "$hc" = "$ROOT/share/guard/hyprctl" ]; then
     local a
     for a in "-i $hsig keyword general:gaps_out 0" "--instance $hsig keyword general:gaps_out 0" "-j -i 0 clients" \
-      "clients -i 0" "--instance=$hsig version" "instances" "-j instances"; do
+      "clients -i 0" "--instance=$hsig version"; do
       # shellcheck disable=SC2086 # (the words of a)
       check_match "...hyprctl $a refused, naming omabox hyprctl" \
-        "^omabox guard: not running hyprctl (-i|--instance|instances) here: .*omabox hyprctl -b BOX .*Only when the user asked for their real desktop: omabox host -- hyprctl " \
+        "^omabox guard: not running hyprctl (-i|--instance) here: .*omabox hyprctl -b BOX .*Only when the user asked for their real desktop: omabox host -- hyprctl " \
         "$("${hx[@]}" hyprctl $a 2>&1)"
     done
     check_eq "...with exit 4" 4 "$("${hx[@]}" hyprctl --instance "$hsig" dispatch exec foot >/dev/null 2>&1; echo $?)"
-    check_eq "...one line" 1 "$("${hx[@]}" hyprctl instances 2>&1 | wc -l)"
+    check_eq "...one line" 1 "$("${hx[@]}" hyprctl -i 0 clients 2>&1 | wc -l)"
+    # (instances only reads, and omabox before 1.5.1 finds the host session with it from a guarded shell)
+    check_eq "...instances goes on (it only reads)" "real hyprctl reached: -j instances" "$("${hx[@]}" hyprctl -j instances 2>&1)"
     check_eq "...a request goes on, its words whole" "real hyprctl reached: -j clients" "$("${hx[@]}" hyprctl -j clients 2>&1)"
     check_eq "...and a batch, whose instances is a request to the session (hyprctl lists none)" "real hyprctl reached: --batch instances" \
       "$("${hx[@]}" hyprctl --batch instances 2>&1 | head -n 1)"
     check_eq "...so does -i after --, a request's word" "real hyprctl reached: -- dispatch exec foot -i" \
       "$("${hx[@]}" hyprctl -- dispatch exec foot -i 2>&1)"
   else
-    no "...which refuses -i, --instance and instances" "not run: hyprctl under guard exec is [$hc], not the guard's"
+    no "...which refuses -i and --instance" "not run: hyprctl under guard exec is [$hc], not the guard's"
   fi
   if command -v hyprctl >/dev/null; then
     # The real one, past the guard's: the guard's signature reaches nothing, and the guard says what to

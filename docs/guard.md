@@ -36,7 +36,7 @@ session's and talks to the shell's own socket. The guard leaves an empty `omabox
 runtime directory, so the guard's display exists and `omarchy-shell` stays with it, and its own
 `share/guard/omarchy-shell` refuses with a reason. `hyprctl` has its own way past the signature:
 `hyprctl instances` lists your sessions and `-i`/`--instance SIG` talks to one. The same PATH puts
-`share/guard/hyprctl` first, which refuses both and names `omabox hyprctl` (and `omabox host --
+`share/guard/hyprctl` first, which refuses `-i`/`--instance` (not `instances`, which only reads) and names `omabox hyprctl` (and `omabox host --
 hyprctl` for your own desktop, when you asked), and after a request that the guard's signature
 cannot reach, says the same.
 
