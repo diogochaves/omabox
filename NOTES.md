@@ -15043,6 +15043,16 @@ from them.
     -d -- cat SHOT`'s note and line); t_unit_broker_side's throwaway that fails (its up said why).
     Not arranged in a box: up killed by a signal (the pure line
     only; up refusing with its reason was run by hand), `--in` a shot of another box that is up.
+745. **Two test-side failures of the 1.5.1 release run** (2026-11-21). **t_shot_layer's `--changed`
+    after the bar's text changed** gave a crop from x=0 to the bar's centre (953-995 px, not under
+    300) on the AMD iGPU under load and in the plain-Arch VM (virgl): four parallel runs on the iGPU
+    with stock 0.56.2 failed 4 of 4. The centred `shot bar` looked the same in both shots but its
+    pixels differed (a diff from x=8 to 982): the mark's new glyphs (`CHANGED`) made Qt redraw the
+    other text, so `--changed` reported a real change. The fixture's centred text now carries those
+    glyphs from the start (`shot bar CHANGED`): the same four parallel runs pass 4 of 4, an 84 px
+    crop. **t_unit_install's AUR check** read `packaging/aur/omabox/PKGBUILD`, which a release
+    tarball has not had since 7615d52 (`packaging/ export-ignore`); the plain-Arch VM runs from such
+    a tarball, so it failed there. It skips without the recipe now.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -15924,8 +15924,13 @@ t_unit_install() {
     "$( { grep -B1 -F 'make -s -C "$ROOT/tools/$t"' "$ROOT/install.sh" | sed -n 's/^for t in \(.*\); do$/\1/p' | tr ' ' '\n'
       # (and the optional ones built on a line of their own when their headers are there: qtext, #467)
       grep -oE 'make -s -C "\$ROOT/tools/[a-z]+"' "$ROOT/install.sh" | sed -E 's,.*/tools/([a-z]+)",\1,'; } | LC_ALL=C sort -u | paste -sd ' ')"
-  check_eq "...the AUR package too" "$want" \
-    "$(sed -n 's/^_tools=(\(.*\))$/\1/p' "$ROOT/packaging/aur/omabox/PKGBUILD" | tr ' ' '\n' | LC_ALL=C sort | paste -sd ' ')"
+  # (a release tarball has no packaging/, .gitattributes: the plain-Arch VM runs from one, finding 745)
+  if [ -f "$ROOT/packaging/aur/omabox/PKGBUILD" ]; then
+    check_eq "...the AUR package too" "$want" \
+      "$(sed -n 's/^_tools=(\(.*\))$/\1/p' "$ROOT/packaging/aur/omabox/PKGBUILD" | tr ' ' '\n' | LC_ALL=C sort | paste -sd ' ')"
+  else
+    skip "...the AUR package too" "no packaging/: a release tarball leaves it out"
+  fi
   # The XDG dirs too: the session sets them, and install.sh's `setup --aquamarine` builds under the
   # data dir when ROOT is no checkout (it once did so in the user's own, from an --installed run).
   local -x XDG_DATA_HOME=$h/.local/share XDG_CACHE_HOME=$h/.cache XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state
@@ -22082,7 +22087,7 @@ ShellRoot {
       anchors { top: true; left: true; right: true }
       implicitHeight: 30
       color: "#336699"
-      Text { anchors.centerIn: parent; text: "shot bar"; color: "white" }
+      Text { anchors.centerIn: parent; text: "shot bar CHANGED"; color: "white" }  // (CHANGED: the mark's glyphs already drawn, so its change redraws no other text, #477)
       Text { x: 8; anchors.verticalCenter: parent.verticalCenter; text: mark.text(); color: "white" }
       FileView { id: mark; path: "/tmp/shl-mark"; watchChanges: true; printErrors: false; onFileChanged: reload() }
     }
