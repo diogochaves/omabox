@@ -1829,6 +1829,29 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
     }
 }
 
+/// A problem's LINE cut to WIDTH characters as cut_line cuts it, except the commands it ends with: a
+/// last `(...)` that names an omabox command is kept whole after the cut (#471: `its Hyprland did not
+/// answer (h… (+62 chars)` lost `omabox log -b NAME; omabox down NAME`).
+pub fn cut_keep_command(l: &[u8], width: usize) -> Vec<u8> {
+    let plain = crate::cmd::log::cut_line(l, width);
+    if plain.len() == l.len() || !l.ends_with(b")") {
+        return plain;
+    }
+    let Some(open) = l.iter().rposition(|&c| c == b'(') else {
+        return plain;
+    };
+    let tail = &l[open..];
+    let n = |v: &[u8]| v.iter().filter(|&&b| (b & 0xc0) != 0x80).count();
+    if !crate::exit::contains(tail, b"omabox ") || n(tail) * 2 > width {
+        return plain;
+    }
+    let head = l[..open].strip_suffix(b" ").unwrap_or(&l[..open]);
+    let mut v = crate::cmd::log::cut_line(head, width - n(tail) - 1);
+    v.push(b' ');
+    v.extend_from_slice(tail);
+    v
+}
+
 /// The report, as the issue drew it: HEAD's lines (`screenshot: PATH`, `window: ...`), the problems,
 /// notes, OUTPUT's first lines (none: no such part), the box kept.
 pub fn report(
@@ -1847,8 +1870,12 @@ pub fn report(
         r.extend(b"problems: none\n");
     } else {
         r.extend(b"problems:\n");
+        // (one of several lines, as a command's stderr can be: each line cut on its own)
         for p in problems.iter().take(PROBLEMS_MAX) {
-            r.extend(cat!("  ", cut(p), "\n"));
+            let p = p.strip_suffix(b"\n").unwrap_or(p);
+            for l in p.split(|&c| c == b'\n').filter(|l| !l.is_empty()) {
+                r.extend(cat!("  ", cut_keep_command(l, LINE_WIDTH), "\n"));
+            }
         }
         if problems.len() > PROBLEMS_MAX {
             r.extend(format!("  ... and {} more\n", problems.len() - PROBLEMS_MAX).into_bytes());
@@ -1913,6 +1940,44 @@ mod tests {
         );
         assert_eq!(kind_first(&w(&["-b", "x", "-o", "f.png"])), None);
         assert_eq!(kind_first(&w(&["page", "f.html", "-b", "x"])), None);
+    }
+
+    /// #471: a problem shortened keeps the commands it ends with; each of its lines is cut on its
+    /// own.
+    #[test]
+    fn a_cut_problem_keeps_its_commands() {
+        let hung = format!(
+            "omabox: box 'look-1': {} its Hyprland did not answer (hung? omabox log -b look-1; omabox down look-1)",
+            "x".repeat(190)
+        );
+        let c = String::from_utf8(cut_keep_command(hung.as_bytes(), 200)).unwrap();
+        assert!(
+            c.ends_with(" (hung? omabox log -b look-1; omabox down look-1)"),
+            "{c}"
+        );
+        assert!(c.contains("… (+"), "{c}");
+        // Short enough: as it is; no omabox command at its end: cut_line's cut.
+        assert_eq!(
+            cut_keep_command(b"short (omabox x)", 200),
+            b"short (omabox x)"
+        );
+        let long = "y".repeat(250) + " (not a command)";
+        assert_eq!(
+            cut_keep_command(long.as_bytes(), 200),
+            crate::cmd::log::cut_line(long.as_bytes(), 200)
+        );
+        let two = format!("shot: omabox: warning: the shell is gone\n{hung}\n");
+        let r = String::from_utf8(report(&[], &[two.into_bytes()], &[], None, None)).unwrap();
+        assert!(
+            r.starts_with(
+                "problems:\n  shot: omabox: warning: the shell is gone\n  omabox: box 'look-1': x"
+            ),
+            "{r}"
+        );
+        assert!(
+            r.ends_with("(hung? omabox log -b look-1; omabox down look-1)\n"),
+            "{r}"
+        );
     }
 
     /// #471: a page's window line names a selector that picks it, not the word chromium.
