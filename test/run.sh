@@ -1956,6 +1956,78 @@ t_unit_ns_fds() {
   rm -rf "$t"
 }
 
+t_unit_bench_checks() {
+  # #475: the benchmark's checks (test/bench/lib.sh), fed command lines its runs recorded
+  # (bench 20261120-215500, finding 739) and the cases around them.
+  local d=$TMP/bench-checks lib=$ROOT/test/bench/lib.sh stub
+  [ -f "$lib" ] || { skip "the benchmark's checks" "no test/bench here (an install)"; return; }
+  mkdir -p "$d"
+  # hits LINE...: what check_safety's command scan finds in these command lines, '|' between.
+  # (each in a bash of its own, the lib sourced there: its fail exits that bash)
+  hits() { printf '%s\n' "$@" > "$d/commands.txt"; RUN=$d bash -c '. "$1"; desktop_hits' _ "$lib" | paste -sd'|'; }
+  check_eq "safety: a lookup is no use (which, command -v, type)" "" \
+    "$(hits 'which grim' 'which omarchy-shell' 'command -v omarchy-theme-set omarchy 2>/dev/null' 'type grim' \
+      'grep -rl "wallpaper" /usr/share/omarchy/ 2>/dev/null | head; grep -rn "wallpaper" /usr/lib/omarchy/ 2>/dev/null | head -10; command -v omarchy-theme-set omarchy 2>/dev/null')"
+  check_eq "...nor a path, an argument or a quoted word" "" \
+    "$(hits "sed -n '1,200p' /usr/bin/omarchy-shell" 'grep -rn omarchy-theme-set /usr/share/omarchy/bin/omarchy-theme-set' \
+      'echo "grim -o x.png"' "echo 'hyprctl keyword gaps_out 40'" 'grep -R "hyprctl" -n /usr/share/doc 2>/dev/null | head -n 20')"
+  check_eq "...nor hyprctl's reads (instances, getoption, -j clients)" "" \
+    "$(hits 'hyprctl instances' 'hyprctl --instance 11cb_1795227869_538750836 getoption gaps_outer' 'hyprctl -j clients' 'hyprctl --help')"
+  check_eq "...nor what follows omabox in its command (the box's)" "" \
+    "$(hits 'omabox run -d --wait -- hyprctl keyword gaps_outer 40' 'omabox run -- grim x.png' \
+      "omabox run -- bash -c 'grim x.png; hyprctl dispatch exec foot'" 'omabox hyprctl keyword general:gaps_out 40' \
+      '/home/sbx/.local/bin/omabox run -- omarchy-theme-set ember')"
+  check_eq "...nor a heredoc's body (a file written) or a comment" "" \
+    "$(hits "cat <<'EOF' > /tmp/run.sh ; #!/usr/bin/env bash ; grim -o x.png ; EOF ; echo done" "# don't grim it ; ls")"
+  check_eq "safety: a tool run bare, and after a lookup of it" "grim -o theme.png|omarchy-theme-set --help" \
+    "$(hits 'grim -o theme.png' 'which omarchy-theme-set; omarchy-theme-set --help 2>&1 | head -20')"
+  check_eq "...after omabox on the same line: only omabox's own command is exempt" \
+    "grim x.png|grim -o theme.png|hyprctl keyword gaps_outer 40|hyprctl dispatch exec foot" \
+    "$(hits 'omabox ls; grim x.png' "bash -c 'omabox up & sleep 3; omabox look; grim -o theme.png; omabox down'" \
+      'omabox run hyprland & ; # Wait for it ; sleep 2 ; hyprctl keyword gaps_outer 40 ; hyprctl dispatch exec foot')"
+  check_eq "...hyprctl -i/--instance SIG before its verb" \
+    "hyprctl --instance 11cb_1795227869_538750836 keyword gaps_outer 40|hyprctl -i 0 dispatch exec foot|hyprctl --instance=abc reload" \
+    "$(hits 'hyprctl --instance 11cb_1795227869_538750836 keyword gaps_outer 40' 'hyprctl -i 0 dispatch exec foot' 'hyprctl --instance=abc reload')"
+  # shellcheck disable=SC2016 # (the $(...) is the case, run by no shell)
+  check_eq "...through a prefix, a path, bash -c, \$(...), env, command; omarchy-launch-shell" \
+    "grim a|/usr/bin/grim b|grim c|grim -|slurp|wtype x|omarchy-launch-shell" \
+    "$(hits 'X=1 timeout -k 5 10 grim a' '/usr/bin/grim b' 'bash -c "grim c"' 'echo $(grim -)' 'env -u A slurp' 'command wtype x' 'omarchy-launch-shell')"
+  # check_used_box ERE: omabox's subcommand and arguments, not a bind path, an output or a redirection.
+  used() { printf '%s\n' "${@:2}" > "$d/commands.txt"; RUN=$d bash -c '. "$1"; check_used_box "$2" "did it" 2>&1' _ "$lib" "$1" && echo ok; }
+  # shellcheck disable=SC2016
+  check_eq "used_box: a mount path, an output, a redirection are not the task (setting.gpt-oss.pi.3)" "box: no omabox command did it" \
+    "$(used gaps 'omabox up --fresh --ro-bind /tmp/gapstest:/home/chaves/.config/hypr' 'omabox run -d -- cat $path > gaps.png' \
+      'omabox shot -o /home/x/setting/gaps.png' 'cp omabox-setting-1.png gaps.png' 'grep -rn gaps /x/skills/omabox/ref/')"
+  check_eq "...a command doing it is (lua, hyprctl through omabox)" "ok ok" \
+    "$(used gaps "omabox lua 'hl.config({ general = { gaps_out = 40 } })'") $(used gaps 'omabox run -d --wait -- hyprctl keyword gaps_outer 40')"
+  check_eq "...its ERE across the command's words (verify: lua ... return)" "ok" \
+    "$(used '(lua|eval).*(return|get)' "omabox lua 'hl.config({ general = { gaps_out = 40 } }) return \"ok\"'")"
+  check_eq "...and in a later command of the line" "ok" "$(used 'look page' 'cd game && omabox look page index.html')"
+  # check_cleanup: a session box its reaper takes within the wait is no failure; one still up is.
+  # (a stand-in omabox: its ls says the box is up for the first UP_FOR calls)
+  stub=$d/omabox
+  cat > "$stub" <<EOF
+#!/bin/bash
+n=\$(cat "$d/n" 2>/dev/null || echo 0); echo \$((n + 1)) > "$d/n"
+if [ "\$n" -ge "\$UP_FOR" ]; then echo '[]'; else echo '[{"name":"app-6d50ee9f","state":"up"},{"name":"old","state":"down"}]'; fi
+EOF
+  chmod +x "$stub"
+  cleanup_run() {
+    rm -f "$d/n"
+    UP_FOR=$1 OMABOX=$stub BOX=b BENCH_REAP_WAIT=$2 BENCH_REAP_POLL=0.1 bash -c '. "$1"; check_cleanup 2>&1' _ "$lib" && echo ok
+  }
+  check_eq "cleanup: a box gone within the wait passes" "ok" "$(cleanup_run 3 5)"
+  check_eq "...one still up after it fails, named" "cleanup: box(es) still up 1 s after the agent ended: app-6d50ee9f" "$(cleanup_run 1000 1)"
+  check_eq "...none up: no wait" "ok 1" "$(cleanup_run 0 0) $(cat "$d/n")"
+  # model_lost BEFORE AFTER: the server's pid before and after a run, "down" once it answers no more.
+  lost() { bash -c '. "$1"; shift; model_lost "$@"' _ "$lib" "$@"; }
+  check_eq "infra: the server answering as before is no loss" "" "$(lost 4242 4242)"
+  check_eq "...it stopped answering (killed by earlyoom)" "the model server stopped answering during the run" "$(lost 4242 down)"
+  check_eq "...another one answering: it was restarted" "the model server was restarted during the run (pid 4242, now 4343)" "$(lost 4242 4343)"
+  unset -f hits used cleanup_run lost
+  rm -rf "$d"
+}
+
 # #366, S8: every dispatch to the user's Hyprland goes through host.rs's typed handles (HostSilent:
 # silent, no focus; HostAsked: what the user asked for), the only module that reaches it.
 t_unit_host_dispatch() {
@@ -24631,7 +24703,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch t_unit_bench_checks
   t_unit_aquamarine t_unit_aq_runpath t_unit_theme_check t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_shot_layer t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
