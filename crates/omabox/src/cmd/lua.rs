@@ -103,6 +103,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         v.to_vec()
     } else if let Some(e) = got.strip_prefix(b"error: omabox-lua-error:") {
         let _ = std::io::Write::write_all(&mut std::io::stderr(), &cat!("lua: ", e, "\n"));
+        if let Some(h) = error_hint(&ctx.name, e) {
+            say(h);
+        }
         return Err(Exit(1));
     } else {
         if !box_alive(ctx)? {
@@ -146,6 +149,33 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Err(Exit(1));
     }
     Ok(())
+}
+
+/// The next step after Lua's error E, for box NAME, where its words say what went wrong (#471: the
+/// benchmark's models guessed a window's fields, `w.position`, `w:pos()`, and looped over a window as
+/// a table): what an object has and where a window's place is, or the functions hl has. Lua's own
+/// line is printed before it, as it came.
+fn error_hint(name: &[u8], e: &[u8]) -> Option<Vec<u8>> {
+    let has = |w: &[u8]| crate::exit::contains(e, w);
+    let q = shell::quote_q(name);
+    if has(b"attempt to call a nil value (field '") || has(b"attempt to call a nil value (global '")
+    {
+        return Some(cat!(
+            "lua: no such function; the ones hl has: omabox lua -b ",
+            q,
+            " 'local t = {} for k in pairs(hl) do t[#t + 1] = k end return t' (omabox help lua)"
+        ));
+    }
+    if has(b"HL.") || has(b"(method '") || has(b"attempt to index a nil value") {
+        return Some(cat!(
+            "lua: a window, layer or monitor is an object with fields of its own: omabox lua -b ",
+            q,
+            " 'return hl.get_active_window()' prints them; a window's place and size: omabox hyprctl -b ",
+            q,
+            " activewindow -j (omabox help lua)"
+        ));
+    }
+    None
 }
 
 /// EVAL, a space longer when hyprctl's request for it, `/eval EVAL`, is a multiple of 1023 bytes:
@@ -196,7 +226,28 @@ fn print_values(vals: &[u8], as_json: bool) -> Res<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::eval_padded;
+    use super::{error_hint, eval_padded};
+
+    /// #471: the benchmark's three Lua errors each get the next step; others nothing.
+    #[test]
+    fn lua_errors_name_the_next_step() {
+        let h = |e: &str| error_hint(b"b1", e.as_bytes()).map(|v| String::from_utf8(v).unwrap());
+        let obj = "lua: a window, layer or monitor is an object with fields of its own: omabox lua -b b1 'return hl.get_active_window()' prints them; a window's place and size: omabox hyprctl -b b1 activewindow -j (omabox help lua)";
+        for e in [
+            "lua:1: bad argument #1 to 'for iterator' (table expected, got HL.Window)",
+            "lua:1: attempt to call a nil value (method 'pos')",
+            "lua:1: attempt to index a nil value (field 'position')",
+        ] {
+            assert_eq!(h(e).as_deref(), Some(obj), "{e}");
+        }
+        assert_eq!(
+            h("lua:1: attempt to call a nil value (field 'get_window')").as_deref(),
+            Some(
+                "lua: no such function; the ones hl has: omabox lua -b b1 'local t = {} for k in pairs(hl) do t[#t + 1] = k end return t' (omabox help lua)"
+            )
+        );
+        assert_eq!(h("lua:1: unexpected symbol near 'out'"), None);
+    }
 
     #[test]
     fn eval_off_1023() {
