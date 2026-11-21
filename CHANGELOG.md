@@ -13,7 +13,27 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `click --in` maps it to the screen. A layer not drawn yet is refused naming `wait layer`; one
   spanning its monitor is shot whole, said with the `-g` for a part.
 
+### Changed
+- **Every error line the three-run benchmark hit ends with the command that fixes it** ([#471](https://github.com/diogochaves/omabox/issues/471)):
+  `omabox run hyprctl keyword ...` (itself or in a `bash -c` script) adds keyword's `hl.config`
+  line after hyprctl's bare `unknown request`; a `run -d` that ends at once says, after its log,
+  what to run instead (no `-d` for a command that ends, `omabox hyprctl` for hyprctl, a script's
+  interpreter for 126, `./FILE` for 127, the terminals there for one that is not installed), and
+  so does `look app`'s report; `run` without `-d` says on stderr, once its command has run 10 s,
+  that it waits for it to exit and the `run -d` that leaves it running; `no box is up` for a look's
+  own box, gone with its look, says so and how to keep one (`--keep-box`); `omabox lua` adds the
+  next step after a Lua error about an object's fields or a missing function; `pixel` past 32
+  points says to split them or zoom a shot.
+
 ### Fixed
+- **`omabox -b NAME look page FILE` and `look -b NAME page FILE` were refused** as `look: unknown
+  option page`: `-b NAME` before look's kind is the kind's.
+- **`look page` reported its window as `chromium`**, which `--window chromium` does not select
+  (Chromium's `--app` windows have a class of their own): the line names its address as the
+  selector.
+- **A look's report cut a problem before the commands it ends with** (`its Hyprland did not
+  answer (h… (+62 chars)`): each line of a problem is cut on its own, its last `(... omabox ...)`
+  kept whole.
 - **`diff` on Omarchy 4.0 listed Hyprland's `lastNag`** in an idle box (`+ ~/.local/share/hyprland/`):
   it is noise, as `lastVersion` beside it already was.
 
