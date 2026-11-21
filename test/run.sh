@@ -9684,6 +9684,23 @@ t_hypr_old_dispatch() {
   k=$(( (1023 - (pre + 9) % 1023) % 1023 ))
   out=$(timeout 4 "$CLI" lua -b "$B" "return \"$(head -c "$k" /dev/zero | tr '\0' x)\"" 2>&1); rc=$?
   check_eq "lua: a request a multiple of 1023 bytes long answers at once" "0 $k" "$rc ${#out}"
+  # #471 (finding 740, in a box since #477): Lua's error as it came, then the next step for a guess at
+  # an object's fields (a window's, as the benchmark's models guessed them) or a function hl lacks;
+  # each command the hint names works.
+  local obj="omabox: lua: a window, layer or monitor is an object with fields of its own: omabox lua -b $B 'return hl.get_active_window()' prints them; a window's place and size: omabox hyprctl -b $B activewindow -j (omabox help lua)"
+  out=$(ob lua -b "$B" 'local w = hl.get_windows()[1] return w:pos()' 2>&1); rc=$?
+  check_eq "lua: a method a window lacks: exit 1, Lua's error, then what a window has" \
+    "1 lua: lua:1: attempt to call a nil value (method 'pos')"$'\n'"$obj" "$rc $out"
+  out=$(ob lua -b "$B" 'local w = hl.get_windows()[1] return w.position.x' 2>&1); rc=$?
+  check_eq "...a field it lacks, indexed" "1 lua: lua:1: attempt to index a nil value (field 'position')"$'\n'"$obj" "$rc $out"
+  out=$(ob lua -b "$B" 'return string.rep(hl.get_windows()[1], 2)' 2>&1); rc=$?
+  check_eq "...a window given for a string (got HL.Window)" "1 lua: lua:1: bad argument #1 to 'rep' (string expected, got HL.Window)"$'\n'"$obj" "$rc $out"
+  check_match "...its first command prints the active window's fields (nil for none)" '^(\{.*"address":"0x|nil$)' "$(ob lua -b "$B" 'return hl.get_active_window()' 2>&1)"
+  check "...its second runs" ob hyprctl -b "$B" activewindow -j
+  out=$(ob lua -b "$B" 'hl.nope()' 2>&1); rc=$?
+  check_eq "lua: a function hl lacks: exit 1, Lua's error, then the call that lists hl's" \
+    "1 lua: lua:1: attempt to call a nil value (field 'nope')"$'\n'"omabox: lua: no such function; the ones hl has: omabox lua -b $B 'local t = {} for k in pairs(hl) do t[#t + 1] = k end return t' (omabox help lua)" "$rc $out"
+  check_match "...that call lists them" '"get_windows"' "$(ob lua -b "$B" "$(sed -n "s/.*the ones hl has: omabox lua -b $B '\(.*\)' (omabox help lua)\$/\1/p" <<<"$out")" 2>&1)"
   ob down "$B" >/dev/null
 }
 
@@ -22040,6 +22057,7 @@ t_shot_layer() {
   cat > "$bar/shell.qml" <<'QML'
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import Quickshell.Wayland
 ShellRoot {
   Variants {
@@ -22052,6 +22070,8 @@ ShellRoot {
       implicitHeight: 30
       color: "#336699"
       Text { anchors.centerIn: parent; text: "shot bar"; color: "white" }
+      Text { x: 8; anchors.verticalCenter: parent.verticalCenter; text: mark.text(); color: "white" }
+      FileView { id: mark; path: "/tmp/shl-mark"; watchChanges: true; printErrors: false; onFileChanged: reload() }
     }
   }
   PanelWindow {
@@ -22060,6 +22080,14 @@ ShellRoot {
     exclusionMode: ExclusionMode.Ignore
     anchors { top: true; bottom: true; left: true; right: true }
     color: "#40000000"
+  }
+  // (Omarchy 4.5's bar's namespace, spanning the screen as its surface does: shot says the strip)
+  PanelWindow {
+    WlrLayershell.namespace: "omarchy-bar"
+    WlrLayershell.layer: WlrLayer.Background
+    exclusionMode: ExclusionMode.Ignore
+    anchors { top: true; bottom: true; left: true; right: true }
+    color: "transparent"
   }
 }
 QML
@@ -22095,6 +22123,23 @@ QML
   check_match "--changed after a whole shot of it: nothing changed, exit 0" "^0 omabox: --changed: nothing changed in layer \"t-shotbar\" " "$rc $err"
   err=$(ob shot -b "$B" --layer t-shotscrim --changed -o "$o/c2.png" 2>&1 >/dev/null); rc=$?
   check_match "...of a layer never shot: a whole shot, said why" "^0 .*--changed: no earlier shot of it to compare with: a whole shot of layer \"t-shotscrim\"" "$rc $err"
+  # (#477) what it draws changes (the bar reads a file in the box): a crop of it, where in the screen's
+  # coordinates, click --in it; then nothing changed again, against that crop's moment
+  ob run -b "$B" -- sh -c 'echo CHANGED > /tmp/shl-mark' >/dev/null 2>&1
+  check "its text changed" ob wait -b "$B" --timeout 5s change --since "$o/base.png"
+  err=$(ob shot -b "$B" --layer t-shotbar --changed -o "$o/c3.png" 2>&1 >/dev/null); rc=$?
+  local cw=0 ch=0 cx=-1 cy=-1
+  [[ $err =~ ^omabox:\ --changed\ since\ $o/base\.png\ .*:\ ([0-9]+)x([0-9]+)\ at\ ([0-9]+),([0-9]+)\ of\ layer\ \"t-shotbar\"\ .*click\ with\ --in\ $o/c3\.png$ ]] &&
+    cw=${BASH_REMATCH[1]} ch=${BASH_REMATCH[2]} cx=${BASH_REMATCH[3]} cy=${BASH_REMATCH[4]}
+  check "--changed after its text changed: exit 0, a crop at its left end, said where ($rc $err)" \
+    test "$rc" = 0 -a "$cx" -ge "$lx" -a "$cx" -lt $((lx + 60)) -a "$cy" -ge "$ly" -a "$cw" -gt 0 -a "$cw" -lt 300 -a "$ch" -le "$lh"
+  check_eq "...the image that size" "${cw}x$ch" "$(magick identify -format %wx%h "$o/c3.png" 2>&1)"
+  ob click -b "$B" --in "$o/c3.png" 2 3 >/dev/null 2>&1
+  check_eq "...click --in the crop: the screen's point" "$((cx + 2)), $((cy + 3))" "$(ob hyprctl -b "$B" cursorpos)"
+  away
+  err=$(ob shot -b "$B" --layer t-shotbar --changed -o "$o/c4.png" 2>&1 >/dev/null); rc=$?
+  check_match "...--changed again: nothing changed since that crop, exit 0, no image" \
+    "^0 omabox: --changed: nothing changed in layer \"t-shotbar\" .* since $o/c3\.png .*: no image$" "$rc $err"
   ob shot -b "$B" --fit 0 --layer t-shotbar --burst 2 --every 0 -o "$o/burst" >/dev/null 2>&1
   check_eq "--burst 2: each frame the layer's" "${lw}x$lh ${lw}x$lh" \
     "$(magick identify -format '%wx%h ' "$o/burst/frame-001.png" "$o/burst/frame-002.png" 2>&1 | sed 's/ $//')"
@@ -22102,6 +22147,17 @@ QML
   err=$(ob shot -b "$B" --fit 0 --layer t-shotscrim -o "$o/scrim.png" 2>&1 >/dev/null); rc=$?
   check_eq "a layer spanning the screen: all of it, ${W}x$H" "0 ${W}x$H" "$rc $(magick identify -format %wx%h "$o/scrim.png" 2>&1)"
   check_match "...said, -g for a part" "shot: layer \"t-shotscrim\" .* spans its monitor [A-Z0-9-]+: the shot is all of it, drawn on or not; for a part of it: shot -g" "$err"
+  # (#477) Omarchy's bar spans its screen too (4.5's surface): the strip its monitor reserves named,
+  # here the 30 px the test's bar reserves; that -g shot is the bar's pixels
+  local strip
+  err=$(ob shot -b "$B" --fit 0 --layer omarchy-bar -o "$o/obar.png" 2>&1 >/dev/null); rc=$?
+  check_match "Omarchy's bar spanning the screen: all of it, said with the strip its monitor reserves" \
+    "^0 omabox: shot: layer \"omarchy-bar\" \(pid [0-9]+, ${W}x$H at 0,0\) spans its monitor [A-Z0-9-]+: the shot is all of it, drawn on or not; for its bar, the strip [A-Z0-9-]+ reserves for it: shot -g \"0,0 ${W}x$lh\""$'\n' "$rc $err"
+  strip=$(sed -n 's/.* reserves for it: shot -g "\([^"]*\)"$/\1/p' <<<"$err")
+  ob shot -b "$B" --fit 0 -g "${strip:-0,0 1x1}" -o "$o/strip.png" >/dev/null 2>&1
+  ob shot -b "$B" --fit 0 --layer t-shotbar -o "$o/bar2.png" >/dev/null 2>&1
+  check_eq "...that -g: the bar's ${W}x$lh, its pixels" "${W}x$lh 0" \
+    "$(magick identify -format %wx%h "$o/strip.png" 2>&1) $(magick compare -metric AE "$o/strip.png" "$o/bar2.png" null: 2>&1 | cut -d' ' -f1)"
   out=$(ob shot -b "$B" --layer nope 2>&1); rc=$?
   check_match "--layer naming none: exit 2, the box's layers listed" "^2 omabox: shot: no layer matches nope .*\"t-shotbar\"  pid [0-9]+  top ${lw}x$lh" "$rc $(tr '\n' ' ' <<<"$out")"
   check_match "--layer with -g: refused" "shot: --layer or -g, not both" "$(ob shot -b "$B" --layer t-shotbar -g "0,0 10x10" 2>&1)"
@@ -23969,8 +24025,48 @@ look_app_checks() {
   check_match "...said, with the way out" "no window within 2s \(--timeout for a slower one\)" "$out"
   check_match "look app without a program: refused" "the program goes after --" "$(ob look app 2>&1)"
   check_match "look: an unknown kind refused" "look: app, plugin, theme or page, got nope" "$(ob look nope 2>&1)"
+  look_exit_checks
   left=$(ob ls --json | jq -r '.[].name' | grep -c '^look-' || true)
   check_eq "no look box left" 0 "$left"
+}
+
+# #471 (finding 740) in a box (#477): a program that ends at once with 126 or 127 gets the look that
+# runs it as a note; the caller's next command that finds no box names the look's own box, gone with
+# it. In a git checkout of its own: a box runs a program in the caller's folder only in one. (The
+# missing-terminal line's other form, no terminal at all, needs a box without foot: not arranged.)
+look_exit_checks() {
+  local proj=$TMP/$P-lookx out rc t term='' look
+  mkdir -p "$proj"; git -C "$proj" init -q; printf 'print("hi")\n' > "$proj/hello.py"
+  out=$(cd "$proj" && ob look app -- ./hello.py 2>&1); rc=$?
+  check_eq "a script not executable: 1" 1 "$rc"
+  check_match "...status 126, the look that runs it as a note" $'\n''note: \./hello\.py is not executable: omabox look app -- python3 \./hello\.py'$'\n' "$out"
+  out=$(cd "$proj" && ob look app -- hello.py 2>&1)
+  check_match "a script named without ./: status 127, ./ and its interpreter as a note" \
+    $'\n'"note: hello\.py is not a command on the box's PATH: a file in this folder is \./hello\.py; omabox look app -- python3 hello\.py"$'\n' "$out"
+  for t in alacritty kitty ghostty wezterm konsole xterm; do
+    [ -e "/usr/bin/$t" ] || [ -e "/usr/local/bin/$t" ] || { term=$t; break; }
+  done
+  if [ -n "$term" ]; then
+    out=$(cd "$proj" && ob look app -- "$term" 2>&1)
+    check_match "a terminal this machine lacks ($term): the ones it has as a note" \
+      $'\n'"note: $term is not installed \(a box runs this machine's programs\); the terminals there are: [a-z, -]*foot[a-z, -]*: omabox look app -- [a-z-]+"$'\n' "$out"
+  else skip "look app: a terminal this machine lacks" "every terminal tried is installed"; fi
+  out=$(cd "$proj" && OMABOX=$P-lookgone ob shot 2>&1); rc=$?
+  check_match "the next command finding no box: the caller's last look's box named, exit 1" \
+    "^1 omabox: no box '$P-lookgone' is up; your last look ran in a box of its own, look-[0-9]+, taken down when it ended \(.*--keep-box keeps a look's box: omabox look \.\.\. --keep-box, then -b BOX; or start a box first, omabox up, and a look works in it\)$" "$rc $out"
+  look=$(sed -n 's/.*a box of its own, \(look-[0-9]*\), .*/\1/p' <<<"$out")
+  check_match "...that box by its name: a look's own box" \
+    "^omabox: no box '${look:-look-1}' is up: it was a look's own box, taken down when the look ended \(.*--keep-box keeps" "$(ob shot -b "${look:-look-1}" 2>&1)"
+  check_match "...another caller (another folder): the plain line" "^omabox: no box '$P-lookgone' is up \(" "$(OMABOX=$P-lookgone ob shot 2>&1)"
+  # Finding 743: from a folder in no repo the program runs in the box HOME; the report says so, and
+  # its 127 hint is on the look that mounts the folder, which then runs it.
+  mkdir -p "$proj-nogit"; cp "$proj/hello.py" "$proj-nogit/"
+  out=$(cd "$proj-nogit" && env -u OMABOX "$CLI" look app -- hello.py 2>&1)
+  check_match "a script named without ./ from a folder in no repo: the box lacks the folder, --overlay on the look (finding 743)" \
+    "note: hello.py is relative to $proj-nogit, which box 'look-[0-9]+' does not have: the command runs in the box HOME \(/home/sbx\); --overlay $proj-nogit on the look mounts it" "$out"
+  check_match "...and the 127 hint on that look" \
+    "note: hello.py is not a command on the box's PATH: a file in this folder is \./hello\.py; omabox look app --overlay $proj-nogit -- python3 hello\.py" "$out"
+  check_match "...which runs it" "^  hi$" "$(cd "$proj-nogit" && env -u OMABOX "$CLI" look app --overlay "$proj-nogit" -- python3 hello.py 2>&1)"
 }
 
 # #461 (finding 719): look plugin, a plugin in one call: up --plugin in a throwaway box, its state, the
@@ -24112,9 +24208,21 @@ HTML
   x1=$(magick "${shot%.png}-1.png" -fill black +opaque '#4fc3f7' -trim -format %X info: 2>/dev/null)
   x4=$(magick "${shot%.png}-4.png" -fill black +opaque '#4fc3f7' -trim -format %X info: 2>/dev/null)
   check "...the square moved on the held key (x ${x1:-?} to ${x4:-?})" test "${x4:-0}" -gt "$((${x1:-0} + 40))"
-  out=$(ob look page "$d/broken.html" --net isolated --hold Right 1s 2>&1); rc=$?
+  # #471 (#477): the window line names the selector that picks it (Chromium's --app class is not
+  # "chromium"); the broken page's box kept to try it.
+  check_match "...its window, with the selector that picks it" $'\n''window: chromium "game" [0-9]+x[0-9]+ \((tiled|floating); select it with --window 0x[0-9a-f]+\)'$'\n' "$out"
+  out=$(ob look page "$d/broken.html" --net isolated --hold Right 1s --keep-box 2>&1); rc=$?
   check_eq "a page whose loop throws: 1" 1 "$rc"
   check_match "...the error named, with its file and line" $'\n''problems:'$'\n''  Uncaught ReferenceError: player is not defined \(broken\.html:9\)' "$out"
+  local kb addr
+  kb=$(sed -n 's/^box: \(look-[0-9]*\) kept .*/\1/p' <<<"$out")
+  addr=$(sed -n 's/^window: chromium .*select it with --window \(0x[0-9a-f]*\))$/\1/p' <<<"$out")
+  check_match "...--keep-box: its box kept, named" "^look-[0-9]+ 0x[0-9a-f]+$" "$kb $addr"
+  local wsz; wsz=$(ob windows -b "${kb:-look-1}" --json | jq -r --arg a "${addr:-0x0}" '.[] | select(.address == $a) | "\(.size[0])x\(.size[1])"')
+  check_eq "...the window line's --window $addr picks the page's window (${wsz:-none})" "0 ${wsz:-none}" \
+    "$(ob shot -b "${kb:-look-1}" --window "${addr:-0x0}" --fit 0 -o "$TMP/$P-lookg-win.png" >/dev/null 2>&1; echo $?) $(magick identify -format %wx%h "$TMP/$P-lookg-win.png" 2>/dev/null)"
+  check_eq "...--window chromium does not" 2 "$(ob shot -b "${kb:-look-1}" --window chromium -o "$TMP/$P-lookg-no.png" >/dev/null 2>&1; echo $?)"
+  [ -z "$kb" ] || ob down "$kb" >/dev/null 2>&1
   check_match "...no such file: refused" "look page: no such file" "$(ob look page "$d/nope.html" 2>&1)"
   left=$(ob ls --json | jq -r '.[].name' | grep -c '^look-' || true)
   check_eq "no look box left" 0 "$left"

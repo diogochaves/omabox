@@ -285,7 +285,7 @@ pub fn grab(ctx: &Ctx, label: &str, r: &ShotRef) -> Res<Result<Vec<u8>, Vec<u8>>
         .collect();
     let mut cut = None;
     let win = if let Some((x, y)) = r.screen_at() {
-        if r.kind != b"screen 0,0" || lw.to_string().into_bytes() != whole_w(ctx)? {
+        if r.kind != b"screen 0,0" || format!("{lw}x{lh}").into_bytes() != whole_wh(ctx)? {
             // Off a whole pixel at a fractional scale, as shot -g took it: from one, cut (#423).
             cut = crate::screen::px_cut(ctx, [x, y, lw, lh])?;
             let g = cut.map_or([x, y, lw, lh], |c| c.grab);
@@ -393,10 +393,10 @@ pub fn grab(ctx: &Ctx, label: &str, r: &ShotRef) -> Res<Result<Vec<u8>, Vec<u8>>
     Ok(Ok(tmp))
 }
 
-/// The layout's width now, for "is this screen shot a whole one".
-fn whole_w(ctx: &Ctx) -> Res<Vec<u8>> {
-    let e = crate::screen::extent(ctx)?;
-    Ok(crate::input::wh(&e).0)
+/// The layout's size now (WxH), for "is this screen shot a whole one": a crop at 0,0 as wide as
+/// the screen (a top bar's strip, its layer's shot) is not (#477).
+fn whole_wh(ctx: &Ctx) -> Res<Vec<u8>> {
+    crate::screen::extent(ctx)
 }
 
 fn unread(ctx: &Ctx, label: &str, r: &ShotRef) -> crate::exit::Exit {
