@@ -910,6 +910,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             problems.push(cat!("it ", end, ", before opening a window"));
             let output = std::fs::read(shell::path(&log)).unwrap_or_default();
             problems.extend(problem_lines(&output));
+            notes.extend(look_exit_hint(&end, &a.cmd, &output));
             out(report(
                 &[("screenshot", b"none")],
                 &problems,
