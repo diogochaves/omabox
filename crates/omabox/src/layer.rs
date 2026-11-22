@@ -3,7 +3,7 @@
 //! layer_desc), and the accessibility tree of one (layer_read, #254, finding 358), read by
 //! omabox-tree in the box.
 
-use crate::boxes::meta;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::desk::kb_takers;
 use crate::exec::{ExecOpts, Redir, box_exec, pipe, read_all};
@@ -352,7 +352,7 @@ pub fn layer_qs_note(ctx: &mut Ctx, l: &[u8]) {
     if comm != b"quickshell" && comm != b"qs" {
         return;
     }
-    let v = meta(&ctx.d, "quickshell_version").0;
+    let v = BoxMeta::load(&ctx.d).quickshell_version;
     let v = if v.is_empty() {
         Vec::new()
     } else {

@@ -6,7 +6,8 @@
 //! one too, and that shell is stopped with the rest (finding 248).
 
 use crate::args::name_arg;
-use crate::boxes::{BoxPid, box_pid, covers_held, meta, need_box, run_read};
+use crate::boxes::{BoxPid, box_pid, covers_held, need_box, run_read};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, say};
@@ -36,7 +37,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         )));
     }
     // A plain box (#247) has a shell only when `up --shell CMD` named one: nothing to start again.
-    if meta(&ctx.d, "shell").0 != b"true" && meta(&ctx.d, "shell_cmd").0.is_empty() {
+    let m = BoxMeta::load(&ctx.d);
+    if !m.shell && m.shell_cmd.is_empty() {
         crate::omshell::plain_refuse(
             ctx,
             "restart-shell",
@@ -160,7 +162,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     crate::plugins::plugin_check(ctx, &crate::install::git_rev)?;
     // An Omarchy tree's commit as it is now, as plugin_check does for each plugin's: it was edited
     // (or committed) since `up`, and `ls --json` says what the box tested.
-    let tree = meta(&ctx.d, "omarchy").0;
+    let tree = BoxMeta::load(&ctx.d).omarchy;
     if !tree.is_empty() {
         let v = crate::install::git_rev(&tree);
         let v = if v.is_empty() {

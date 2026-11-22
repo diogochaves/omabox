@@ -6,6 +6,7 @@
 
 use crate::args::{optarg, unknown_opt, unknown_word};
 use crate::boxes::{box_alive, need_box, take_over};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Res, out, say};
@@ -523,10 +524,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 )));
             }
             // A plain box with no shell (#247) will have none.
-            if st == "shell"
-                && crate::boxes::meta(&ctx.d, "shell").0 != b"true"
-                && !crate::boxes::slot_shell(&ctx.d)
-            {
+            if st == "shell" && !BoxMeta::load(&ctx.d).shell && !crate::boxes::slot_shell(&ctx.d) {
                 crate::omshell::plain_refuse(
                     ctx,
                     "log",

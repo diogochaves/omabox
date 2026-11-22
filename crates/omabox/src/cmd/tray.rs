@@ -7,6 +7,7 @@
 
 use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::need_box;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ExecOpts, Redir, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, out, say};
@@ -510,8 +511,8 @@ fn entries(ctx: &mut Ctx) -> Res<Vec<String>> {
         }
         // (a plain box, #247: Omarchy's bar is not there to have one; its --shell may)
         // (a desk box, #321 step 4: the shell its config starts, in the slot, or none)
-        let desk = crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0)
-            == crate::upspec::Desktop::Desk;
+        let m = BoxMeta::load(&ctx.d);
+        let desk = crate::upspec::Desktop::of_box(&m.desktop) == crate::upspec::Desktop::Desk;
         let why = if desk {
             if crate::shellnote::slot_cmd(ctx).is_empty() {
                 "a desk box whose config started no shell omabox knows: up --shell CMD runs one"
@@ -519,8 +520,8 @@ fn entries(ctx: &mut Ctx) -> Res<Vec<String>> {
             } else {
                 "the desk's shell runs none".to_string()
             }
-        } else if crate::boxes::plain_like(&ctx.d) {
-            if crate::boxes::meta(&ctx.d, "shell_cmd").0.is_empty() {
+        } else if crate::boxes::plain_like_of(&m) {
+            if m.shell_cmd.is_empty() {
                 "a plain box has no shell to have one: up --shell CMD runs one".to_string()
             } else {
                 "the plain box's --shell runs none".to_string()

@@ -6,7 +6,8 @@
 //! fds its own omabox opened (#224). The shell, awk and jq it runs are bin/omabox's (recprog.rs).
 
 use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
-use crate::boxes::{meta, need_box};
+use crate::boxes::need_box;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ExecOpts, Redir, box_exec, dup_hi, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, out, say};
@@ -1676,7 +1677,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
             " (omabox record stop)"
         )));
     }
-    if o.audio && meta(&ctx.d, "audio").0 != b"true" {
+    if o.audio && !BoxMeta::load(&ctx.d).audio {
         return Err(ctx.die(cat!(
             "record --audio: box '",
             ctx.name,

@@ -4,7 +4,8 @@
 //! which holds what agents stored in it.
 
 use crate::args::{optarg, unexpected, unknown_opt, unknown_opt_hint, usage};
-use crate::boxes::{meta, need_box};
+use crate::boxes::need_box;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::json;
@@ -234,12 +235,13 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     // The Hyprland and Quickshell builds it ran (findings 116, 358), so an `up --from` on another
     // one can say so; and its HOME's path in the box (#321), for one into a box with another.
+    let m = BoxMeta::load(&ctx.d);
     let sj = save_json(
         &ctx.name,
         &shell::date_iso(),
         &crate::cmd::version::version_text(),
-        &meta(&ctx.d, "hyprland").0,
-        &meta(&ctx.d, "quickshell").0,
+        &m.hyprland,
+        &m.quickshell,
         &crate::boxes::box_home(&ctx.d),
     );
     if let Err(e) = std::fs::write(shell::path(&cat!(tmp, "/save.json")), sj) {

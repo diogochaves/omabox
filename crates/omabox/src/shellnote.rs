@@ -3,7 +3,8 @@
 //! and started again by its launcher (#303, finding 408). As bin/omabox's shell_note, shell_state,
 //! shell_crashes, shell_relaunches and what they call.
 
-use crate::boxes::{BoxSys, RealBox, box_home_file, meta, run_read, slot_shell};
+use crate::boxes::{BoxSys, RealBox, box_home_file, run_read, slot_shell};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ErrTo, Out};
 use crate::exit::{Ctx, Res, say};
@@ -17,7 +18,7 @@ fn words(v: &[&[u8]]) -> Vec<Vec<u8>> {
 
 /// box_qs: the box's Quickshell (`up --quickshell`'s build, finding 358), else the system's.
 pub fn box_qs(ctx: &Ctx) -> Vec<u8> {
-    let q = meta(&ctx.d, "quickshell").0;
+    let q = BoxMeta::load(&ctx.d).quickshell;
     if q.is_empty() {
         b"/usr/bin/quickshell".to_vec()
     } else {
@@ -156,7 +157,7 @@ pub fn shell_state_given(ctx: &Ctx, given: &str) -> &'static str {
 }
 
 fn shell_state_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, given: &str) -> &'static str {
-    if meta(&ctx.d, "shell").0 != b"true" {
+    if !BoxMeta::load(&ctx.d).shell {
         return "none";
     }
     if let Some(p) = shell_live_pid_with(sys, ctx) {
@@ -261,7 +262,7 @@ pub fn seen_cmd(raw: &[u8]) -> Vec<u8> {
 /// box's from its runtime dir (seen_cmd); empty: none (an Omarchy box, a desk whose config started
 /// none, or not yet).
 pub fn slot_cmd(ctx: &Ctx) -> Vec<u8> {
-    let c = meta(&ctx.d, "shell_cmd").0;
+    let c = BoxMeta::load(&ctx.d).shell_cmd;
     if !c.is_empty() || !slot_shell(&ctx.d) {
         return c;
     }
@@ -290,7 +291,7 @@ fn shell_config_dirs(ctx: &Ctx) -> Vec<Vec<u8>> {
             .map(tidy)
             .collect();
     }
-    let want = meta(&ctx.d, "omarchy").0;
+    let want = BoxMeta::load(&ctx.d).omarchy;
     let want = if want.is_empty() {
         b"/usr/share/omarchy".to_vec()
     } else {
@@ -521,7 +522,7 @@ pub fn shell_note(ctx: &Ctx) -> Res<()> {
 
 fn shell_note_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<()> {
     let reps = crash_reports(ctx);
-    if meta(&ctx.d, "shell").0 == b"true" {
+    if BoxMeta::load(&ctx.d).shell {
         shell_note_shell(sys, ctx, &reps)?;
     }
     others_note(ctx, &reps);

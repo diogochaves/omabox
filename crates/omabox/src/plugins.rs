@@ -2,7 +2,8 @@
 //! up what the shell made of each plugin. As bin/omabox's resolve_plugin, desk_config, desk_plugins,
 //! plugin_check (with shell_warnings), theme_named and tree_dir.
 
-use crate::boxes::{box_home_file, box_home_read, meta};
+use crate::boxes::{box_home_file, box_home_read};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ExecOpts, Redir, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, say};
@@ -413,7 +414,7 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
     if ids.is_empty() {
         return Ok(());
     }
-    let tree = meta(&ctx.d, "omarchy").0;
+    let tree = BoxMeta::load(&ctx.d).omarchy;
     let mut v_bin = cat!(
         if tree.is_empty() {
             b"/usr/share/omarchy".as_slice()
