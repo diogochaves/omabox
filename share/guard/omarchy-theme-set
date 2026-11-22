@@ -7,17 +7,34 @@
 # rewrites tmux, btop, editor and browser colours, runs gsettings and the theme-set hook.
 # omarchy-theme-bg-set repoints current/background before its (best effort, -q) omarchy-shell call;
 # omarchy-theme-bg-next picks the next and runs it; omarchy-font-set rewrites the terminals' configs and
-# fontconfig and signals kitty and ghostty. Refuse them while the display names no socket, saying what
-# to run instead; a display that is a socket goes on to the next one on PATH (the caller named one on
-# purpose; in a box, and for `omabox host`, the guard's directory is off PATH and this is not reached).
+# fontconfig and signals kitty and ghostty. Refuse them, saying what to run instead, whatever the display:
+# they write the HOME, not the display, and a box's socket in WAYLAND_DISPLAY (`eval "$(omabox env)"`)
+# would still have changed the user's real theme (round-2 review; finding 757). The box's way is
+# `omabox run -- NAME`, and there (as for `omabox host`) the guard's directory is off PATH and this is
+# not reached. One hand-off: run under Omarchy's own update (omarchy-update or omarchy-migrate among
+# this process's callers), which an agent runs on the real system anyway: omarchy-migrate is `set -e`,
+# and three of 4.5's migrations re-stage the theme through here, so a refusal would stop the update
+# after its packages, its later migrations left pending (docs/guard.md).
 # Not caught (the guard is not a boundary, SECURITY.md): `omarchy theme set` and the rest of Omarchy's
 # own `omarchy` dispatcher, which runs each command by its path, and a caller naming the path itself.
 name=${OMABOX_GUARD_AS:-${0##*/}}
 unset OMABOX_GUARD_AS
-r=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-d=${WAYLAND_DISPLAY:-}
-case $d in /*) ;; ?*) d=$r/$d ;; esac
-if [ -z "$d" ] || [ ! -S "$d" ]; then
+# Omarchy's update among the callers: each word of each process's command line, up to init, by its
+# last part (bash runs them as `bash /usr/share/omarchy/bin/omarchy-migrate`).
+update=""
+p=$PPID n=0
+while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null && [ "$n" -lt 64 ]; do
+  if tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | {
+    while IFS= read -r w; do case ${w##*/} in omarchy-update | omarchy-migrate) exit 0 ;; esac; done
+    exit 1
+  }; then
+    update=1
+    break
+  fi
+  p=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$p/status" 2>/dev/null)
+  n=$((n + 1))
+done
+if [ -z "$update" ]; then
   # Run by another of Omarchy's commands (omarchy-theme-refresh, omarchy-theme-install): named too.
   by=$(tr '\0' '\n' < "/proc/$PPID/cmdline" 2>/dev/null | sed -n "s|^\(.*/\)\{0,1\}\(omarchy-[a-z0-9-]*\)$|\2|p" | grep -vxF "$name" | head -n 1)
   [ -n "$by" ] && by=" (run by $by)"
@@ -26,13 +43,13 @@ if [ -z "$d" ] || [ ! -S "$d" ]; then
   a=${w:-ARG}
   case $name in
     omarchy-theme-set)
-      what="it switches the user's real theme even with no display (their theme files, wallpaper, terminals, GTK, browser and keyboard colours, and the theme-set hook)"
+      what="it switches the user's real theme (their theme files, wallpaper, terminals, GTK, browser and keyboard colours, and the theme-set hook) whatever the display, a box's too"
       box="For a box: omabox up --theme $a, or omabox look theme $a; in a box that is up: omabox run -- omarchy-theme-set $a" ;;
     omarchy-theme-bg-set|omarchy-theme-bg-next)
-      what="it changes the user's real wallpaper (the link ~/.local/state/omarchy/current/background) even with no display"
+      what="it changes the user's real wallpaper (the link ~/.local/state/omarchy/current/background) whatever the display, a box's too"
       box="For a box: omabox run -- $name${w:+ $w}" ;;
     omarchy-font-set)
-      what="it rewrites the user's real font settings even with no display (their terminals' configs and fontconfig) and signals their terminals"
+      what="it rewrites the user's real font settings (their terminals' configs and fontconfig) and signals their terminals, whatever the display, a box's too"
       box="For a box: omabox run -- omarchy-font-set $a" ;;
     *)
       what="it changes the user's real desktop settings"

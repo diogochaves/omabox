@@ -10,6 +10,29 @@ use crate::shell;
 /// The guard's display and signature: a name with no socket behind it.
 pub const GUARD: &str = "omabox-guard";
 
+/// Whether PATH (as given) puts a guard's stand-ins first-come: a `*/share/guard` folder on it, as the
+/// guard's hooks and `guard exec` do. There `omarchy-theme-set` by name is the guard's, which refuses.
+pub fn guarded_path(path: &[u8]) -> bool {
+    path.split(|&c| c == b':')
+        .any(|d| d.ends_with(b"/share/guard") || d.ends_with(b"/share/guard/"))
+}
+
+/// The command that sets the user's first Omarchy theme, as doctor and up advise it (finding 130):
+/// under the guard through `omabox host --`, since the guard's stand-in refuses it plain (round-2
+/// review, finding 757).
+pub fn theme_set_advice(guarded: bool) -> &'static str {
+    if guarded {
+        "omabox host -- omarchy-theme-set \"Tokyo Night\" (the guard refuses it plain; only when the user asked)"
+    } else {
+        "omarchy-theme-set \"Tokyo Night\""
+    }
+}
+
+/// theme_set_advice for this process's PATH.
+pub fn theme_set_here() -> &'static str {
+    theme_set_advice(guarded_path(&shell::env_or_empty("PATH")))
+}
+
 /// What `guard on` adds to and takes from a JSON hooks file (Claude Code's settings, Codex's
 /// hooks.json), as bin/omabox's GUARD_JQ; each use appends its own program.
 pub const GUARD_JQ: &str = r#"def ours: (.command? // "") | contains($g);
@@ -178,6 +201,19 @@ impl Guard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Finding 757: the first-theme advice is the one that runs where it is given.
+    #[test]
+    fn theme_advice_under_the_guard() {
+        assert!(guarded_path(b"/co/share/guard:/usr/bin"));
+        assert!(guarded_path(b"/usr/bin:/x/share/guard/"));
+        assert!(!guarded_path(b"/usr/bin:/co/share/guards:/share/guardx"));
+        assert!(!guarded_path(b""));
+        assert_eq!(theme_set_advice(false), "omarchy-theme-set \"Tokyo Night\"");
+        assert!(
+            theme_set_advice(true).starts_with("omabox host -- omarchy-theme-set \"Tokyo Night\"")
+        );
+    }
 
     #[test]
     fn texts_as_bash_expands_them() {

@@ -733,10 +733,10 @@ fn theme_check(home: &[u8], omarchy: bool) -> Check {
             "Omarchy has not set a theme for you yet ({}), and a box starts from your Omarchy look",
             s(&t)
         ),
-        vec![
-            "log into Omarchy once, or: omarchy-theme-set \"Tokyo Night\" (or up --theme NAME)"
-                .into(),
-        ],
+        vec![format!(
+            "log into Omarchy once, or: {} (or up --theme NAME)",
+            crate::guard::theme_set_here()
+        )],
     )
 }
 
