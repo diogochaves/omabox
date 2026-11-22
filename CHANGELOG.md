@@ -5,6 +5,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+## 1.5.2 — 2026-11-22
+
 Security and hardening from a review of the whole codebase. A process in a box could make omabox
 read a host file through a link in the box HOME, overwrite one through a link at a recording's
 name, or keep a link that leads into your real HOME across a save; a desk box could get a key set
