@@ -5,7 +5,8 @@
 //! true|false` (cursor:invisible before omabox hid it). The box's config hides it on every load while
 //! its runtime dir's omabox.pointer says so. Changed under $D/.pointer.lock.
 
-use crate::boxes::{box_alive, box_file, lock_file, meta, run_read};
+use crate::boxes::{box_alive, box_file, lock_file, run_read};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, say};
@@ -287,7 +288,7 @@ pub fn pointer_shown(ctx: &Ctx, hide: bool) -> Res<()> {
             n,
             "' (shots, recordings, peek) until omabox pointer show; it still moves, and focus follows it"
         ));
-        if meta(&ctx.d, "mode").0 == b"interactive" {
+        if BoxMeta::load(&ctx.d).interactive() {
             say(
                 "pointer: the box is interactive: whoever drives its window sees no pointer over it either",
             );

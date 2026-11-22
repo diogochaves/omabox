@@ -3,7 +3,7 @@
 //! in its buffer's pixels (win_scale, win_buf_geom: #227, findings 299, 300), and a recorded shot's
 //! pixel back on the box (shot_point, for --in).
 
-use crate::boxes::meta;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res};
 use crate::hypr::hypr_json;
@@ -35,7 +35,7 @@ pub fn extent(ctx: &Ctx) -> Res<Vec<u8>> {
 /// main_screen: the box's main monitor in `hyprctl -j monitors`, as jq: a headless box's HEADLESS-2
 /// (WAYLAND-1 on NVIDIA), an interactive box's first window; never one of `monitor add`'s.
 pub fn main_screen(ctx: &Ctx) -> &'static str {
-    if meta(&ctx.d, "mode").0 == b"interactive" {
+    if BoxMeta::load(&ctx.d).interactive() {
         crate::jqprog::MAIN_SCREEN_I_JQ
     } else {
         crate::jqprog::MAIN_SCREEN_H_JQ

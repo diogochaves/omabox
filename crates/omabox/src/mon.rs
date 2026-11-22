@@ -8,7 +8,8 @@
 //! that cannot be written is said and the command goes on (bash's set -e held in some callers and
 //! not in others, by where the call sat: finding 442).
 
-use crate::boxes::{box_alive, box_file, lock_file, meta, run_read};
+use crate::boxes::{box_alive, box_file, lock_file, run_read};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{self, ErrTo, In, Out, Redir, on_box, on_box_io};
 use crate::exit::{Ctx, Exit, Res, say};
@@ -467,7 +468,7 @@ pub fn jq_box_json(ctx: &Ctx, args: Args) -> bool {
 /// returns are quiet but for hypr_json's words and a box.json it could not write, said, the command
 /// going on.
 pub fn monitors_record(ctx: &Ctx) -> Res<()> {
-    if meta(&ctx.d, "mode").0 != b"headless" {
+    if !BoxMeta::load(&ctx.d).headless() {
         return Ok(());
     }
     let Ok(m) = hypr_json(ctx, &["monitors"]) else {

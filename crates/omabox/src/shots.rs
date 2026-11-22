@@ -1229,8 +1229,8 @@ pub fn say_raw(v: &[u8]) {
 /// zero_note MONITORS WAYLAND_SCREEN [OTHER] (#213, finding 286): what to say of the outputs listed
 /// 0x0 in a box drawing on NVIDIA (WAYLAND_SCREEN true); empty otherwise. OTHER, the first render
 /// node on another driver ("renderD128 amdgpu"), looked up when None.
-pub fn zero_note(mons: &[u8], wayland_screen: &[u8], other: Option<&[u8]>) -> Vec<u8> {
-    if wayland_screen != b"true" {
+pub fn zero_note(mons: &[u8], wayland_screen: bool, other: Option<&[u8]>) -> Vec<u8> {
+    if !wayland_screen {
         return Vec::new();
     }
     let r = crate::jq::jq(

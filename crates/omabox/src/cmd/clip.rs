@@ -4,7 +4,8 @@
 //! off the user's clipboard (finding 65), and clip must not be the way around it.
 
 use crate::args::{optarg, unexpected, unknown_opt};
-use crate::boxes::{BoxPid, box_alive, box_pid, list_names, meta, need_box};
+use crate::boxes::{BoxPid, box_alive, box_pid, list_names, need_box};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ExecOpts, Redir, box_exec, dev_null, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, say};
@@ -265,7 +266,7 @@ fn clip_select(ctx: &mut Ctx, name: &[u8]) -> Res<()> {
     let mut boxes: Vec<Vec<u8>> = Vec::new();
     for n in list_names(ctx, false) {
         select_box(ctx, &n)?;
-        if !box_alive(ctx)? || meta(&ctx.d, "mode").0 != b"interactive" {
+        if !box_alive(ctx)? || !BoxMeta::load(&ctx.d).interactive() {
             continue;
         }
         boxes.push(n.clone());
@@ -329,7 +330,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (_, wl) = crate::host::host_session_die(ctx)?;
     clip_select(ctx, &name)?;
     let n = ctx.name.clone();
-    if meta(&ctx.d, "mode").0 != b"interactive" {
+    if !BoxMeta::load(&ctx.d).interactive() {
         return Err(ctx.die(cat!(
             "clip: box '",
             n,

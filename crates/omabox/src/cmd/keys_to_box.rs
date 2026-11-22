@@ -5,7 +5,8 @@
 //! `down`. Off by default.
 
 use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
-use crate::boxes::{meta, need_box};
+use crate::boxes::need_box;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exit::{Ctx, Res, out, say};
 use crate::host::{HostSilent, PASS_KEY};
@@ -48,7 +49,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
-    if meta(&ctx.d, "mode").0 != b"interactive" {
+    if !BoxMeta::load(&ctx.d).interactive() {
         return Err(ctx.die(cat!(
             "keys-to-box: box '",
             ctx.name,

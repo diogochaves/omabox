@@ -395,7 +395,9 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         (b"layer_select", [lys, sel]) => line(&crate::layer::layer_select(&ctx, lys, sel)?),
         (b"gdb_crashes", []) => out(crate::cmd::log::gdb_crashes(&stdin_all()?)),
         (b"desk_picture", []) => awk_stdin(&[crate::jqprog::DESK_PICTURE_AWK.as_bytes().to_vec()]),
-        (b"zero_note", [m, ws, other]) => line(&crate::shots::zero_note(m, ws, Some(other))),
+        (b"zero_note", [m, ws, other]) => {
+            line(&crate::shots::zero_note(m, ws == b"true", Some(other)))
+        }
         (b"box_cmds", []) => {
             // (bash's BOX_CMDS: one line, a space around each)
             let mut v = b" ".to_vec();

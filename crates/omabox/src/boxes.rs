@@ -20,11 +20,6 @@ pub fn at(d: &[u8], rel: &str) -> PathBuf {
     shell::path(&cat!(d, "/", rel))
 }
 
-/// A value of the box's box.json (written by `up`), and whether jq read it.
-pub fn meta(d: &[u8], key: &str) -> (Vec<u8>, bool) {
-    json::field(&at(d, "box.json"), key)
-}
-
 /// The box's HOME inside it, for every box but a desk one (#321), and any box from before box.json
 /// had a `home`.
 pub const SBX_HOME: &str = "/home/sbx";

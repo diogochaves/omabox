@@ -5,7 +5,8 @@
 //! user's desktop (#123, #174: deskwin.rs). The main screen is never removed here.
 
 use crate::args::{optarg, unknown_opt, unknown_word};
-use crate::boxes::{meta, need_box};
+use crate::boxes::need_box;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::deskwin::{desk_prune, desk_relay, monitor_add_window};
 use crate::exec::{ErrTo, Out, on_box};
@@ -112,7 +113,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return list(ctx, json);
     }
     let n = ctx.name.clone();
-    let interactive = meta(&ctx.d, "mode").0 == b"interactive";
+    let interactive = BoxMeta::load(&ctx.d).interactive();
     if interactive {
         let fixed = Args::new(&["-r", ".aquamarine.fixed"])
             .arg(cat!(ctx.d, "/box.json"))
@@ -151,7 +152,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 )));
             }
         }
-    } else if act == b"add" && meta(&ctx.d, "wayland_screen").0 == b"true" {
+    } else if act == b"add" && BoxMeta::load(&ctx.d).wayland_screen {
         // A box started before #165 runs labwc with no config of omabox's.
         if !ctx.at("run/labwc/rc.xml").is_file() {
             return Err(ctx.die(cat!(
@@ -248,7 +249,7 @@ fn list(ctx: &Ctx, json: bool) -> Res<()> {
         }
         crate::cmd::hyprctl::code(r.rc)?;
     }
-    let zn = crate::shots::zero_note(&m, &meta(&ctx.d, "wayland_screen").0, None);
+    let zn = crate::shots::zero_note(&m, BoxMeta::load(&ctx.d).wayland_screen, None);
     if !zn.is_empty() {
         say(zn);
     }
@@ -393,7 +394,7 @@ pub(crate) fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u
     let Ok([mode, scale, place]) = monitor_spec(spec) else {
         return Err(Exit(1));
     };
-    let (kind, prefix, mut i): (&[u8], &str, i64) = if meta(&ctx.d, "wayland_screen").0 == b"true" {
+    let (kind, prefix, mut i): (&[u8], &str, i64) = if BoxMeta::load(&ctx.d).wayland_screen {
         (b"wayland", "WAYLAND-", 2)
     } else {
         (b"headless", "HEADLESS-", 3)

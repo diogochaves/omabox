@@ -5,7 +5,8 @@
 //! --changed compares with.
 
 use crate::args::{optarg, unknown_opt};
-use crate::boxes::{box_alive, meta, need_box};
+use crate::boxes::{box_alive, need_box};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ErrTo, Out, dev_null, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
@@ -897,7 +898,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 .arg(crate::jqprog::MON_NAMED_JQ)
                 .run(Some(&mons), jq::Err::Inherit)
                 .text();
-            let zn = zero_note(&one, &meta(&ctx.d, "wayland_screen").0, None);
+            let zn = zero_note(&one, BoxMeta::load(&ctx.d).wayland_screen, None);
             let m = if zn.is_empty() {
                 cat!("monitor ", s.monitor, " is listed 0x0: nothing to take")
             } else {
@@ -1369,10 +1370,11 @@ fn clip(
 /// avoid. Only such a capture is "no frame": grim refusing what it was asked says why (finding 176).
 fn no_frame_words(ctx: &Ctx, grc: i32) -> Option<Vec<u8>> {
     let n_ = &ctx.name;
-    if meta(&ctx.d, "mode").0 != b"interactive" || !(grc == 124 || grc == 0) {
+    let m = BoxMeta::load(&ctx.d);
+    if !m.interactive() || !(grc == 124 || grc == 0) {
         return None;
     }
-    if meta(&ctx.d, "drawn_hidden").0 != b"true" {
+    if !m.drawn_hidden {
         return Some(cat!(
             "shot: no frame from interactive box '",
             n_,
@@ -1390,7 +1392,7 @@ fn no_frame_words(ctx: &Ctx, grc: i32) -> Option<Vec<u8>> {
         "shot: no frame from interactive box '",
         n_,
         "' (",
-        crate::settle::ws_text(&meta(&ctx.d, "workspace").0),
+        crate::settle::ws_text(&m.workspace),
         ") in 10 s: ask the user; never switch the user's workspace or focus to get one"
     ))
 }
@@ -1621,7 +1623,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         why.pop();
     }
     let _ = std::fs::remove_file(shell::path(&gerr));
-    let interactive = meta(&ctx.d, "mode").0 == b"interactive";
+    let interactive = BoxMeta::load(&ctx.d).interactive();
     // grim's own timeout: asked again, in case the box stopped answering during it.
     if grc == 124 && !interactive && !hypr_answers(ctx)? {
         unput(s);
@@ -1642,13 +1644,13 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         }
         // A 0x0 output in an NVIDIA box (#213) fails a whole shot: said why.
         let mut zn = Vec::new();
-        if meta(&ctx.d, "wayland_screen").0 == b"true" {
+        if BoxMeta::load(&ctx.d).wayland_screen {
             let a: Vec<Vec<u8>> = ["timeout", "6", "hyprctl", "-j", "monitors"]
                 .iter()
                 .map(|w| w.as_bytes().to_vec())
                 .collect();
             let r = on_box(ctx, &a, false, Out::Capture(None), ErrTo::Null);
-            zn = zero_note(&shell::subst(&r.out), b"true", None);
+            zn = zero_note(&shell::subst(&r.out), true, None);
         }
         return Err(ctx.die(grim_failed_words(why, grc, &zn)));
     }

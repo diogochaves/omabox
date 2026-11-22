@@ -2,7 +2,7 @@
 //! slot (from /sys/class/drm), the kind a driver counts as, the `gpu` setting's form of a GPU, and
 //! what `gpu` and `cpu` say about the box before their figures (cost_context, cost_lines).
 
-use crate::boxes::meta;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, out};
 use crate::jq::{self, Args};
@@ -136,7 +136,7 @@ pub fn cost_lines(ctx: &Ctx, c: &Cost) -> Res<()> {
             jq::Err::Inherit,
         );
         out(&r.out)?;
-    } else if meta(&ctx.d, "mode").0 == b"interactive" {
+    } else if BoxMeta::load(&ctx.d).interactive() {
         out("GPU: the desktop's (an interactive box renders where your compositor does)\n")?;
     }
     if !c.cr.is_empty() && c.cr != b"null" {

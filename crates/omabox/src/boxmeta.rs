@@ -203,6 +203,11 @@ impl BoxMeta {
         self.mode == b"interactive"
     }
 
+    /// `mode` is headless (a box.json with no mode is neither).
+    pub fn headless(&self) -> bool {
+        self.mode == b"headless"
+    }
+
     /// The scale, 1 when box.json has none.
     pub fn scale_or_1(&self) -> &[u8] {
         if self.scale.is_empty() {
