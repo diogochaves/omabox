@@ -480,8 +480,7 @@ pub fn shell_relaunches(ctx: &Ctx) -> Vec<u8> {
         .unwrap_or(b"0".to_vec());
     let (mut n, mut st) = (0usize, b"-".to_vec());
     if let Some(f) = box_home_file(&ctx.d, "shell.log") {
-        let text = std::fs::read(&f).unwrap_or_default();
-        (n, st) = relaunch_lines(&text);
+        (n, st) = relaunch_lines(&crate::boxes::tail_file(f, crate::boxes::READ_CAP));
     }
     cat!(mark, " ", n.to_string(), " ", st)
 }

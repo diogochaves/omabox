@@ -3,7 +3,7 @@
 //! (#246). As bin/omabox's hung_text, hypr_lost, hypr_down_text, hypr_answers, hypr_json and
 //! hypr_errors_note.
 
-use crate::boxes::{BoxSys, RealBox, box_env, box_home_file, hypr_end, run_read, tail};
+use crate::boxes::{BoxSys, RealBox, box_env, box_home_file, hypr_end, run_read};
 use crate::cat;
 use crate::exec::{ErrTo, Out};
 use crate::exit::{Ctx, Res, say};
@@ -86,7 +86,7 @@ pub fn pid_state(pid: &[u8]) -> Vec<u8> {
 /// The fatal signal gdb --watch caught in the box's Hyprland, in its log's last watch of it.
 pub fn hypr_gdb_sig(ctx: &Ctx) -> Option<String> {
     let f = box_home_file(&ctx.d, "gdb.log")?;
-    let text = tail(&f, 1_048_576);
+    let text = crate::boxes::tail_file(f, 1_048_576);
     let (mut w, mut s) = (false, String::new());
     for l in text.split(|&c| c == b'\n') {
         if l.starts_with(b"== omabox gdb --watch ") {

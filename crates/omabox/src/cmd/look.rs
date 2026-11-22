@@ -868,7 +868,8 @@ fn new_problems(
     };
     if let Some(logs) = now.get("logs").and_then(Value::as_object) {
         for file in logs.keys() {
-            let all = std::fs::read(ctx.at("home").join(file)).unwrap_or_default();
+            let all = crate::boxes::box_home_read(&ctx.d, file, crate::boxes::READ_CAP)
+                .unwrap_or_default();
             let new = since(&all, was(file));
             let page = crate::exit::contains(&all, b"omabox-look-chromium")
                 || !console_lines(&all).is_empty();
@@ -947,6 +948,22 @@ fn stop_pages(name: &[u8]) {
             ob(&[b"stop", b"-b", name, pid.to_string().as_bytes()]);
         }
     }
+}
+
+/// The job's log LOG, `<box dir>/home/run-NS.log` as `run -d --print-log` names it: a file in the
+/// box HOME, which the box writes, so it is read as S7 reads one (box_home_file: by the fd it opened
+/// with no link followed and no FIFO waited on, a regular file only, its first READ_CAP bytes), never
+/// by its path (finding 747). Empty when it is not such a file.
+pub fn job_log(log: &[u8]) -> Vec<u8> {
+    let Some(i) = log.windows(6).rposition(|w| w == b"/home/") else {
+        return Vec::new();
+    };
+    let (d, file) = (&log[..i], &log[i + 6..]);
+    if file.is_empty() || file.contains(&b'/') {
+        return Vec::new();
+    }
+    crate::boxes::box_home_read(d, &String::from_utf8_lossy(file), crate::boxes::READ_CAP)
+        .unwrap_or_default()
 }
 
 /// The job whose log is LOG: its pid, while `jobs` lists it.
@@ -1115,7 +1132,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
         // One that ended at once ran: its end and its output are the report.
         if let Some((end, log)) = ended_at_once(&r.err) {
             problems.push(cat!("it ", end, ", before opening a window"));
-            let output = std::fs::read(shell::path(&log)).unwrap_or_default();
+            let output = job_log(&log);
             problems.extend(problem_lines(&output));
             notes.extend(look_exit_notes(
                 &end,
@@ -1175,7 +1192,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             problems.push(why);
             // A script not executable (126) or named without ./ (127): the look that runs it (#471).
             if let Some(e) = &ended {
-                let tail = std::fs::read(shell::path(&log)).unwrap_or_default();
+                let tail = job_log(&log);
                 notes.extend(look_exit_notes(e, cwd.as_ref(), a.own, name, &a.cmd, &tail));
             }
         }
@@ -1307,7 +1324,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             ));
         }
     }
-    let mut output = std::fs::read(shell::path(&log)).unwrap_or_default();
+    let mut output = job_log(&log);
     if a.page {
         let c = console_lines(&output);
         problems.extend(console_problems(&c));
@@ -2165,6 +2182,7 @@ pub fn cut_keep_command(l: &[u8], width: usize) -> Vec<u8> {
 
 /// The report, as the issue drew it: HEAD's lines (`screenshot: PATH`, `window: ...`), the problems,
 /// notes, OUTPUT's first lines (none: no such part), the box kept.
+/// It reaches the terminal plain (finding 747).
 pub fn report(
     head: &[(&str, &[u8])],
     problems: &[Vec<u8>],
@@ -2227,7 +2245,10 @@ pub fn report(
             ")\n"
         ));
     }
-    r
+    // What the box said is in it (a window's class and title, a page's console, a program's output,
+    // the shell's warnings, a step's error): every control character but newline and tab, and every
+    // byte that is no UTF-8, as `?` (S7). The report itself has none of its own.
+    crate::term::plain_cap(&r, usize::MAX)
 }
 
 #[cfg(test)]
@@ -2718,6 +2739,55 @@ mod tests {
                 "omarchy-keyboard-panel"
             ]
         );
+    }
+
+    /// Finding 747: what the box said reaches the terminal plain (a window's title, a page's
+    /// console, a program's output, a note), newline and tab kept.
+    #[test]
+    fn the_report_is_plain() {
+        let title = report_window_line(false, "foot", "t\x1b]52;c;aGk=\x07", "1x1", "tiled", "0x1");
+        let r = report(
+            &[("window", &title)],
+            &[b"app: error \x1b[2J\x9b".to_vec()],
+            &[b"note\x1b]8;;x\x07".to_vec()],
+            Some(b"out\tput \x1b[31mred\r\n\xff"),
+            None,
+        );
+        assert_eq!(
+            String::from_utf8(r).unwrap(),
+            "window: foot \"t?]52;c;aGk=?\" 1x1 (tiled)\nproblems:\n  app: error ?[2J?\nnote: note?]8;;x?\noutput:\n  out\tput ?[31mred?\n  ?\n"
+        );
+    }
+
+    /// Finding 747: the job's log is read from the box HOME's fd, never by its path: a link there to
+    /// a host file reads nothing, a FIFO does not hang the look, a path not in a box HOME is not read.
+    #[test]
+    fn a_jobs_log_is_read_as_the_boxs() {
+        let d = std::env::temp_dir().join(format!("omabox-joblog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("home")).unwrap();
+        std::fs::write(d.join("secret"), "host secret\n").unwrap();
+        std::fs::write(d.join("home/run-1.log"), "hello\n").unwrap();
+        std::os::unix::fs::symlink(d.join("secret"), d.join("home/run-2.log")).unwrap();
+        let c = std::ffi::CString::new(d.join("home/run-3.log").as_os_str().as_encoded_bytes())
+            .unwrap();
+        // SAFETY: a path of ours, NUL-terminated.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let log = |n: &str| cat!(shell::bytes(&d), "/home/", n);
+        let (l1, l2, l3) = (log("run-1.log"), log("run-2.log"), log("run-3.log"));
+        let s = shell::bytes(&d.join("secret")).to_vec();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send((job_log(&l1), job_log(&l2), job_log(&l3), job_log(&s)));
+        });
+        let r = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the look waited on a FIFO");
+        assert_eq!(r.0, b"hello\n");
+        assert_eq!(r.1, b"", "a link to a host file");
+        assert_eq!(r.2, b"", "a FIFO");
+        assert_eq!(r.3, b"", "not a file of a box HOME");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

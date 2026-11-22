@@ -262,23 +262,8 @@ fn toolkit_end(text: &[u8]) -> Option<Vec<u8>> {
 /// wl_end finds it in its last 64 KiB. The box writes its HOME: read only as a regular file inside
 /// it, not through a link, never waiting on a FIFO (S7).
 pub fn proto_error(ctx: &Ctx, log: &[u8]) -> Option<Vec<u8>> {
-    use std::io::{Read, Seek, SeekFrom};
-    use std::os::unix::fs::OpenOptionsExt;
-    let p = crate::boxes::box_home_file(&ctx.d, &String::from_utf8_lossy(log))?;
-    let mut f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_NOCTTY)
-        .open(p)
-        .ok()?;
-    let m = f.metadata().ok()?;
-    if !m.is_file() {
-        return None;
-    }
-    f.seek(SeekFrom::Start(m.len().saturating_sub(65536)))
-        .ok()?;
-    let mut v = Vec::new();
-    f.take(65536).read_to_end(&mut v).ok()?;
-    wl_end(&v)
+    let f = crate::boxes::box_home_file(&ctx.d, &String::from_utf8_lossy(log))?;
+    wl_end(&crate::boxes::tail_file(f, 65536))
 }
 
 /// proto_error said, when LOG holds one.

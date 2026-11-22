@@ -15149,6 +15149,33 @@ from them.
     `g`, t_unit_guard_codex_merge's and the hook-version check's `guard on` now run with a runtime dir
     of their own.
 
+747. **What a box writes in its HOME is read by the fd omabox opened, and what it says reaches the
+    look's report plain** (2026-11-22). `look` read the job's log (`<box dir>/home/run-NS.log`) and
+    the plain look every `run-*.log` with a plain read by path: a box process that swapped the log
+    for a link put a host file (an `api-keys.env`) in the report's `output:`, and a FIFO hung the
+    look. `box_home_file` checked a path (a regular file, no link, inside HOME once resolved) and
+    its callers opened it again by name, so a swap between the two read a host file (`run`'s
+    failed-runs copy, the shell warnings `plugin add` prints) or hung `up`/`restart-shell` on a
+    FIFO, and a folder on the way swapped for a link after the check took the nested ones
+    (`.config/omarchy/shell.json`, a crash's `report.txt`). `box_home_file` now hands back the open
+    `File`: walked from the box folder's HOME fd (`<box dir>/home`, a desk box's too, never the path
+    the box sees) with openat2's `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS` (an `O_NOFOLLOW` walk a folder
+    at a time where openat2 is missing or filtered), `O_NONBLOCK`, a regular file by its fstat;
+    `.`, `..`, an empty part or an absolute path refused. Every caller reads from that fd, bounded
+    (`box_home_read`, `tail_file`, 8 MiB; a crash report's, a theme name's less), jq gets the bytes
+    on stdin, and the failed-runs copy writes from the fd (`create_new`, `O_NOFOLLOW`, 64 MiB each);
+    the box's `run/hypr/*/hyprland.log` is opened the same way under the runtime dir. look reads
+    its job's log through `job_log` (box_home_read on the name after the box dir's `/home/`). The
+    look's report passes through `term::plain` whole: a window's class and title, a page's console,
+    a program's output, a step's error and the shell's warnings have every control character but
+    newline and tab as `?` (a program's colour codes too). Checks: cargo
+    (`box_home_file_no_link_no_fifo_no_escape`: a link at the file and on the way, a FIFO, `..`,
+    a folder, both openat2 and the walk; `a_jobs_log_is_read_as_the_boxs`, `the_report_is_plain`);
+    `t_hostile_reads` (a look app whose program swaps its log for a link to a host file and for a
+    FIFO, the plain look over such run -d logs: no host file printed, no hang; a window title with
+    OSC 52 said plain; a failed throwaway whose shell renames a HOME log between a file, a link to a
+    host file and a FIFO the whole time: it ends, and its kept logs hold no host file).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

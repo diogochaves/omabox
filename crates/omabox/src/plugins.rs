@@ -2,7 +2,7 @@
 //! up what the shell made of each plugin. As bin/omabox's resolve_plugin, desk_config, desk_plugins,
 //! plugin_check (with shell_warnings), theme_named and tree_dir.
 
-use crate::boxes::{box_home_file, meta};
+use crate::boxes::{box_home_file, box_home_read, meta};
 use crate::cat;
 use crate::exec::{ExecOpts, Redir, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, say};
@@ -286,10 +286,11 @@ fn no_colours(l: &[u8]) -> Vec<u8> {
     out
 }
 
-/// shell_warnings FILE: the filter over a shell log (empty when it cannot be read).
-pub fn shell_warnings(f: &std::path::Path) -> Vec<u8> {
-    std::fs::read(f)
-        .map(|t| shell_warnings_of(&t))
+/// shell_warnings: the filter over the box's shell log, its last READ_CAP bytes read from the fd
+/// box_home_file opened (empty when it cannot be read).
+pub fn shell_warnings(ctx: &Ctx) -> Vec<u8> {
+    box_home_file(&ctx.d, "shell.log")
+        .map(|f| shell_warnings_of(&crate::boxes::tail_file(f, crate::boxes::READ_CAP)))
         .unwrap_or_default()
 }
 
@@ -429,7 +430,7 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
     if !crate::exec::executable(&v_bin) {
         v_bin.clear();
     }
-    let (mut listed, mut cfg, mut log): (Option<Vec<u8>>, Option<std::path::PathBuf>, Vec<u8>) =
+    let (mut listed, mut cfg, mut log): (Option<Vec<u8>>, Option<Vec<u8>>, Vec<u8>) =
         (None, None, Vec::new());
     let sh = Args::new(&["-r", SHELL_JQ])
         .arg(&bjs)
@@ -442,10 +443,8 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
             let t = r.text();
             (r.ok() && !t.is_empty()).then_some(t)
         });
-        cfg = box_home_file(&ctx.d, ".config/omarchy/shell.json");
-        if let Some(f) = box_home_file(&ctx.d, "shell.log") {
-            log = shell_warnings(&f);
-        }
+        cfg = box_home_read(&ctx.d, ".config/omarchy/shell.json", crate::boxes::READ_CAP);
+        log = shell_warnings(ctx);
     }
     let id_list = shell::words(&ids);
     // (`jq -R . <<<"$ids" | jq -sc .`)
@@ -516,8 +515,7 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
                         .arg(id)
                         .kv("--argjson", "m", &m)
                         .arg(HOST_JQ)
-                        .arg(shell::bytes(c))
-                        .run_file(jq::Err::Null);
+                        .run(Some(c), jq::Err::Null);
                     if h.ok() {
                         host = h.text();
                     }
@@ -536,8 +534,7 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
                         Args::new(&["-e", "--arg", "i"])
                             .arg(id)
                             .arg(OWN_JQ)
-                            .arg(shell::bytes(c))
-                            .run_file(jq::Err::Null)
+                            .run(Some(c), jq::Err::Null)
                             .ok()
                     })
                 {
@@ -558,8 +555,7 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
                                 .kv("--argjson", "m", &m)
                                 .kv("--argjson", "l", l)
                                 .arg(PLACERS_JQ)
-                                .arg(shell::bytes(c))
-                                .run_file(jq::Err::Null)
+                                .run(Some(c), jq::Err::Null)
                                 .text()
                         })
                         .unwrap_or_default();
