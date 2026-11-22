@@ -156,11 +156,7 @@ fn down_one_with<S: BoxSys + ?Sized>(
     // up says it: bash's kill_box took it for no box, removed its dir and said it down while its
     // PID 1 ran on (finding 473).
     if matches!(sys.box_pid(&ctx.d), crate::boxes::BoxPid::Unknown) {
-        say(cat!(
-            "cannot tell whether box '",
-            ctx.name,
-            "' is up from this user namespace (a sandbox's?): run omabox outside it"
-        ));
+        say(crate::boxes::unknown_text(&ctx.name));
         return Ok(false);
     }
     // A box another caller started or used just now may be another agent's (#295): said, not

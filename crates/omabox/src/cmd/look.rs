@@ -574,16 +574,35 @@ struct Ran {
     err: Vec<u8>,
 }
 
+/// `omabox ARGS`, as main's foreground child (sig::run_child: a signal's stop waits for it, and a
+/// Teardown forwards its signal to look's up, finding 754), its stdout and stderr read whole.
 fn ob(args: &[&[u8]]) -> Ran {
     let mut c = crate::sig::omabox_cmd();
     c.args(args.iter().map(|a| OsStr::from_bytes(a)))
-        .stdin(std::process::Stdio::null());
-    match c.output() {
-        Ok(o) => Ran {
-            ok: o.status.success(),
-            code: o.status.code().unwrap_or(1),
-            out: o.stdout,
-            err: o.stderr,
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let r = crate::sig::run_child(c, false, |ch| {
+        let err = ch.stderr.take().map(|mut e| {
+            std::thread::spawn(move || {
+                let mut v = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut e, &mut v);
+                v
+            })
+        });
+        let mut out = Vec::new();
+        if let Some(mut o) = ch.stdout.take() {
+            let _ = std::io::Read::read_to_end(&mut o, &mut out);
+        }
+        (out, err.and_then(|t| t.join().ok()).unwrap_or_default())
+    });
+    match r {
+        Ok(((out, err), (rc, sig))) => Ran {
+            ok: rc == 0 && sig.is_none(),
+            // (Output's code(): none for a signal, 1 then)
+            code: if sig.is_some() { 1 } else { rc },
+            out,
+            err,
         },
         Err(_) => Ran {
             ok: false,
@@ -1379,7 +1398,7 @@ fn start(
     }
     up.extend_from_slice(extra);
     up.extend(a.up.iter().map(Vec::as_slice));
-    let r = ob(&up);
+    let r = crate::sig::teardown_forwarding(|| ob(&up));
     if !r.ok {
         let _ = std::io::Write::write_all(&mut std::io::stderr(), &r.err);
         return Err(ctx.die("look: the box did not start"));

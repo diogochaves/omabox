@@ -413,6 +413,19 @@ pub fn catch_info(
     }
 }
 
+/// Main's foreground child is a box's `up` (run's throwaway, look's box): a Teardown's signal is
+/// forwarded to it and waited for (trap::foreground_over) before the down, so the up's own undo
+/// ends its half-made box and no down runs beside an up still making it (finding 754).
+static TEARDOWN_FORWARDS: AtomicBool = AtomicBool::new(false);
+
+/// F with TEARDOWN_FORWARDS raised.
+pub fn teardown_forwarding<T>(f: impl FnOnce() -> T) -> T {
+    TEARDOWN_FORWARDS.store(true, Ordering::SeqCst);
+    let r = f();
+    TEARDOWN_FORWARDS.store(false, Ordering::SeqCst);
+    r
+}
+
 /// The box `run` started for its command, taken down once (`out=$(cmd_down NAME 2>&1) || say "$out"`).
 pub struct Teardown {
     name: Vec<u8>,
@@ -435,8 +448,21 @@ impl Teardown {
                 let mut f = std::fs::File::from(r);
                 let mut b = [0u8; 1];
                 if f.read_exact(&mut b).is_ok() {
-                    down(&n, &d);
                     let sig = libc::c_int::from(b[0]);
+                    // (main starts nothing more: it parks once its step ends, till the raise)
+                    STOPPING.store(true, Ordering::SeqCst);
+                    if TEARDOWN_FORWARDS.load(Ordering::SeqCst) {
+                        // (an up spawned but not yet named in FG_CHILD is asked again, a moment)
+                        let t0 = std::time::Instant::now();
+                        while !signal_foreground(sig)
+                            && FOREGROUND.try_lock().is_err()
+                            && t0.elapsed() < std::time::Duration::from_millis(500)
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        let _g = crate::trap::foreground_over();
+                    }
+                    down(&n, &d);
                     // SAFETY: back to the default action, then the signal again: this process ends
                     // as it would have.
                     unsafe {

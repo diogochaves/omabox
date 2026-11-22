@@ -6,7 +6,7 @@
 //! fatal signal's backtraces into the box's gdb log.
 
 use crate::args::{optarg, unexpected, unknown_opt_hint};
-use crate::boxes::{BoxPid, box_home, box_pid, covers_held, need_box};
+use crate::boxes::{box_home, covers_held, need_box};
 use crate::cat;
 use crate::enter::Plan;
 use crate::exec::{Relayed, stdio_relay};
@@ -115,17 +115,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     // (A box this user namespace cannot read, said as box_alive says it, 1: bash's set -e ended it
     // with box_pid's 3, unsaid, finding 442.)
-    let bp = match box_pid(&ctx.d) {
-        BoxPid::Pid(p) => p,
-        BoxPid::Unknown => {
-            return Err(ctx.die(cat!(
-                "cannot tell whether box '",
-                ctx.name,
-                "' is up from this user namespace (a sandbox's?): run omabox outside it"
-            )));
-        }
-        BoxPid::None => return Err(ctx.die(cat!("box '", ctx.name, "' is not up"))),
-    };
+    let bp = crate::boxes::need_pid(ctx)?;
     covers_held(ctx)?;
     // Every namespace of the box, its network too (finding 229; enter::all), entered natively
     // (finding 490), in a session of its own (finding 491). The box went as it was entered: as

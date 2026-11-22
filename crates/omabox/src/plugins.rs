@@ -367,7 +367,7 @@ fn validate(v: &[u8], dir: &[u8]) -> (bool, Vec<u8>) {
     match r {
         Ok((e, (rc, _))) => (rc == 0, strip_nl(&e)),
         // (a validator that could not start: said in omabox's words, finding 441)
-        Err(e) => (false, cat!("omabox: cannot run ", v, ": ", e.to_string())),
+        Err(e) => (false, cat!("omabox: ", crate::exec::cant_run(v, &e).0)),
     }
 }
 
@@ -798,6 +798,17 @@ pub fn theme_folders(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Finding 754: a validator that is not there, in omabox's words (not "(os error 2)").
+    #[test]
+    fn validator_not_there_said() {
+        let (ok, m) = validate(b"/nonexistent/omabox-754/check", b"/");
+        assert!(!ok);
+        assert_eq!(
+            String::from_utf8_lossy(&m),
+            "omabox: cannot run /nonexistent/omabox-754/check: no such file"
+        );
+    }
 
     #[test]
     fn folders_of_a_theme() {

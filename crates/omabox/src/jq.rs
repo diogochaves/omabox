@@ -118,15 +118,10 @@ fn not_run(name: &str, e: &std::io::Error) -> (i32, Vec<u8>) {
             127,
             crate::cat!("omabox: cannot run ", name, ": not found in PATH\n"),
         ),
-        (Some(p), code) => {
-            // SAFETY: strerror's string for a valid errno, read at once.
-            let why = unsafe {
-                std::ffi::CStr::from_ptr(libc::strerror(code.unwrap_or(libc::EIO)))
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            (126, crate::cat!("omabox: cannot run ", p, ": ", why, "\n"))
-        }
+        (Some(p), _) => (
+            126,
+            crate::cat!("omabox: ", crate::exec::cant_run(&p, e).0, "\n"),
+        ),
     }
 }
 

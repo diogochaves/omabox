@@ -15223,6 +15223,36 @@ from them.
     and lost edits), `box_json_edit_held_and_gone` (a holder edits at once, another thread cannot
     have the lock meanwhile, a box gone makes no lock file and no dir).
 
+754. **Error lines said one way, `run`'s and `look`'s up stopped with them, check run --json's
+    summary whole** (2026-11-22, the 2026-11-22 review's small correctness items). **A box gone
+    after need_box**: `on_box`'s and `box_exec`'s refusals said `box 'N' is not up`, for a box this
+    user namespace cannot read too, with no command (740, 744). Five copies of the box-lookup words
+    now come from `boxes::unknown_text`/`gone_text` (`pid_or_text`, `need_pid`): `box 'N' is not up
+    (start it with: omabox up N)`, or the sandbox line. **A program that would not start** had four
+    wordings in seven copies, some Rust's `No such file or directory (os error 2)` (`up --plugin`'s
+    validator, the relay, run's in-box command): all go through `exec::cant_run`, `exec_failed`'s
+    words (`not found in PATH`, `no such file` for a path, `permission denied`, else strerror), the
+    exit codes as they were; run's line now goes through `say` (the command log records it). The
+    other io errors that reached the user as Rust's text (`save`'s five, up's HOME seeding and card
+    placeholder, the seat check, latemount's steps, `rm`) say strerror's words. **`run`'s throwaway
+    up** ran by `Command::output()`, no foreground child: a TERM to `run` went to run alone, whose
+    Teardown's down waited for the box lock until the up had finished starting a box (3.4 s idle,
+    more under load), only to take it down. It runs through `sig::run_child` now (look's `ob` too,
+    every omabox look runs), and while it is a box's up (`sig::teardown_forwarding`) the Teardown
+    sends it the signal first and waits for it (`trap::foreground_over`'s grace, then TERM, KILL),
+    so up's own undo removes its half-made box, then the down, then the raise; main parks
+    (`STOPPING`) and starts nothing more. The other `Command::output()` sites the review listed are
+    quick probes (lspci, awk, magick, fc-match, mktemp, cat, tail, omarchy-theme-color, calibrate's
+    hyprctl) and stay. **check run --json** read check_compare's 15 tab-joined fields by position
+    (`$s[4] | tonumber`), handed through a thread-local when the run changed: a tab in `--base` or
+    `-o` shifted them and jq printed nothing. The summary is a `RunSum` serialized whole (serde_json,
+    the same object and key order; an `--only` glob with a comma is no longer split); `compare`
+    returns it with the result, the thread-local is gone. Also: four stale lint allows (deskshell.rs,
+    upspec.rs) dropped. Checks: cargo (`need_pid_says_its_fix`, `cant_run_said_once`: on_box's
+    refusal too, `validator_not_there_said`, `compare_json_tab_in_paths`, which failed before:
+    jq printed nothing); `t_throwaway_term` (a TERM to run as its up appears: 143, the up ended
+    before run, within 2.5 s; before: 3445 ms, failed).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

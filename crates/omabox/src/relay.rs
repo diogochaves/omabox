@@ -154,7 +154,7 @@ fn exec_call(ctx: &Ctx, relay: &[u8], fds: &[RawFd], env: &Env, words: &[Vec<u8>
     match call_cmd(ctx, relay, fds, env, words) {
         Ok((mut c, _keep)) => {
             let e = c.exec();
-            say(cat!("cannot run ", relay, ": ", e.to_string()));
+            say(crate::exec::cant_run(relay, &e).0);
             Exit(126)
         }
         Err(e) => e,
@@ -890,7 +890,7 @@ fn record(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()
                 let mut c = crate::sig::omabox_cmd();
                 c.args(w.iter().map(|a| OsStr::from_bytes(a)));
                 let e = c.exec();
-                say(cat!("cannot run omabox again: ", e.to_string()));
+                say(cat!("cannot run omabox again: ", crate::shots::why(&e)));
                 return Err(Exit(126));
             }
             Ok(())

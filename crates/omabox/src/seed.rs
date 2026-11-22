@@ -345,7 +345,7 @@ fn failed(ctx: &Ctx, what: &[u8], e: &std::io::Error) -> Exit {
         "up: could not ",
         what,
         " in the box HOME: ",
-        e.to_string()
+        crate::shots::why(e)
     ))
 }
 
