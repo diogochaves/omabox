@@ -39,8 +39,7 @@ in Hyprland's own env syntax. All fixed, each with a test that plants the link, 
   ([#480](https://github.com/diogochaves/omabox/issues/480): a path no box may mount is no longer
   offered as a copy).
 - **A TERM to `run` or `look` reaches the box they are starting**, which goes down at once.
-- **`check run --json` survives a tab in `--base` or `-o`**; an `--only` glob holding a comma is no
-  longer split.
+- **`check run --json` survives a tab in `--base` or `-o`**, which shifted its summary's fields.
 
 ## 1.5.1 — 2026-11-21
 

@@ -15281,7 +15281,7 @@ from them.
     hyprctl) and stay. **check run --json** read check_compare's 15 tab-joined fields by position
     (`$s[4] | tonumber`), handed through a thread-local when the run changed: a tab in `--base` or
     `-o` shifted them and jq printed nothing. The summary is a `RunSum` serialized whole (serde_json,
-    the same object and key order; an `--only` glob with a comma is no longer split); `compare`
+    the same object and key order); `compare`
     returns it with the result, the thread-local is gone. Also: four stale lint allows (deskshell.rs,
     upspec.rs) dropped. Checks: cargo (`need_pid_says_its_fix`, `cant_run_said_once`: on_box's
     refusal too, `validator_not_there_said`, `compare_json_tab_in_paths`, which failed before:
