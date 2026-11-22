@@ -976,7 +976,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     select_box(ctx, &o.name)?;
     // A sheet needs no box (#279): with none named and none up, its ffmpeg runs here, sandboxed.
     if s == b"sheet" && ctx.name_derived && !crate::boxes::box_alive(ctx)? {
-        return crate::cmd::record_stop::sheet_file_host(ctx, &o_sheet(&o));
+        return crate::cmd::record_sheet::sheet_file_host(ctx, &o_sheet(&o));
     }
     need_box(ctx)?;
     let call_us = num(&crate::call_us());
@@ -1004,7 +1004,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 Err(Exit(1))
             };
         }
-        b"sheet" => return crate::cmd::record_stop::sheet_file(ctx, &o_sheet(&o)),
+        b"sheet" => return crate::cmd::record_sheet::sheet_file(ctx, &o_sheet(&o)),
         b"stop" => {
             if !o.out.is_empty() || !o.monitor.is_empty() {
                 return Err(ctx.die("record stop: -o and --monitor go with start"));

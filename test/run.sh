@@ -962,7 +962,7 @@ t_unit_rec_ff() {
   check "...the check read them ($calls)" test "${calls% calls}" -ge 15
   # (the check's own: the crate with rec_ff's calls renamed, each of them unbounded)
   m=$TMP/recff-crate; rm -rf "$m"; cp -r "$src" "$m"; chmod -R u+w "$m"   # (an install's tree is read-only)
-  sed -i 's/\brec_ff(/sys_ff(/g; s/\bff_line(/sys_line(/g; s/\brec_ff_subst(/sys_subst(/g; s/\bff_at(/sys_at(/g' "$m/cmd/record_stop.rs"
+  sed -i 's/\brec_ff(/sys_ff(/g; s/\bff_line(/sys_line(/g; s/\brec_ff_subst(/sys_subst(/g; s/\bff_at(/sys_at(/g' "$m/cmd/record_stop.rs" "$m/cmd/record_sheet.rs"
   check_eq "...it finds the 15 calls bounded (finding 356, #260's --changed, finding 693's copy), rec_ff's and ff_at's taken away" 15 "$(python3 -c "$REC_FF" "$m" | sed '$d' | wc -l)"
   # (rec_ff itself, a run out of time run once more, stuck once, a failure not a timeout:
   # record_stop.rs rec_ff_runs_once_more, an #[ignore] test; its bound: bounds; #324 wave 6-suite.)

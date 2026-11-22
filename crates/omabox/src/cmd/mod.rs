@@ -42,6 +42,7 @@ pub mod polkit;
 pub mod ports;
 pub mod reap;
 pub mod record;
+pub mod record_sheet;
 pub mod record_stop;
 pub mod reload;
 pub mod restart_shell;
