@@ -26,7 +26,6 @@ use crate::shell;
 
 /// One desk shell, as its profile says it (the module's comment has the keys).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // (read by steps 2, 4 and 5 of #321)
 pub struct Profile {
     pub name: Vec<u8>,
     pub start: Vec<u8>,
@@ -132,7 +131,6 @@ pub fn parse(name: &[u8], text: &[u8]) -> Result<Profile, String> {
 
 /// dir: the profiles' folder, share/desk-shells; OMABOX_DESK_SHELL_DIR, the suite's, never a jailed
 /// caller's.
-#[allow(dead_code)] // (read by steps 2 and 4 of #321)
 pub fn dir() -> Vec<u8> {
     match shell::env("OMABOX_DESK_SHELL_DIR") {
         Some(d) if !d.is_empty() && !in_jail() => d,
@@ -142,7 +140,6 @@ pub fn dir() -> Vec<u8> {
 
 /// all DIR: every profile in DIR, by name; a file that is not one is an error (it ships with
 /// omabox, so a broken one is omabox's bug, never skipped unseen).
-#[allow(dead_code)] // (read by steps 2 and 4 of #321)
 pub fn all(dir: &[u8]) -> Result<Vec<Profile>, String> {
     let lossy = |v: &[u8]| String::from_utf8_lossy(v).into_owned();
     let rd = std::fs::read_dir(shell::path(dir)).map_err(|e| format!("{}: {e}", lossy(dir)))?;

@@ -252,7 +252,6 @@ pub fn chosen_text(d: Desktop, how: Chosen) -> Option<&'static str> {
 }
 
 /// up --idle and $OMABOX_IDLE as whole seconds: `check run` shares bash's idle_duration.
-#[allow(unused_imports)]
 pub use crate::cmd::check::idle_duration;
 
 /// P is DIR or below it (`[ "$p" = "$d" ] || [[ $p == "$d"/* ]]`).
