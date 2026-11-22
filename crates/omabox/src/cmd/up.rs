@@ -1352,7 +1352,9 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
         return Err(ctx.die(cat!(
             "Omarchy has not set a theme for you yet (",
             home,
-            "/.local/state/omarchy/current/theme), and a box starts from your Omarchy look: log into Omarchy once, or set one: omarchy-theme-set \"Tokyo Night\" (or up --theme NAME)"
+            "/.local/state/omarchy/current/theme), and a box starts from your Omarchy look: log into Omarchy once, or set one: ",
+            crate::guard::theme_set_here(),
+            " (or up --theme NAME)"
         )));
     }
     // More monitors (#122): an interactive box's are windows (#123), which need aquamarine's fix and

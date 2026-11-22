@@ -14729,6 +14729,33 @@ t_throwaway_term() {
   if until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name | startswith(\"$P-tt-run\"))'" >/dev/null; then ok "its box goes within 15 s"
   else no "its box goes within 15 s" "$("$CLI" ls 2>&1)"; fi
   [ "$alive" = no ] || kill -KILL "$up" 2>/dev/null
+  # Finding 757: a TERM while run takes its box down at the end (main in its teardown, holding its
+  # lock): run still ends, as the TERM would have, its box gone; it never parks waiting for the trap
+  # that waits for it. (The narrowest window, before the down starts, is the unit test's,
+  # sig::teardown_under_its_lock_never_parks.)
+  local dn=""
+  (cd "$repo" && exec env -u OMABOX "$CLI" run -- true) 2>"$TMP/tt2.err" & r=$!
+  for ((i = 0; i < 3000; i++)); do
+    dn=$(pgrep -P "$r" -f 'omabox down ' | head -n 1)
+    [ -z "$dn" ] || break
+    kill -0 "$r" 2>/dev/null || break
+    sleep 0.01
+  done
+  if [ -z "$dn" ]; then
+    wait "$r" 2>/dev/null
+    skip "a TERM during run's own down" "its down was not seen running (over before a look)"
+  else
+    kill -TERM "$r"
+    local w; for ((w = 0; w < 300; w++)); do kill -0 "$r" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$r" 2>/dev/null; then
+      no "a TERM during run's own down: run ends within 30 s" "$(cat "$TMP/tt2.err")"; kill -KILL "$r" 2>/dev/null; wait "$r" 2>/dev/null
+    else
+      wait "$r"; rc=$?
+      check_match "a TERM during run's own down: run ends within 30 s (0 or 143)" '^(0|143)$' "$rc"
+    fi
+    if until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name | startswith(\"$P-tt-run\"))'" >/dev/null; then ok "...its box gone"
+    else no "...its box gone" "$("$CLI" ls 2>&1)"; fi
+  fi
 }
 
 # (An up whose `omabox run` is gone, #222, finding 309: ready.rs up_stops_when_its_run_is_gone,
@@ -15678,6 +15705,17 @@ t_shell_restart_race() {
   check_eq "...none started as a duplicate" "" "$baddup"
   check_eq "...ls: running, the plugin loaded" "running loaded" \
     "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.rr" '.[] | select(.name == $n) | "\(.shell_state) \(.plugin_status[$i].state)"')"
+  # Finding 757: the box's lock held (a save's copy) while restart-shell records the plugins' states:
+  # the restart is not undone by it, so a short wait, a line, exit 0 (it waited 60 s, then exit 1).
+  local lk=$XDG_RUNTIME_DIR/omabox/.lock-$B held t0 t1
+  rm -f "$TMP/rr-held" "$TMP/rr-release"
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.05; done' "$TMP/rr-held" "$TMP/rr-release" & held=$!
+  until_ok 5 test -e "$TMP/rr-held" >/dev/null
+  t0=$(date +%s); out=$(ob restart-shell -b "$B" 2>&1); rc=$?; t1=$(date +%s)
+  touch "$TMP/rr-release"; wait "$held" 2>/dev/null
+  check_eq "restart-shell with the box's lock held: exit 0, restarted" "0 1" "$rc $(grep -c "shell restarted" <<<"$out")"
+  check_match "...saying the record waits for no lock" "the plugins' states not recorded in box '$B''s box.json: its lock was busy" "$out"
+  check "...in well under 60 s" test $((t1 - t0)) -lt 30
   ob down "$B" >/dev/null
 }
 
@@ -15942,9 +15980,14 @@ t_unit_doctor() {
   done
   check_eq "...every check, in order" "$ids" "$(jq -r '[.checks[].id] | join(" ")' <<<"$j")"
   if omarchy_here; then
+    # (finding 757: from a shell whose PATH has the guard's stand-ins, the fix goes through omabox host)
+    local fix='omarchy-theme-set "Tokyo Night"'
+    case ":$PATH:" in *"/share/guard:"* | *"/share/guard/:"*) fix='omabox host -- omarchy-theme-set "Tokyo Night" (the guard refuses it plain; only when the user asked)' ;; esac
     check_eq "...a HOME with no Omarchy theme fails, with up's fix; ok false, exit 1" \
-      "fail log into Omarchy once, or: omarchy-theme-set \"Tokyo Night\" (or up --theme NAME) false 1" \
+      "fail log into Omarchy once, or: $fix (or up --theme NAME) false 1" \
       "$(jq -r '(.checks[] | select(.id == "theme") | "\(.status) \(.fix[0])"), .ok' <<<"$j" | paste -sd ' ') $rc"
+    check_match "...under the guard's PATH, through omabox host" '^log into Omarchy once, or: omabox host -- omarchy-theme-set "Tokyo Night" \(the guard' \
+      "$(_doctor_env XDG_RUNTIME_DIR="$h/rt" PATH="$ROOT/share/guard:$PATH" "$CLI" doctor --json | jq -r '.checks[] | select(.id == "theme") | .fix[0]')"
   else
     # (#247: plain boxes want no Omarchy theme)
     check_eq "...a HOME with no Omarchy theme, on a machine without Omarchy: information, no fix" "info 0" \
@@ -20036,7 +20079,7 @@ PY
 # Finding 750: Omarchy's theme, wallpaper and font commands need no display. omarchy-theme-set has no
 # `set -e` and only its hyprctl and omarchy-shell calls fail under the guard, so from a guarded shell it
 # still switched the user's real theme, terminals, GTK and browser colours. The guard's stand-ins refuse
-# them by name while the display names no socket, saying what to run instead; stubs after them on PATH
+# them by name whatever the display (757), saying what to run instead, but under Omarchy's update; stubs after them on PATH
 # stand in for the real ones (a refusal that failed reaches a stub, never Omarchy's). In a runtime dir
 # and HOME of its own.
 t_unit_guard_theme_set() {
@@ -20075,13 +20118,38 @@ t_unit_guard_theme_set() {
   check_match "...run by another Omarchy command: that one named too" "^omabox guard: not running omarchy-theme-set \(run by omarchy-theme-refresh\) here" \
     "$("${gx[@]}" omarchy-theme-refresh 2>&1)"
   check_eq "...nothing got past them" "" "$(cat "$d/stub.log")"
-  # A display that is a socket (one named on purpose) goes on to the next one on PATH, words whole and
-  # the guard's own variable gone.
+  # Finding 757: a display that is a socket decides nothing (a box's, after `eval "$(omabox env)"`,
+  # still has the user's HOME): refused all the same, by name and with an absolute path.
   python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$d/rt/wayland-1"
-  check_eq "a display that is a socket goes on to the next omarchy-font-set, its words whole" "real omarchy-font-set reached: Jet Brains" \
-    "$("${env[@]}" WAYLAND_DISPLAY=wayland-1 "$ROOT/share/guard/omarchy-font-set" "Jet Brains" >/dev/null 2>&1; cat "$d/stub.log")"
-  check_eq "...without the name it was run under" unset \
-    "$("${env[@]}" WAYLAND_DISPLAY=wayland-1 PATH="$ROOT/share/guard:$TMP/g750env:$PATH" sh -c 'mkdir -p "$1"; printf "#!/bin/sh\necho \${OMABOX_GUARD_AS-unset}\n" > "$1/omarchy-theme-bg-set"; chmod +x "$1/omarchy-theme-bg-set"; omarchy-theme-bg-set x' _ "$TMP/g750env")"
+  local gp=("${env[@]}" PATH="$ROOT/share/guard:$d/stub:$PATH")
+  for n in omarchy-theme-set omarchy-font-set; do
+    check_eq "a socket display ($n, WAYLAND_DISPLAY=wayland-1): refused, exit 4" 4 \
+      "$("${gp[@]}" WAYLAND_DISPLAY=wayland-1 "$n" x >/dev/null 2>&1; echo $?)"
+    check_eq "...and a box's socket by its path, as omabox env exports it" 4 \
+      "$("${gp[@]}" WAYLAND_DISPLAY="$d/rt/wayland-1" "$n" x >/dev/null 2>&1; echo $?)"
+  done
+  check_eq "...nothing got past them" "" "$(cat "$d/stub.log")"
+  # Run by Omarchy's own update (omarchy-migrate or omarchy-update among its callers, here stand-ins of
+  # those names, never Omarchy's): handed to the next one on PATH, words whole and the guard's own
+  # variable gone, so a migration that re-stages the theme does not stop the update half done.
+  printf '#!/bin/bash\nset -e\nbash -euo pipefail -c "omarchy-theme-refresh"\necho migrated\n' > "$d/stub/omarchy-migrate"
+  printf '#!/bin/bash\nset -e\nomarchy-migrate\n' > "$d/stub/omarchy-update"
+  printf '#!/bin/bash\nomarchy-font-set "Jet Brains"\n' > "$d/stub/omarchy-migrate-notify"
+  chmod +x "$d/stub/omarchy-migrate" "$d/stub/omarchy-update" "$d/stub/omarchy-migrate-notify"
+  check_eq "under omarchy-migrate (through a migration and omarchy-theme-refresh): the real one runs, the migration goes on" \
+    "migrated|real omarchy-theme-set reached: Tokyo Night" \
+    "$("${gx[@]}" omarchy-migrate 2>/dev/null)|$(cat "$d/stub.log")"
+  : > "$d/stub.log"
+  check_eq "...under omarchy-update, its grandparent, too" "migrated|real omarchy-theme-set reached: Tokyo Night" \
+    "$("${gx[@]}" omarchy-update 2>/dev/null)|$(cat "$d/stub.log")"
+  : > "$d/stub.log"
+  check_eq "...but not under a command whose name only starts so (omarchy-migrate-notify)" "4|" \
+    "$("${gx[@]}" omarchy-migrate-notify >/dev/null 2>&1; echo $?)|$(cat "$d/stub.log")"
+  : > "$d/stub.log"
+  check_eq "...nor one whose words only hold the name" "4|" \
+    "$("${gx[@]}" bash -c 'omarchy-theme-set x; exit $?' omarchy-migrate-x >/dev/null 2>&1; echo $?)|$(cat "$d/stub.log")"
+  check_eq "...a hand-off without the name it was run under" unset \
+    "$("${env[@]}" PATH="$ROOT/share/guard:$TMP/g750env:$PATH" sh -c 'mkdir -p "$1"; printf "#!/bin/sh\necho \${OMABOX_GUARD_AS-unset}\n" > "$1/omarchy-theme-bg-set"; chmod +x "$1/omarchy-theme-bg-set"; printf "#!/bin/sh\nomarchy-theme-bg-set x\n" > "$1/omarchy-update"; chmod +x "$1/omarchy-update"; "$1/omarchy-update"' _ "$TMP/g750env")"
 }
 
 # Under the guard, with a box standing in for the host (finding 26): box commands work, an app run
@@ -20101,6 +20169,16 @@ t_guard() {
   local spath; spath=$("$CLI" run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$(pgrep -x Hyprland)/environ | grep "^PATH="')
   check_match "...and the box session's PATH" '^PATH=/' "$spath"
   check_fails "...lacks the guard's" grep share/guard <<<"$spath"
+  # Finding 757: a box's display from `omabox env` (an absolute socket) does not let the guard's
+  # omarchy-theme-set through: it writes the HOME, the user's. A stub after the guard on PATH stands in
+  # for Omarchy's, so a refusal that failed reaches it, never the real one.
+  local gst=$TMP/$P-gd-stub benv
+  mkdir -p "$gst"; rm -f "$gst/log"
+  printf '#!/bin/sh\necho "real reached: $*" >> %s/log\n' "$gst" > "$gst/omarchy-theme-set"; chmod +x "$gst/omarchy-theme-set"
+  benv=$("${GUARDED[@]}" "$CLI" env -b "$B" 2>/dev/null) || benv=""
+  check_match "omabox env under the guard names the box's socket by its path" "WAYLAND_DISPLAY=.?/" "$benv"
+  check_eq "...and omarchy-theme-set with it is still refused (exit 4), nothing reached" "4|" \
+    "$("${GUARDED[@]}" PATH="$ROOT/share/guard:$gst:$PATH" bash -c 'eval "$1"; [ -S "$WAYLAND_DISPLAY" ] || exit 9; omarchy-theme-set x >/dev/null 2>&1; echo $?' _ "$benv")|$(cat "$gst/log" 2>/dev/null)"
   # Inside the stand-in host: the guard as an agent's shell there would have it.
   local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" "${GUARDED[@]}")
   # A Wayland client says so too, and exits cleanly.
@@ -21444,6 +21522,15 @@ t_omarchy_tree() {
   check_eq "...its commit after restart-shell" "dev $(git -C "$T" rev-parse --short HEAD)" "$(ov)"
   echo '-- edited' >> "$T/default/hypr/bootstrap.lua"; ob restart-shell -b "$B" >/dev/null 2>&1
   check_eq "...+dirty once edited" "dev $(git -C "$T" rev-parse --short HEAD)+dirty" "$(ov)"
+  # Finding 757: the box's lock held meanwhile (a save's copy): the restart stands, the record is said
+  # not written, exit 0, no 60 s wait.
+  local out rc held; rm -f "$TMP/ot-held" "$TMP/ot-release"
+  flock "$XDG_RUNTIME_DIR/omabox/.lock-$B" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.05; done' "$TMP/ot-held" "$TMP/ot-release" & held=$!
+  until_ok 5 test -e "$TMP/ot-held" >/dev/null
+  out=$(timeout 40 "$CLI" restart-shell -b "$B" 2>&1); rc=$?
+  touch "$TMP/ot-release"; wait "$held" 2>/dev/null
+  check_eq "...restart-shell with the box's lock held: exit 0" 0 "$rc"
+  check_match "...the tree's commit said not recorded" "the Omarchy tree's commit not recorded in box '$B''s box.json: its lock was busy" "$out"
   check_match "up again with another tree: refused" "--omarchy /usr/share/omarchy" "$(ob up "$B" --omarchy /usr/share/omarchy 2>&1)"
   # A box in that box, on the installed Omarchy: the outer /etc/omarchy.conf names the tree.
   local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" "$CLI")

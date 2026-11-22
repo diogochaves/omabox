@@ -168,12 +168,20 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         } else {
             cat!("dev ", v)
         };
-        if !crate::mon::jq_box_json(
-            ctx,
-            crate::jq::Args::new(&[])
-                .kv("--arg", "v", &v)
-                .arg(".omarchy_version = $v"),
-        ) {
+        // Only a record now (the shell restarted): a busy lock or a box gone is said, exit 0; a write
+        // that failed (said) is still exit 1.
+        let args = crate::jq::Args::new(&[])
+            .kv("--arg", "v", &v)
+            .arg(".omarchy_version = $v");
+        let e = crate::boxes::edit_box_json_wait(ctx, crate::boxes::RECORD_WAIT, |bj| {
+            let r = args.arg(shell::bytes(bj)).run_file(crate::jq::Err::Inherit);
+            r.ok().then_some(r.out)
+        });
+        if let Some(m) =
+            crate::boxes::record_note(&ctx.label(), &ctx.name, "the Omarchy tree's commit", e)
+        {
+            say(m);
+        } else if e != crate::boxes::Edited::Written {
             return Err(Exit(1));
         }
     }

@@ -481,7 +481,25 @@ impl Teardown {
 }
 
 fn down(name: &[u8], done: &Mutex<bool>) {
+    down_with(
+        || {
+            let mut c = omabox_cmd();
+            c.arg("down").arg(OsStr::from_bytes(name));
+            c
+        },
+        done,
+        || {},
+    );
+}
+
+/// down's work: CMD (the `down`) made before DONE is taken, then HELD, then it is run once. Main never
+/// parks holding DONE (round-2 review): making a command parks main while a trap is on its way
+/// (sig::command), and the trap's thread sets STOPPING and then waits for DONE, so a command made
+/// under the lock hung both for good.
+fn down_with(cmd: impl FnOnce() -> Command, done: &Mutex<bool>, held: impl FnOnce()) {
+    let mut c = cmd();
     let Ok(mut d) = done.lock() else { return };
+    held();
     if *d {
         return;
     }
@@ -489,8 +507,6 @@ fn down(name: &[u8], done: &Mutex<bool>) {
     let Ok((r, w)) = crate::exec::pipe() else {
         return;
     };
-    let mut c = omabox_cmd();
-    c.arg("down").arg(OsStr::from_bytes(name));
     let Ok(w2) = w.try_clone() else { return };
     c.stdin(Stdio::null())
         .stdout(Stdio::from(w))
@@ -909,6 +925,40 @@ mod signal_cases {
         assert_eq!(rc, 143, "{err}");
         assert!(err.contains("CASE undo saw main's file"), "{err}");
         assert!(!err.contains("CASE past"), "{err}");
+    }
+
+    /// Round-2 review: a TERM's thread sets STOPPING while main is inside the teardown, holding its
+    /// lock: main still runs the down and returns (it used to make the command there, parking for
+    /// good while the thread waited for the lock).
+    #[test]
+    fn teardown_under_its_lock_never_parks() {
+        let Some(r) = in_child("teardown_under_its_lock_never_parks") else {
+            super::set_main();
+            let done = std::sync::Mutex::new(false);
+            super::down_with(
+                || {
+                    let mut c = super::command("sh");
+                    c.args(["-c", "echo CASE down ran >&2; exit 3"]);
+                    c
+                },
+                &done,
+                || super::STOPPING.store(true, std::sync::atomic::Ordering::SeqCst),
+            );
+            eprintln!("CASE main went on {}", *done.lock().unwrap());
+            // (a second call, as the trap's thread's would be once it has the lock: not run again)
+            super::STOPPING.store(false, std::sync::atomic::Ordering::SeqCst);
+            super::down_with(
+                || super::command("false"),
+                &done,
+                || eprintln!("CASE second held"),
+            );
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 0, "{err}");
+        assert!(err.contains("CASE down ran"), "{err}");
+        assert!(err.contains("CASE main went on true"), "{err}");
+        assert!(err.contains("CASE second held"), "{err}");
     }
 
     /// Main's busy in-process work that does not end (a read that blocks): the undo waits for it at

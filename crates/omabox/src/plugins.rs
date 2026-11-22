@@ -657,7 +657,9 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
     if bad {
         say(cat!("the shell's log: omabox log -b ", ctx.name, " shell"));
     }
-    crate::boxes::edit_box_json(ctx, |bj| {
+    // A record of what was checked: under up's or plugin add's lock it is written at once; from
+    // restart-shell a busy lock or a box gone is said, not waited out.
+    let e = crate::boxes::edit_box_json_wait(ctx, crate::boxes::RECORD_WAIT, |bj| {
         let j = Args::new(&["--argjson", "s"])
             .arg(&status)
             .arg(PLUGIN_STATUS_JQ)
@@ -665,6 +667,9 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
             .run_file(jq::Err::Inherit);
         j.ok().then_some(j.out)
     });
+    if let Some(m) = crate::boxes::record_note(&ctx.label(), &ctx.name, "the plugins' states", e) {
+        say(m);
+    }
     Ok(())
 }
 

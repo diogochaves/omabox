@@ -181,16 +181,48 @@ pub fn unknown_text(name: &[u8]) -> Vec<u8> {
     )
 }
 
-/// What a call says of box NAME that went down after need_box let it through (box_pid's None),
-/// ending with the command that fixes it (findings 740, 744, 754).
-pub fn gone_text(name: &[u8]) -> Vec<u8> {
-    cat!(
-        "box '",
-        name,
-        "' is not up (start it with: omabox up ",
-        name,
-        ")"
-    )
+/// What a call says of box NAME (dir D) that went down after need_box let it through (box_pid's
+/// None), ending with the command that fixes it (findings 740, 744, 754), as gone_hint words it from
+/// what D's box.json still holds.
+pub fn gone_text(d: &[u8], name: &[u8]) -> Vec<u8> {
+    let throwaway = !meta(d, "owner").0.is_empty();
+    gone_hint(name, throwaway, &meta(d, "mode").0, &meta(d, "desktop").0)
+}
+
+/// gone_text's words. A throwaway (`run`'s `NAME-run<pid>`, box.json's `owner`, or a look's own
+/// `look-<pid>`) went with its command: no `up` of that name brings it back (round-2 review). Any
+/// other: `omabox up NAME`, with --interactive and --desktop as box.json recorded them (MODE,
+/// DESKTOP; empty when it is gone), and a word that the rest of its options are not known.
+pub fn gone_hint(name: &[u8], throwaway: bool, mode: &[u8], desktop: &[u8]) -> Vec<u8> {
+    if throwaway || is_look_name(name) || is_run_name(name) {
+        return cat!(
+            "box '",
+            name,
+            "' is not up: it was a throwaway, taken down when the command that made it ended (start a box first, omabox up, and work in it)"
+        );
+    }
+    let mut up = cat!("omabox up ", name);
+    if mode == b"interactive" {
+        up.extend_from_slice(b" --interactive");
+    }
+    if desktop == b"plain" || desktop == b"desk" {
+        up.extend_from_slice(&cat!(" --desktop ", desktop));
+    }
+    let rest: &[u8] = if mode.is_empty() && desktop.is_empty() {
+        b""
+    } else {
+        b", and its other options as you gave them"
+    };
+    cat!("box '", name, "' is not up (start it with: ", up, rest, ")")
+}
+
+/// Whether NAME is a `run` throwaway's (`BASE-run<pid>`).
+fn is_run_name(name: &[u8]) -> bool {
+    let Some(i) = name.windows(4).rposition(|w| w == b"-run") else {
+        return false;
+    };
+    let p = &name[i + 4..];
+    i > 0 && !p.is_empty() && p[0] != b'0' && p.iter().all(u8::is_ascii_digit)
 }
 
 /// The box's PID 1, or the line that says why there is none (unknown_text or gone_text): one text
@@ -199,7 +231,7 @@ pub fn pid_or_text(ctx: &Ctx) -> Result<Vec<u8>, Vec<u8>> {
     match box_pid(&ctx.d) {
         BoxPid::Pid(p) => Ok(p),
         BoxPid::Unknown => Err(unknown_text(&ctx.name)),
-        BoxPid::None => Err(gone_text(&ctx.name)),
+        BoxPid::None => Err(gone_text(&ctx.d, &ctx.name)),
     }
 }
 
@@ -866,6 +898,65 @@ pub fn edit_box_json(ctx: &Ctx, edit: impl FnOnce(&Path) -> Option<Vec<u8>>) -> 
     )
 }
 
+/// What edit_box_json_wait did: box.json written; the box gone (its dir or box.json), before or
+/// while it waited; the lock not had in time (nothing said); or not written, EDIT or the write
+/// having said why (or not).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edited {
+    Written,
+    Gone,
+    Busy,
+    NotWritten,
+}
+
+/// edit_box_json waiting up to WAIT for the box's lock, telling a lock not had (Busy, unsaid) and a
+/// box gone apart from a write that failed: for a caller whose edit is only a record, which says its
+/// own line for each (restart-shell's version, round-2 review).
+pub fn edit_box_json_wait(
+    ctx: &Ctx,
+    wait: Duration,
+    edit: impl FnOnce(&Path) -> Option<Vec<u8>>,
+) -> Edited {
+    edit_box_json_try(
+        &ctx.d,
+        &ctx.in_boxes(cat!(".lock-", ctx.name)),
+        &ctx.label(),
+        wait,
+        edit,
+    )
+}
+
+/// How long a record that follows the work (restart-shell's version, plugin_check's states) waits
+/// for the box's lock when its thread does not hold it: a save holds it for its whole copy, and the
+/// work itself is done (round-2 review: restart-shell waited 60 s, then exited 1).
+pub const RECORD_WAIT: Duration = Duration::from_secs(3);
+
+/// The line for a record edit_box_json_wait did not write because the lock was busy or the box is
+/// gone (None for the rest: written, or said already). LABEL before it, NAME the box, WHAT the record.
+pub fn record_note(label: &[u8], name: &[u8], what: &str, e: Edited) -> Option<Vec<u8>> {
+    match e {
+        Edited::Busy => Some(cat!(
+            label,
+            "note: ",
+            what,
+            " not recorded in box '",
+            name,
+            "''s box.json: its lock was busy for ",
+            RECORD_WAIT.as_secs().to_string(),
+            " s (a save, plugin add or mode at work); ls --json shows the one before"
+        )),
+        Edited::Gone => Some(cat!(
+            label,
+            "note: box '",
+            name,
+            "' went down: ",
+            what,
+            " not recorded"
+        )),
+        Edited::Written | Edited::NotWritten => None,
+    }
+}
+
 /// edit_box_json on box dir D, its lock LK, LABEL before what is said.
 pub fn edit_box_json_in(
     d: &[u8],
@@ -873,26 +964,41 @@ pub fn edit_box_json_in(
     label: &[u8],
     edit: impl FnOnce(&Path) -> Option<Vec<u8>>,
 ) -> bool {
+    match edit_box_json_try(d, lk, label, Duration::from_secs(60), edit) {
+        Edited::Written => true,
+        Edited::Busy => {
+            crate::exit::say(cat!(
+                label,
+                shell::bytes(&at(d, "box.json")),
+                " not written: its box's lock (",
+                shell::bytes(lk),
+                ") was not had within 60 s (an up or a down in progress?)"
+            ));
+            false
+        }
+        Edited::Gone | Edited::NotWritten => false,
+    }
+}
+
+/// edit_box_json_in waiting up to WAIT for the lock, saying nothing for Busy or Gone.
+fn edit_box_json_try(
+    d: &[u8],
+    lk: &Path,
+    label: &[u8],
+    wait: Duration,
+    edit: impl FnOnce(&Path) -> Option<Vec<u8>>,
+) -> Edited {
     use std::io::Write;
     let bj = at(d, "box.json");
     if !bj.is_file() {
-        return false;
+        return Edited::Gone;
     }
     let _lock = if holds(lk) {
         None
     } else {
-        match lock_file(lk, Duration::from_secs(60)) {
+        match lock_file(lk, wait) {
             Some(l) => Some(l),
-            None => {
-                crate::exit::say(cat!(
-                    label,
-                    shell::bytes(&bj),
-                    " not written: its box's lock (",
-                    shell::bytes(lk),
-                    ") was not had within 60 s (an up or a down in progress?)"
-                ));
-                return false;
-            }
+            None => return Edited::Busy,
         }
     };
     // A down that came first while we waited: the box is gone, and so goes the lock file we may have
@@ -901,10 +1007,10 @@ pub fn edit_box_json_in(
         if _lock.is_some() && !shell::path(d).is_dir() {
             let _ = std::fs::remove_file(lk);
         }
-        return false;
+        return Edited::Gone;
     }
     let Some(out) = edit(&bj) else {
-        return false;
+        return Edited::NotWritten;
     };
     let tmp = at(d, &tmp_name());
     let mut f = match std::fs::OpenOptions::new()
@@ -918,7 +1024,7 @@ pub fn edit_box_json_in(
                 label,
                 crate::shots::cant_write(shell::bytes(&tmp), &e)
             ));
-            return false;
+            return Edited::NotWritten;
         }
     };
     let _rm = shell::Rm(shell::bytes(&tmp).to_vec());
@@ -927,14 +1033,14 @@ pub fn edit_box_json_in(
             label,
             crate::shots::cant_write(shell::bytes(&tmp), &e)
         ));
-        return false;
+        return Edited::NotWritten;
     }
     drop(f);
     if let Err(e) = std::fs::rename(&tmp, &bj) {
         crate::exit::say(cat!(label, crate::shots::cant_write(shell::bytes(&bj), &e)));
-        return false;
+        return Edited::NotWritten;
     }
-    true
+    Edited::Written
 }
 
 /// edit_box_json setting KEYS (`jq '.K1 = V1 | ...'` on each value box.json holds): false, unsaid,
@@ -1025,6 +1131,47 @@ pub fn box_file(ctx: &Ctx, p: &std::path::Path, value: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Round-2 review: the gone line names no `up` for a throwaway (run's, look's), and keeps an
+    /// interactive or desk box's options box.json recorded.
+    #[test]
+    fn gone_hint_by_kind() {
+        let t = |n: &str, o: bool, m: &str, dk: &str| {
+            String::from_utf8(gone_hint(n.as_bytes(), o, m.as_bytes(), dk.as_bytes())).unwrap()
+        };
+        let thrown = "' is not up: it was a throwaway, taken down when the command that made it ended (start a box first, omabox up, and work in it)";
+        assert_eq!(
+            t("proj-run12345", false, "", ""),
+            format!("box 'proj-run12345{thrown}")
+        );
+        assert_eq!(
+            t("look-777", false, "", ""),
+            format!("box 'look-777{thrown}")
+        );
+        assert_eq!(
+            t("x", true, "headless", "omarchy"),
+            format!("box 'x{thrown}")
+        );
+        assert_eq!(
+            t("bx", false, "", ""),
+            "box 'bx' is not up (start it with: omabox up bx)"
+        );
+        assert_eq!(
+            t("bx", false, "headless", "omarchy"),
+            "box 'bx' is not up (start it with: omabox up bx, and its other options as you gave them)"
+        );
+        assert_eq!(
+            t("d", false, "interactive", "desk"),
+            "box 'd' is not up (start it with: omabox up d --interactive --desktop desk, and its other options as you gave them)"
+        );
+        // (not a run's: no pid after -run, or the word only)
+        for n in ["-run12", "my-run", "a-run0", "a-runx1", "rerun5"] {
+            assert!(
+                t(n, false, "", "").contains("start it with: omabox up"),
+                "{n}"
+            );
+        }
+    }
 
     /// Finding 754: a box gone after need_box, or one this namespace cannot read, said in one text
     /// for every caller, each ending with what fixes it (740, 744).
@@ -1383,6 +1530,70 @@ mod tests {
         assert!(!bump(&db, &lk, "a"), "a box gone: not written");
         assert!(!lk.exists(), "...and no lock file made");
         assert!(!d.join("b").exists(), "...nor its dir");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Round-2 review: a record that follows the work waits RECORD_WAIT-short for a busy lock and
+    /// tells it (Busy) and a box gone (Gone) apart from a failed write, each with its own line.
+    #[test]
+    fn box_json_record_busy_and_gone() {
+        let d = std::env::temp_dir().join(format!("omabox-bjr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("b")).unwrap();
+        std::fs::write(d.join("b/box.json"), "{}\n").unwrap();
+        let db = shell::bytes(&d.join("b")).to_vec();
+        let lk = d.join(".lock-b");
+        let edit = |_: &Path| Some(b"{\"v\": 1}\n".to_vec());
+        // Another thread holds the lock (a save): not waited out.
+        std::thread::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+            let lk2 = lk.clone();
+            s.spawn(move || {
+                let _l = lock_file(&lk2, Duration::ZERO).unwrap();
+                tx.send(()).unwrap();
+                let _ = go_rx.recv();
+            });
+            rx.recv().unwrap();
+            let t0 = Instant::now();
+            assert_eq!(
+                edit_box_json_try(&db, &lk, b"", Duration::from_millis(200), edit),
+                Edited::Busy
+            );
+            assert!(t0.elapsed() < Duration::from_secs(5), "...not a 60 s wait");
+            go_tx.send(()).unwrap();
+        });
+        assert_eq!(
+            std::fs::read(d.join("b/box.json")).unwrap(),
+            b"{}\n",
+            "...nothing written"
+        );
+        assert_eq!(
+            edit_box_json_try(&db, &lk, b"", Duration::ZERO, edit),
+            Edited::Written
+        );
+        assert_eq!(
+            edit_box_json_try(&db, &lk, b"", Duration::ZERO, |_| None),
+            Edited::NotWritten
+        );
+        std::fs::remove_dir_all(d.join("b")).unwrap();
+        let _ = std::fs::remove_file(&lk);
+        assert_eq!(
+            edit_box_json_try(&db, &lk, b"", Duration::ZERO, edit),
+            Edited::Gone
+        );
+        let busy = record_note(b"restart-shell: ", b"b", "the X", Edited::Busy).unwrap();
+        assert!(
+            busy.starts_with(b"restart-shell: note: the X not recorded in box 'b''s box.json: its lock was busy for 3 s"),
+            "{}",
+            String::from_utf8_lossy(&busy)
+        );
+        assert_eq!(
+            record_note(b"", b"b", "the X", Edited::Gone).unwrap(),
+            b"note: box 'b' went down: the X not recorded"
+        );
+        assert_eq!(record_note(b"", b"b", "x", Edited::Written), None);
+        assert_eq!(record_note(b"", b"b", "x", Edited::NotWritten), None);
         std::fs::remove_dir_all(&d).unwrap();
     }
 
