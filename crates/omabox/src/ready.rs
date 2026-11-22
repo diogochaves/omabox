@@ -1696,18 +1696,14 @@ fn client_render_from(ctx: &Ctx, out: &[u8], other: Option<&[u8]>) -> Res<()> {
         return Ok(());
     }
     let bj = ctx.at("box.json");
-    let tmp = ctx.at("box.json.tmp");
-    let j = Args::new(&["--argjson", "r"])
-        .arg(&rec)
-        .arg(CLIENT_RENDER_JQ)
-        .arg(shell::bytes(&bj))
-        .run_file(jq::Err::Inherit);
-    if j.ok() && std::fs::write(&tmp, &j.out).is_ok() {
-        let _ = std::fs::rename(&tmp, &bj);
-    } else {
-        // (bash left its box.json.tmp there: none left, finding 443's rule)
-        let _ = std::fs::remove_file(&tmp);
-    }
+    crate::boxes::edit_box_json(ctx, |bj| {
+        let j = Args::new(&["--argjson", "r"])
+            .arg(&rec)
+            .arg(CLIENT_RENDER_JQ)
+            .arg(shell::bytes(bj))
+            .run_file(jq::Err::Inherit);
+        j.ok().then_some(j.out)
+    });
     let driver = Args::new(&["-r", RENDER_DRIVER_JQ])
         .arg(shell::bytes(&bj))
         .run_file(jq::Err::Inherit)

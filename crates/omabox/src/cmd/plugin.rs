@@ -198,7 +198,7 @@ fn seen_at_own_path(bj: &serde_json::Value, dir: &[u8]) -> bool {
 }
 
 /// The box's lock, as up and down take it (mode's, finding 93), and the box still up under it.
-fn locked(ctx: &Ctx, what: &[u8]) -> Res<std::fs::File> {
+fn locked(ctx: &Ctx, what: &[u8]) -> Res<crate::boxes::Lock> {
     let Some(lock) = lock_file(
         &ctx.in_boxes(cat!(".lock-", ctx.name)),
         Duration::from_secs(60),

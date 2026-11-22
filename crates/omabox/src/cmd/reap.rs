@@ -697,26 +697,10 @@ fn wait_pidns(ctx: &Ctx, created: &[u8]) -> bool {
     true
 }
 
-/// `jq --arg ns NS '.pidns = $ns' box.json > box.json.tmp && mv box.json.tmp box.json`: whether it
-/// was written (no box.json.tmp left when not: finding 443).
+/// `jq --arg ns NS '.pidns = $ns'` on box.json, through edit_box_json: whether it was written.
 fn record_pidns(ctx: &Ctx, ns: &[u8]) -> bool {
-    let tmp = shell::Rm(shell::bytes(&ctx.at("box.json.tmp")).to_vec());
-    let Ok(text) = std::fs::read(ctx.at("box.json")) else {
-        return false;
-    };
-    let (vals, mut ok) = crate::json::values(&text);
     let ns = serde_json::Value::String(String::from_utf8_lossy(ns).into_owned());
-    let mut out = String::new();
-    for mut v in vals {
-        if !crate::json::set(&mut v, vec![("pidns", ns.clone())]) {
-            ok = false;
-            break;
-        }
-        out.push_str(&crate::json::pretty(&v));
-        out.push('\n');
-    }
-    ok && std::fs::write(shell::path(&tmp.0), out).is_ok()
-        && std::fs::rename(shell::path(&tmp.0), ctx.at("box.json")).is_ok()
+    crate::boxes::set_box_json(ctx, vec![("pidns", ns)])
 }
 
 #[cfg(test)]

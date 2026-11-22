@@ -727,10 +727,51 @@ pub fn agent_alive(d: &[u8]) -> bool {
         && procfs::proc_start(&pid).unwrap_or_default() == start
 }
 
+/// A box or name lock held (`lock_file`): the open, flocked file, and its entry in this thread's
+/// list of the locks it holds, which `edit_box_json` reads so that a holder's write does not wait on
+/// its own lock (flock locks one open file, so a second open in the same process would).
+pub struct Lock {
+    f: File,
+    key: (u64, u64),
+    // The list is the thread's: a Lock stays on the thread that took it (not Send).
+    _thread: std::marker::PhantomData<*const ()>,
+}
+
+thread_local! {
+    static HELD: std::cell::RefCell<Vec<(u64, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl std::ops::Deref for Lock {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.f
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        HELD.with(|h| {
+            let mut h = h.borrow_mut();
+            if let Some(i) = h.iter().position(|k| *k == self.key) {
+                h.swap_remove(i);
+            }
+        });
+    }
+}
+
+/// Whether this thread holds the lock that P names now (a file removed and made again under its
+/// name is another lock).
+pub fn holds(p: &Path) -> bool {
+    let Ok(m) = std::fs::symlink_metadata(p) else {
+        return false;
+    };
+    HELD.with(|h| h.borrow().contains(&(m.dev(), m.ino())))
+}
+
 /// FILE opened for writing and flocked, waiting up to WAIT. A `down` removes a name's lock file once
 /// the box is gone (#158), so a file opened before that may be the removed one, which nobody else
 /// sees: then the path is opened again.
-pub fn lock_file(p: &Path, wait: Duration) -> Option<File> {
+pub fn lock_file(p: &Path, wait: Duration) -> Option<Lock> {
     let end = Instant::now() + wait;
     loop {
         let f = File::create(p).ok()?;
@@ -754,10 +795,138 @@ pub fn lock_file(p: &Path, wait: Duration) -> Option<File> {
         let there = std::fs::symlink_metadata(p)
             .ok()
             .map(|m| (m.dev(), m.ino()));
-        if held == there {
-            return Some(f);
+        if let Some(key) = held
+            && held == there
+        {
+            HELD.with(|h| h.borrow_mut().push(key));
+            return Some(Lock {
+                f,
+                key,
+                _thread: std::marker::PhantomData,
+            });
         }
     }
+}
+
+/// A unique name for a temporary file in a box dir: this process's pid and a count.
+fn tmp_name() -> String {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!(
+        ".box.json.{}.{}",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
+/// The one way box.json is changed: under the box's lock (taken unless this thread holds it), EDIT
+/// given box.json's path returns the new text (None: not written, EDIT having said why or not), which
+/// goes to a new file of a name of its own in the box dir (O_EXCL), synced, and renamed over
+/// box.json. Two writers no longer share one temporary file (a short write after a long one left the
+/// long one's tail: invalid JSON), and a write cannot put back what another wrote after it read
+/// (finding 753). Whether box.json was written; a box gone (its dir or box.json) is false, unsaid,
+/// and leaves no lock file behind (down removes it, #158); a write or rename that fails is said.
+pub fn edit_box_json(ctx: &Ctx, edit: impl FnOnce(&Path) -> Option<Vec<u8>>) -> bool {
+    edit_box_json_in(
+        &ctx.d,
+        &ctx.in_boxes(cat!(".lock-", ctx.name)),
+        &ctx.label(),
+        edit,
+    )
+}
+
+/// edit_box_json on box dir D, its lock LK, LABEL before what is said.
+pub fn edit_box_json_in(
+    d: &[u8],
+    lk: &Path,
+    label: &[u8],
+    edit: impl FnOnce(&Path) -> Option<Vec<u8>>,
+) -> bool {
+    use std::io::Write;
+    let bj = at(d, "box.json");
+    if !bj.is_file() {
+        return false;
+    }
+    let _lock = if holds(lk) {
+        None
+    } else {
+        match lock_file(lk, Duration::from_secs(60)) {
+            Some(l) => Some(l),
+            None => {
+                crate::exit::say(cat!(
+                    label,
+                    shell::bytes(&bj),
+                    " not written: its box's lock (",
+                    shell::bytes(lk),
+                    ") was not had within 60 s (an up or a down in progress?)"
+                ));
+                return false;
+            }
+        }
+    };
+    // A down that came first while we waited: the box is gone, and so goes the lock file we may have
+    // made again, removed while held as down does.
+    if !bj.is_file() {
+        if _lock.is_some() && !shell::path(d).is_dir() {
+            let _ = std::fs::remove_file(lk);
+        }
+        return false;
+    }
+    let Some(out) = edit(&bj) else {
+        return false;
+    };
+    let tmp = at(d, &tmp_name());
+    let mut f = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            crate::exit::say(cat!(
+                label,
+                crate::shots::cant_write(shell::bytes(&tmp), &e)
+            ));
+            return false;
+        }
+    };
+    let _rm = shell::Rm(shell::bytes(&tmp).to_vec());
+    if let Err(e) = f.write_all(&out).and_then(|()| f.sync_all()) {
+        crate::exit::say(cat!(
+            label,
+            crate::shots::cant_write(shell::bytes(&tmp), &e)
+        ));
+        return false;
+    }
+    drop(f);
+    if let Err(e) = std::fs::rename(&tmp, &bj) {
+        crate::exit::say(cat!(label, crate::shots::cant_write(shell::bytes(&bj), &e)));
+        return false;
+    }
+    true
+}
+
+/// edit_box_json setting KEYS (`jq '.K1 = V1 | ...'` on each value box.json holds): false, unsaid,
+/// when box.json is no JSON or holds a value that is no object.
+pub fn set_box_json(ctx: &Ctx, keys: Vec<(&str, serde_json::Value)>) -> bool {
+    edit_box_json(ctx, |bj| set_keys(bj, keys))
+}
+
+/// box.json at BJ with KEYS set in each of its values, as jq writes it.
+fn set_keys(bj: &Path, keys: Vec<(&str, serde_json::Value)>) -> Option<Vec<u8>> {
+    let text = std::fs::read(bj).ok()?;
+    let (vals, ok) = json::values(&text);
+    if !ok {
+        return None;
+    }
+    let mut out = String::new();
+    for mut v in vals {
+        if !json::set(&mut v, keys.clone()) {
+            return None;
+        }
+        out.push_str(&json::pretty(&v));
+        out.push('\n');
+    }
+    Some(out.into_bytes())
 }
 
 /// A session resumed in a new process (`claude --continue` and `--resume` keep its id) finds its box
@@ -792,11 +961,10 @@ pub fn take_over(ctx: &Ctx, held: bool) -> Res<bool> {
     if !box_alive(ctx)? {
         up = false;
     } else if !meta(d, "agent").0.is_empty() && !agent_alive(d) {
-        // (said when it cannot be: bash left box.json.tmp, unsaid, finding 443)
-        let tmp = shell::Rm(shell::bytes(&at(d, "box.json.tmp")).to_vec());
-        if !(record_agent(d, &pid, &start)
-            && std::fs::rename(shell::path(&tmp.0), at(d, "box.json")).is_ok())
-        {
+        let start = serde_json::Value::String(String::from_utf8_lossy(&start).into_owned());
+        let set = serde_json::from_slice::<serde_json::Value>(&pid)
+            .is_ok_and(|pid| set_box_json(ctx, vec![("agent", pid), ("agent_start", start)]));
+        if !set {
             crate::exit::say(cat!(
                 "box '",
                 ctx.name,
@@ -806,35 +974,6 @@ pub fn take_over(ctx: &Ctx, held: bool) -> Res<bool> {
     }
     drop(lock);
     Ok(up)
-}
-
-/// `jq '.agent = PID | .agent_start = START' box.json > box.json.tmp`: whether it was written.
-fn record_agent(d: &[u8], pid: &[u8], start: &[u8]) -> bool {
-    use std::io::Write;
-    let Ok(mut tmp) = File::create(at(d, "box.json.tmp")) else {
-        return false;
-    };
-    let Ok(text) = std::fs::read(at(d, "box.json")) else {
-        return false;
-    };
-    let Ok(pid) = serde_json::from_slice::<serde_json::Value>(pid) else {
-        return false;
-    };
-    let start = serde_json::Value::String(String::from_utf8_lossy(start).into_owned());
-    let (vals, mut ok) = json::values(&text);
-    let mut out = String::new();
-    for mut v in vals {
-        if !json::set(
-            &mut v,
-            vec![("agent", pid.clone()), ("agent_start", start.clone())],
-        ) {
-            ok = false;
-            break;
-        }
-        out.push_str(&json::pretty(&v));
-        out.push('\n');
-    }
-    tmp.write_all(out.as_bytes()).is_ok() && ok
 }
 
 /// box_file PATH VALUE: VALUE written to a file in the box's runtime dir without opening what is
@@ -1085,6 +1224,110 @@ mod tests {
         assert_eq!(r.5, b"", "tail: a link to a FIFO");
         assert_eq!(r.6, b"ne\n");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// One box.json edit: key K one more, read and written back, as every writer did (finding 753).
+    fn bump(d: &[u8], lk: &Path, k: &str) -> bool {
+        edit_box_json_in(d, lk, b"", |bj| {
+            let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(bj).ok()?).ok()?;
+            let n = v.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+            // Widen the window between the read and the write.
+            std::thread::sleep(Duration::from_micros(200));
+            json::set(&mut v, vec![(k, serde_json::Value::from(n + 1))]);
+            Some(json::pretty(&v).into_bytes())
+        })
+    }
+
+    /// Finding 753: writers editing different keys of one box.json at once lose none of their
+    /// edits, box.json stays one JSON value, and no temporary file is left. (The writers' old way,
+    /// one fixed box.json.tmp and no lock, lost most edits and broke the JSON.)
+    #[test]
+    fn box_json_edits_at_once_all_kept() {
+        let d = std::env::temp_dir().join(format!("omabox-bj-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("box.json"), "{\"created\": \"1\"}\n").unwrap();
+        let db = shell::bytes(&d).to_vec();
+        let lk = d.join(".lock-x");
+        let (threads, each) = (8, 25);
+        std::thread::scope(|s| {
+            for t in 0..threads {
+                let (db, lk) = (&db, &lk);
+                s.spawn(move || {
+                    let k = format!("k{t}");
+                    for _ in 0..each {
+                        assert!(bump(db, lk, &k), "an edit not written");
+                    }
+                });
+            }
+        });
+        let text = std::fs::read(d.join("box.json")).unwrap();
+        let (vals, ok) = json::values(&text);
+        assert!(
+            ok && vals.len() == 1,
+            "box.json is one JSON value: {text:?}"
+        );
+        for t in 0..threads {
+            assert_eq!(
+                vals[0]
+                    .get(format!("k{t}"))
+                    .and_then(serde_json::Value::as_u64),
+                Some(each),
+                "every edit of k{t} kept: {text:?}"
+            );
+        }
+        assert_eq!(vals[0]["created"], "1", "the key nobody edits kept");
+        let left: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.starts_with(".box.json") || n.ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "no temporary file left: {left:?}");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Finding 753: a holder of the box's lock edits box.json at once (no wait on its own lock); a
+    /// box gone is no edit and leaves no lock file; an edit that gives nothing writes nothing.
+    #[test]
+    fn box_json_edit_held_and_gone() {
+        let d = std::env::temp_dir().join(format!("omabox-bjh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("b")).unwrap();
+        std::fs::write(d.join("b/box.json"), "{}\n").unwrap();
+        let db = shell::bytes(&d.join("b")).to_vec();
+        let lk = d.join(".lock-b");
+        let held = lock_file(&lk, Duration::ZERO).unwrap();
+        assert!(holds(&lk));
+        let t0 = Instant::now();
+        assert!(bump(&db, &lk, "a"), "the holder's edit");
+        assert!(
+            t0.elapsed() < Duration::from_secs(5),
+            "...not waiting on its own lock"
+        );
+        // Another thread waits for it.
+        std::thread::scope(|s| {
+            let h = s.spawn(|| {
+                assert!(!holds(&lk), "the lock is the thread's");
+                lock_file(&lk, Duration::from_millis(100)).is_none()
+            });
+            assert!(
+                h.join().unwrap(),
+                "...which another thread cannot have meanwhile"
+            );
+        });
+        drop(held);
+        assert!(!holds(&lk));
+        assert!(!edit_box_json_in(&db, &lk, b"", |_| None), "no edit");
+        assert_eq!(
+            std::fs::read(d.join("b/box.json")).unwrap(),
+            b"{\n  \"a\": 1\n}"
+        );
+        std::fs::remove_dir_all(d.join("b")).unwrap();
+        std::fs::remove_file(&lk).unwrap();
+        assert!(!bump(&db, &lk, "a"), "a box gone: not written");
+        assert!(!lk.exists(), "...and no lock file made");
+        assert!(!d.join("b").exists(), "...nor its dir");
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     /// t_unit_lock_markers: a holder removes the lock file while a waiter waits on it, as down

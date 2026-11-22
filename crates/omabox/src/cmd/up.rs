@@ -182,8 +182,8 @@ pub struct Up {
     /// The render node's VRAM, read at its choice and said after the box is up (#470).
     pub vram: Option<render::VramWatch>,
     /// The lock on the name (one up or down at a time) and up --new's on the choice of a name.
-    pub lock: Option<std::fs::File>,
-    pub newlock: Option<std::fs::File>,
+    pub lock: Option<crate::boxes::Lock>,
+    pub newlock: Option<crate::boxes::Lock>,
 }
 
 impl Up {
