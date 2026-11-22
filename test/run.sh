@@ -25285,6 +25285,10 @@ t_unit_link_out() {
   ln -s "$o" "$r/"$'new\nline'; ln -s "$o" "$r/"$'a\tb'
   check_fails "repo_link_out: a link with a newline in its name: nothing" probe repo_link_out "$r" "$r/"$'new\nline'
   check_fails "...a tab: nothing" probe repo_link_out "$r" "$r/"$'a\tb'
+  # TOP with trailing slashes is the same TOP (it once sliced by TOP's length: // crashed, / skipped a part).
+  check_eq "repo_link_out: TOP with a trailing slash" "$r/target"$'\t'"$o"$'\t'"$o/debug/app" "$(probe repo_link_out "$r/" "$r/target/debug/app")"
+  check_eq "...two trailing slashes" "$r/target"$'\t'"$o"$'\t'"$o/debug/app" "$(probe repo_link_out "$r//" "$r/target/debug/app")"
+  check_fails "...a link that stays in the repo: still nothing" probe repo_link_out "$r//" "$r/inside/in/f"
 }
 
 # #235: a link at the top of the repo out of it, to a scratch folder (not the real HOME), named by `up`

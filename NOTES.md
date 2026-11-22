@@ -15483,6 +15483,14 @@ from them.
     `dir_of_as_coreutils` (against `/usr/bin/dirname` where installed: `/x`, `/`, `x`, `x/`, `//x`,
     empty and more), `tilde_as_bash`.
 
+760. **`repo_link_out` takes TOP with trailing slashes as TOP** (2026-11-22, the review's paths
+    finding 3). It checked P against TOP by `below` (which ignores TOP's trailing slashes) but then
+    sliced P by TOP's length: TOP `/r//` with P `/r/x` panicked, TOP `/r/` skipped P's first part.
+    It now walks the rest `paths::under` gives, from TOP without its slashes, and a link leading to
+    TOP itself is "in the repo" by `at_or_under` too. Real callers pass git's `--show-toplevel` (no
+    trailing slash), so only `_probe repo_link_out` could reach it. Test: `t_unit_link_out` (TOP
+    `/r/` and `/r//`).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

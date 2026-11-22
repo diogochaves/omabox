@@ -448,8 +448,9 @@ pub fn repo_link_out(top: &[u8], p: &[u8]) -> Option<[Vec<u8>; 3]> {
             return None;
         }
     }
-    let mut rest: &[u8] = &p[top.len() + 1..];
-    let mut cur = top.to_vec();
+    // TOP's trailing slashes are TOP (`/r//` is `/r`): walk the rest `under` gives, from TOP without them.
+    let mut rest: &[u8] = crate::paths::under(&p, top)?;
+    let mut cur = top[..top.iter().rposition(|&c| c != b'/').map_or(0, |i| i + 1)].to_vec();
     while !rest.is_empty() {
         let (c, r) = match rest.iter().position(|&c| c == b'/') {
             Some(i) => (&rest[..i], &rest[i + 1..]),
@@ -464,7 +465,7 @@ pub fn repo_link_out(top: &[u8], p: &[u8]) -> Option<[Vec<u8>; 3]> {
             continue;
         }
         let r = readlink_e(&cur)?;
-        if r == top || under(&r) {
+        if crate::paths::at_or_under(&r, top) {
             continue;
         }
         let rp = readlink_e(&p)?;
