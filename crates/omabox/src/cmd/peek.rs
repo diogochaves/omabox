@@ -18,7 +18,7 @@ use crate::screen::main_screen;
 use crate::select::select_box;
 use crate::settle::ws_text;
 use crate::shell::{self, strip_nl};
-use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // (an INT, TERM or HUP stops it once its foreground step is over: trap.rs)
@@ -174,18 +174,23 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !crate::exec::executable(&peek) {
         return Err(ctx.die(cat!("peek: missing ", peek, ": run install.sh")));
     }
-    // peek runs on the host (it is a window there) and connects to the box's socket from the host's
-    // side of its runtime dir, which the box can write: only a real socket, no symlink (finding 63;
+    // peek runs on the host (it is a window there) and connects to the box's socket. The box's
+    // runtime dir is the box's to write, and peek connects some time after this check: it gets
+    // env's hard link in the box dir, the socket's inode itself, never the path in the runtime dir,
+    // where the box could put a link to the host's own socket after a look (findings 63, 751;
     // tools/peek also checks every frame it is sent).
     let Some(wd) = box_env(&ctx.d, "WAYLAND_DISPLAY") else {
         return Err(ctx.die(cat!("peek: box '", ctx.name, "' has no WAYLAND_DISPLAY")));
     };
-    let sock = cat!(ctx.d, "/run/", wd);
-    let is_sock =
-        std::fs::symlink_metadata(shell::path(&sock)).is_ok_and(|m| m.file_type().is_socket());
-    if !is_sock {
-        return Err(ctx.die(cat!("peek: ", sock, " is not the box's Wayland socket")));
-    }
+    let sock = super::env::socket_link(&ctx.d, &wd).map_err(|_| {
+        ctx.die(cat!(
+            "peek: ",
+            ctx.d,
+            "/run/",
+            wd,
+            " is not the box's Wayland socket"
+        ))
+    })?;
     // A marks file (finding 85) only we can read; peek reads what is added to it. Fresh for the
     // box's first peek window, shared by the others (#164: made anew, the windows open lost it).
     let marks = ctx.at("marks");

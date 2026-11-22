@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
@@ -43,23 +43,27 @@ fn save_dir(ctx: &Ctx, n: &[u8]) -> Res<Vec<u8>> {
 }
 
 /// Whether a save's keyring holds a secret: gnome-keyring's unencrypted file has a [N] section per
-/// item (`grep -qs '^\[[0-9]' D/home/.local/share/keyrings/*.keyring`). Only regular files are read:
-/// a FIFO there hung bash's grep.
+/// item (`grep -qs '^\[[0-9]' D/home/.local/share/keyrings/*.keyring`). Each file is opened beneath
+/// the save's HOME (boxes::open_beneath): only a regular file, no link at it or on the way (one would
+/// read a host file; finding 751), never waiting on a FIFO (one hung bash's grep).
 fn save_keyring(d: &[u8]) -> bool {
+    let home = shell::path(&cat!(d, "/home"));
     let dir = cat!(d, "/home/.local/share/keyrings");
     shell::glob_ext(&dir, b".keyring").iter().any(|f| {
-        let Ok(file) = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
-            .open(shell::path(f))
+        let base = shell::basename(f);
+        let Ok(name) = std::str::from_utf8(&base) else {
+            return false;
+        };
+        let Some(file) =
+            crate::boxes::open_beneath(&home, &format!(".local/share/keyrings/{name}"))
         else {
             return false;
         };
-        if !file.metadata().is_ok_and(|m| m.is_file()) {
-            return false;
-        }
         let mut text = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut &file, &mut text);
+        let _ = std::io::Read::read_to_end(
+            &mut std::io::Read::take(&file, crate::boxes::READ_CAP),
+            &mut text,
+        );
         text.split(|&c| c == b'\n')
             .any(|l| l.first() == Some(&b'[') && l.get(1).is_some_and(u8::is_ascii_digit))
     })
@@ -688,6 +692,38 @@ fn save_cols(text: Option<&[u8]>) -> (Vec<u8>, Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// save_keyring (finding 751): a keyring file with an item counts; a link at one, or at the
+    /// keyrings folder, to a file that has one does not (it would read a host file); a FIFO does not
+    /// hang it.
+    #[test]
+    fn keyring_no_link_no_fifo() {
+        let d = std::env::temp_dir().join(format!("omabox-savekr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let kr = d.join("s/home/.local/share/keyrings");
+        std::fs::create_dir_all(&kr).expect("dirs");
+        std::fs::create_dir_all(d.join("host")).expect("dirs");
+        std::fs::write(d.join("host/x.keyring"), "[keyring]\n[1]\nsecret=1\n").expect("write");
+        let s = shell::bytes(&d.join("s")).to_vec();
+        assert!(!save_keyring(&s), "empty");
+        std::os::unix::fs::symlink(d.join("host/x.keyring"), kr.join("login.keyring"))
+            .expect("link");
+        assert!(!save_keyring(&s), "a link at the file");
+        std::fs::remove_file(kr.join("login.keyring")).expect("rm");
+        let c = std::ffi::CString::new(shell::bytes(&kr.join("f.keyring")).to_vec()).expect("c");
+        // SAFETY: mkfifo with a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(!save_keyring(&s), "a FIFO");
+        std::fs::remove_file(kr.join("f.keyring")).expect("rm");
+        std::fs::remove_dir(&kr).expect("rm");
+        std::os::unix::fs::symlink(d.join("host"), &kr).expect("link");
+        assert!(!save_keyring(&s), "a link at the folder");
+        std::fs::remove_file(&kr).expect("rm");
+        std::fs::create_dir(&kr).expect("dir");
+        std::fs::copy(d.join("host/x.keyring"), kr.join("login.keyring")).expect("copy");
+        assert!(save_keyring(&s), "a keyring with an item");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn rows_as_jq_gives_them() {
