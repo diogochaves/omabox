@@ -18,7 +18,6 @@ use crate::select::{env_names_box, select_box, session_boxes};
 use crate::settle::{Settle, cursor_now, cursor_rect, settle_sent};
 use crate::shell::{self, Re};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::ExitStatusExt;
 use std::time::Duration;
 
 /// up's options, for a throwaway box: those that take a value, and the flags.
@@ -595,6 +594,15 @@ fn throwaway(ctx: &mut Ctx, up_args: Vec<Vec<u8>>, cmd: &[Vec<u8>]) -> Res<()> {
     r
 }
 
+/// A child's stderr, read whole (its pipe, run_child's WITH).
+fn read_stderr(ch: &mut std::process::Child) -> Vec<u8> {
+    let mut e = Vec::new();
+    if let Some(mut s) = ch.stderr.take() {
+        let _ = std::io::Read::read_to_end(&mut s, &mut e);
+    }
+    e
+}
+
 fn throwaway_run(
     ctx: &mut Ctx,
     overlay: Vec<Vec<u8>>,
@@ -611,16 +619,15 @@ fn throwaway_run(
     c.args(up_args.iter().map(|a| std::ffi::OsStr::from_bytes(a)));
     c.stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::null());
-    let o = c.output();
+    c.stderr(std::process::Stdio::piped());
+    // Main's foreground child (finding 754): a TERM, INT or HUP to run reaches this up first and is
+    // waited for (its own undo takes its half-made box down), then the Teardown's down.
+    let o = crate::sig::teardown_forwarding(|| crate::sig::run_child(c, false, read_stderr));
     let (ok, err, how) = match o {
-        Ok(o) => (
-            o.status.success(),
-            shell::subst(&o.stderr),
-            match (o.status.code(), o.status.signal()) {
-                (Some(n), _) => UpEnd::Status(n),
-                (None, Some(s)) => UpEnd::Signal(s),
-                _ => UpEnd::NotStarted,
-            },
+        Ok((e, (rc, sig))) => (
+            rc == 0 && sig.is_none(),
+            shell::subst(&e),
+            sig.map_or(UpEnd::Status(rc), UpEnd::Signal),
         ),
         Err(_) => (false, Vec::new(), UpEnd::NotStarted),
     };
