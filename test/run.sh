@@ -538,7 +538,7 @@ box_aq_unfixed() {
 # that such a peek would fail; failing while one is open on BOX, it is skipped, saying so (`no`).
 your_peek() {
   local p
-  for p in $(pgrep -f "omabox-peek --box $XDG_RUNTIME_DIR/omabox/$1/run/"); do
+  for p in $(pgrep -f "omabox-peek --box $XDG_RUNTIME_DIR/omabox/$1/(run/|wayland( |$))"); do
     tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -x OMABOX_PEEK_BY=you >/dev/null && return 0
   done
   return 1
@@ -4933,6 +4933,24 @@ EOF
   check_eq "...its line in that box's log: the command, the exit, jailed, its jail, the refusal (#447)" \
     "peek 1 true $(jq -r .jail "$r/rt/omabox/jbox/box.json") omabox peek is not for an agent inside ai-jail" \
     "$(jq -r '"\(.command) \(.exit) \(.jailed) \(.jail) \(.error)"' "$cl/jbox.log" 2>&1)"
+  # Finding 751: an agent in that jail that can make a user namespace runs a binary named ai-jail (a
+  # copy of the same bash, run inside the jail: the jail's user and pid namespaces) with a bwrap of its
+  # own under it, and calls from there. The broker passes that bwrap over for the real jail, so jbox
+  # is still this jail's box (taking the fake one, it said "not this jail's").
+  cat > "$r/jcall-fake" <<'EOF'
+#!/bin/bash
+shift; r=$JC_DIR; cd "$r/proj" || exit 99; rm -f go
+exec "$r/aj/ai-jail" -c '
+p=$1 rl=$2 s=$3 bd=$4 aj=$5; shift 5
+bwrap --unshare-pid --die-with-parent --ro-bind / / --dev /dev --proc /proc --bind "$p" "$p" --chdir "$p" -- sh -c '"'"'until [ -e go ]; do sleep 0.05; done; aj=$1; shift; "$aj" -c "bwrap --unshare-user --unshare-pid --die-with-parent --dev-bind / / -- \"\$@\"; exit \$?" ai-jail "$@"; exit $?'"'"' sh "$aj" "$rl" call "$s" -- "$@" & b=$!
+read -r -a st < "/proc/$b/stat"
+mkdir -p "$bd"; printf "{\"name\":\"jbox\",\"jail\":\"%s %s\"}\n" "$b" "${st[21]}" > "$bd/box.json"
+touch "$p/go"; wait "$b"' ai-jail "$r/proj" "$JC_RELAY" "$r/b.sock" "$r/rt/omabox/jbox" "$r/aj/ai-jail" "$@"
+EOF
+  chmod +x "$r/jcall-fake"
+  cx_wrap=(env JC_DIR="$r" JC_RELAY="$R" "$r/jcall-fake")
+  cx_want=(rc=1 out= 'err!~not this jail' 'err~jbox')
+  cx_case "broker: a fake ai-jail and bwrap of its own inside the jail: the real jail found, jbox its box (finding 751)" tree -b jbox
   cx_wrap=(env JC_DIR="$r" JC_RELAY="$R" "$r/jcall")
   rm -rf "$r/rt/omabox/ubox" "$r/rt/omabox/fbox" "$r/rt/omabox/jbox" "$cl"
   # (let through: each finds no box here, or refuses its words, as a caller outside a jail is)
@@ -15833,7 +15851,7 @@ t_peek_monitors() {
   "${in[@]}" down "$C" >/dev/null 2>&1
   check "down closes both peek windows" until_ok 5 peeks 0
   # shellcheck disable=SC2329 # called through until_ok
-  none_left() { ! ob run -b "$S" -- pgrep -f "^$ROOT/tools/peek/omabox-peek --box $d/run/"; }
+  none_left() { ! ob run -b "$S" -- pgrep -f "^$ROOT/tools/peek/omabox-peek --box $d/(run/|wayland( |$))"; }
   check "...and every peek process of the box" until_ok 3 none_left
   ob down "$S" >/dev/null
 }

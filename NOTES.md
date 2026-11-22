@@ -15194,6 +15194,36 @@ from them.
     and lost edits), `box_json_edit_held_and_gone` (a holder edits at once, another thread cannot
     have the lock meanwhile, a box gone makes no lock file and no dir).
 
+751. **The broker's jail is the one ai-jail itself started; peek and a save's keyring take no link
+    from the box** (2026-11-22, review). `broker_side.rs`'s `init` walked up from the caller to the
+    first `bwrap` whose parent's exe was *named* `ai-jail`, and took every same-path bind on its
+    command line as a folder the jail sees, resolved on the host. An agent in a jail that can make a
+    user namespace (ai-jail with seccomp off) could copy any program to a file named `ai-jail`, run
+    `bwrap --unshare-user --unshare-pid --dev-bind / / --bind-try OTHER OTHER` under it and call the
+    broker from there: that bwrap was its "jail", OTHER (which the real jail never had, so bwrap
+    skipped it) one of its folders, with no mount of it to hide anything, so `up --ro-bind OTHER`
+    mounted it in a box, under a jail id of its own. `find_jail` now takes the parent as ai-jail
+    only when it is in the broker's own user and pid namespaces (`/proc/PID/ns/user`, `ns/pid` equal
+    to `/proc/self`'s: a process inside a jail never is) and otherwise walks on up, to the real jail
+    or to none. And each folder the command line names is kept only when `jail_has` finds that same
+    folder, by device and inode, at its path inside the jail: opened from the jail's init's
+    `/proc/PID/root` with openat2's `RESOLVE_IN_ROOT` (the jail's links followed as the jail sees
+    them, never out of it; a kernel without openat2 keeps the namespace check alone). ai-jail's exe
+    is not compared with a known file: omabox has no configured ai-jail, and one on PATH is not one
+    the broker can trust (the suite's jail is a copy of bash). Peek's host window checked the box's
+    Wayland socket in its runtime dir, then connected to that path later: the box could swap a link
+    to your own desktop's socket in between and the peek would mirror your desktop. It now gets
+    `omabox env`'s hard link in the box folder (`env::socket_link`, 493); `marks.rs`'s `peek_pid`
+    finds a peek by either path (`--box D/wayland` or an older one's `--box D/run/`). `save_keyring` opened the
+    save's `*.keyring` files following links (one bit of a host file read: whether a line starts
+    `[digit`); it now opens each through `boxes::open_beneath`, bounded. Tests: cargo's
+    `find_jail_wants_ai_jail_in_the_brokers_namespaces` (a stand-in /proc: an ai-jail in another
+    user or pid namespace passed over, the real one above found), `jail_has_wants_the_same_folder_inside_the_jail`
+    (not there, another folder, a link out of the jail), `a_swap_after_the_check_leaves_the_link_on_the_box`,
+    `keyring_no_link_no_fifo`; t_unit_broker_side (a copy of bash named ai-jail run inside the jail,
+    a bwrap with a user namespace of its own under it, the call from there: the jail's own box is
+    still its, where the broker before said "not this jail's").
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -45,14 +45,15 @@ pub fn peek_open(ctx: &Ctx) -> bool {
 }
 
 /// peek_pid [OUTPUT]: the pid of this box's peek window, if one is open, the lowest (`pgrep -f
-/// "^$PEEK --box $D/run/" | head -1`): a process whose command line, its words joined by spaces,
-/// starts so; with OUTPUT, the one showing that monitor (#122: `.* --output OUTPUT --fps ` after it).
+/// "^$PEEK --box $D/(run/|wayland )" | head -1`): a process whose command line, its words joined by
+/// spaces, starts so (the box dir's socket link since finding 751, its runtime dir's socket before);
+/// with OUTPUT, the one showing that monitor (#122: `.* --output OUTPUT --fps ` after it).
 pub fn peek_pid(ctx: &Ctx, output: Option<&[u8]>) -> Option<Vec<u8>> {
     let want = cat!(
         shell::bytes(&crate::root().join("tools/peek/omabox-peek")),
         " --box ",
         ctx.d,
-        "/run/"
+        "/"
     );
     // (in this process, not a foreground step: an INT here ends omabox, as one during bash's
     // pgrep ends that and bash with it when it is the group's)
@@ -65,12 +66,13 @@ pub fn peek_pids(ctx: &Ctx) -> Vec<Vec<u8>> {
         shell::bytes(&crate::root().join("tools/peek/omabox-peek")),
         " --box ",
         ctx.d,
-        "/run/"
+        "/"
     );
     scan(&want, None, false)
 }
 
-/// The pids whose command line (words joined by spaces) starts with WANT (and holds OUTPUT's words
+/// The pids whose command line (words joined by spaces) starts with WANT (a box dir's `/`) then
+/// `run/` or the `wayland` link (and holds OUTPUT's words
 /// after it), lowest first; the first alone with FIRST.
 fn scan(want: &[u8], output: Option<&[u8]>, first: bool) -> Vec<Vec<u8>> {
     let tail = output.map(|o| cat!(" --output ", o, " --fps "));
@@ -100,6 +102,9 @@ fn scan(want: &[u8], output: Option<&[u8]>, first: bool) -> Vec<Vec<u8>> {
         let Some(rest) = c.strip_prefix(want) else {
             continue;
         };
+        if !(rest.starts_with(b"run/") || rest == b"wayland" || rest.starts_with(b"wayland ")) {
+            continue;
+        }
         if tail
             .as_ref()
             .is_none_or(|t| rest.windows(t.len()).any(|w| w == t.as_slice()))

@@ -45,8 +45,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 /// place, resolved on the host, would lead a host tool to the real desktop's compositor (bash
 /// printed that path). A hard link names the socket's inode itself, which only a process in the box
 /// can have bound; link(2) never follows a link, and what it made is checked again, so a swap
-/// between the check and the link is caught.
-fn socket_link(d: &[u8], wd: &[u8]) -> Result<Vec<u8>, &'static str> {
+/// between the check and the link is caught. peek hands its window this path too (finding 751).
+pub fn socket_link(d: &[u8], wd: &[u8]) -> Result<Vec<u8>, &'static str> {
     let is_socket = |p: &[u8]| {
         std::fs::symlink_metadata(shell::path(p)).is_ok_and(|m| m.file_type().is_socket())
     };
@@ -108,6 +108,28 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["host.sock", "run", "wayland"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    /// peek's case (finding 751): the host's peek connects some time after the check. It is handed
+    /// the link in the box dir, so a box that swaps its socket for a link to the host's own socket
+    /// after the check leaves the path peek has on the box's socket.
+    #[test]
+    fn a_swap_after_the_check_leaves_the_link_on_the_box() {
+        use std::os::unix::net::UnixStream;
+        let d = std::env::temp_dir().join(format!("omabox-envswap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("run")).expect("dirs");
+        let db = shell::bytes(&d).to_vec();
+        let host = UnixListener::bind(d.join("host.sock")).expect("a socket");
+        let own = UnixListener::bind(d.join("run/wayland-1")).expect("a socket");
+        let p = socket_link(&db, b"wayland-1").expect("the link");
+        std::fs::remove_file(d.join("run/wayland-1")).expect("rm");
+        std::os::unix::fs::symlink(d.join("host.sock"), d.join("run/wayland-1")).expect("a link");
+        host.set_nonblocking(true).expect("nonblocking");
+        own.set_nonblocking(true).expect("nonblocking");
+        let _c = UnixStream::connect(shell::path(&p)).expect("connects");
+        assert!(own.accept().is_ok(), "the box's socket gets the connection");
+        assert!(host.accept().is_err(), "the host's never does");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
