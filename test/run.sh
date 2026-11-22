@@ -7410,7 +7410,7 @@ t_agent_session() {
   # shellcheck disable=SC2329 # called through until_ok
   # (bash's reaper slept in a child; the Rust half's says how often it looks in reap.log, finding 471)
   polls_every() { pgrep -fx "sleep $2" -P "$(pgrep -f "omabox _reap $1 " | head -1)" >/dev/null ||
-    grep -q "watching it every $2 s$" "$XDG_RUNTIME_DIR/omabox/$1/reap.log" 2>/dev/null; }
+    grep -qE "watching it every $2 s($|,)" "$XDG_RUNTIME_DIR/omabox/$1/reap.log" 2>/dev/null; }
   agent "$s1" & local a1=$!
   agent "$s2" --idle 45m & local a2=$!
   agent "$s7" --idle 0 & local a7=$!
