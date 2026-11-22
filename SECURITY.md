@@ -52,5 +52,6 @@ for the frames; omabox reads the frames back as regular files under the bounds a
 
 The agent guard (`omabox guard`) gives agents' shells a display that does not exist, so a GUI app
 an agent starts by mistake fails instead of opening on your desktop (`t_guard`,
-`t_unit_guard_settings`, `t_unit_guard_exec_host`). It catches mistakes. It is not a boundary: an
+`t_unit_guard_settings`, `t_unit_guard_exec_host`, `t_unit_guard_omarchy_shell`,
+`t_unit_guard_theme_set`). It catches mistakes. It is not a boundary: an
 agent can still run anything you could.

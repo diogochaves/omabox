@@ -183,9 +183,10 @@ To make it a rule rather than the agent's judgement, add a line to your agent's 
 The skill is advice: an agent that does not think of `./build/tests/tst_x` as GUI work still opens
 its windows on your desktop, because its shell holds your real display. The guard (opt-in; Claude
 Code and Codex, or any agent through `guard exec`) makes that fail instead: agents' shells get a
-display that does not exist, so a stray window, `hyprctl`, `grim` or `omarchy-theme-set` fails with
-an error the skill explains, and a link an agent opens is refused instead of landing in your
-browser. `install.sh` asks (yes by default); it never turns the guard on by itself.
+display that does not exist, so a stray window, `hyprctl` or `grim` fails with an error the skill
+explains, Omarchy's theme, wallpaper and font commands are refused by name, and a link an agent
+opens is refused instead of landing in your browser. `install.sh` asks (yes by default); it never
+turns the guard on by itself.
 
 ```bash
 omabox guard on               # every installed agent (or: on claude | on codex)
@@ -196,7 +197,9 @@ omabox guard exec -- AGENT    # any other agent: start it under the guard
 
 It stops accidents, not an agent that sets the variables back on purpose, processes the agent starts
 outside its shell (a headed browser MCP opens on your desktop), writes to the files your shell
-watches, or anything over the session bus. What it sets for each agent, and the full list:
+watches, `omarchy theme set` and the rest of Omarchy's `omarchy` command, or anything over the
+session bus. Codex gets the variables only: for its stand-ins too, start it with `omabox guard exec
+-- codex`. What it sets for each agent, and the full list:
 [docs/guard.md](docs/guard.md).
 
 ## With ai-jail

@@ -33,7 +33,8 @@ pub const CODEX_PY: &str = include_str!("guard_codex.py");
 /// The guard's paths and texts for the omabox at ROOT.
 pub struct Guard {
     pub root: Vec<u8>,
-    /// GUARD_PATH: share/guard, its xdg-open, quickshell, qs, omarchy-shell and hyprctl stand-ins.
+    /// GUARD_PATH: share/guard, its xdg-open, quickshell, qs, omarchy-shell, hyprctl, omarchy-theme-set,
+    /// omarchy-theme-bg-set, omarchy-theme-bg-next and omarchy-font-set stand-ins.
     pub path: Vec<u8>,
 }
 
