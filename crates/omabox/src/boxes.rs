@@ -1,6 +1,7 @@
 //! The boxes under $XDG_RUNTIME_DIR/omabox: which there are, whether each is up, what its runtime
 //! dir says, and need_box, every box command's check that its box is up.
 
+use crate::boxmeta::BoxMeta;
 use crate::exit::{Ctx, Res};
 use crate::jail::{in_jail, jail_id};
 use crate::json;
@@ -43,7 +44,7 @@ pub fn clean_abs(p: &[u8]) -> bool {
 /// what the box can write), when that is a clean absolute path; else SBX_HOME (a box from before
 /// it, or a value that is not one).
 pub fn box_home(d: &[u8]) -> Vec<u8> {
-    let (h, _) = meta(d, "home");
+    let h = BoxMeta::load(d).home;
     if clean_abs(&h) {
         h
     } else {
@@ -54,8 +55,13 @@ pub fn box_home(d: &[u8]) -> Vec<u8> {
 /// The box at D is plain-like (#247, #321): a plain box, or a desk box on a plain base (box.json's
 /// desktop and desk_base; Desktop::plain_like).
 pub fn plain_like(d: &[u8]) -> bool {
+    plain_like_of(&BoxMeta::load(d))
+}
+
+/// plain_like on box.json read as M.
+pub fn plain_like_of(m: &BoxMeta) -> bool {
     use crate::upspec::{DeskBase, Desktop};
-    Desktop::of_box(&meta(d, "desktop").0).plain_like(DeskBase::of_box(&meta(d, "desk_base").0))
+    Desktop::of_box(&m.desktop).plain_like(DeskBase::of_box(&m.desk_base))
 }
 
 /// The box at D runs its shell in share/shell.sh's slot (#438): a plain box's `up --shell CMD`
@@ -63,10 +69,15 @@ pub fn plain_like(d: &[u8]) -> bool {
 /// what its user's config starts (shellnote::slot_cmd). Omarchy's shell has no slot, a desk box's on
 /// Omarchy's base included (its shell is Omarchy's, finding 702).
 pub fn slot_shell(d: &[u8]) -> bool {
-    !meta(d, "shell_cmd").0.is_empty()
-        || (crate::upspec::Desktop::of_box(&meta(d, "desktop").0) == crate::upspec::Desktop::Desk
-            && plain_like(d)
-            && meta(d, "shell").0 == b"true")
+    slot_shell_of(&BoxMeta::load(d))
+}
+
+/// slot_shell on box.json read as M.
+pub fn slot_shell_of(m: &BoxMeta) -> bool {
+    !m.shell_cmd.is_empty()
+        || (crate::upspec::Desktop::of_box(&m.desktop) == crate::upspec::Desktop::Desk
+            && plain_like_of(m)
+            && m.shell)
 }
 
 /// box_pid's answer.
@@ -112,7 +123,7 @@ pub fn box_pid(d: &[u8]) -> BoxPid {
     if Some(&ns) == procfs::pidns(b"self").as_ref() {
         return BoxPid::None;
     }
-    let want = meta(d, "pidns").0;
+    let want = BoxMeta::load(d).pidns;
     if !want.is_empty() && ns != want {
         return BoxPid::None;
     }
@@ -186,10 +197,10 @@ pub fn unknown_text(name: &[u8]) -> Vec<u8> {
 /// what D's box.json still holds: its `owner` (run's and look's boxes have one) says whether it was
 /// a throwaway; with no box.json left, nothing does (finding 758).
 pub fn gone_text(d: &[u8], name: &[u8]) -> Vec<u8> {
-    let (owner, read) = meta(d, "owner");
-    let known = read && std::fs::metadata(at(d, "box.json")).is_ok_and(|m| m.len() > 0);
-    let throwaway = known.then_some(!owner.is_empty());
-    gone_hint(name, throwaway, &meta(d, "mode").0, &meta(d, "desktop").0)
+    let m = BoxMeta::load(d);
+    let known = m.read && std::fs::metadata(at(d, "box.json")).is_ok_and(|f| f.len() > 0);
+    let throwaway = known.then_some(!m.owner.is_empty());
+    gone_hint(name, throwaway, &m.mode, &m.desktop)
 }
 
 /// gone_text's words. A throwaway (box.json's `owner`: `run`'s or a look's box) went with its
@@ -385,7 +396,7 @@ fn box_dirs(ctx: &Ctx, all: bool) -> Vec<Vec<u8>> {
         .filter(|n| {
             let d = cat!(ctx.boxes, "/", n, "/");
             (at(&d, "box.json").is_file() || at(&d, "info.json").is_file())
-                && (id.is_empty() || meta(&d, "jail").0 == id)
+                && (id.is_empty() || BoxMeta::load(&d).jail == id)
         })
         .collect()
 }
@@ -795,13 +806,17 @@ fn look_gone_text(name: &[u8], look: &[u8], up: &[u8]) -> Vec<u8> {
 /// Whether the agent `up` recorded for this box still runs: its pid, started when it was then, and
 /// not a zombie. None recorded, or no start time, is none alive.
 pub fn agent_alive(d: &[u8]) -> bool {
-    let (pid, ok1) = meta(d, "agent");
-    let (start, ok2) = meta(d, "agent_start");
-    if !ok1 || !ok2 || pid.is_empty() || start.is_empty() {
+    agent_alive_of(&BoxMeta::load(d))
+}
+
+/// agent_alive on box.json read as M.
+pub fn agent_alive_of(m: &BoxMeta) -> bool {
+    let (pid, start) = (&m.agent, &m.agent_start);
+    if !m.read || pid.is_empty() || start.is_empty() {
         return false;
     }
-    procfs::proc_stat(&pid, 0).unwrap_or_default() != b"Z"
-        && procfs::proc_start(&pid).unwrap_or_default() == start
+    procfs::proc_stat(pid, 0).unwrap_or_default() != b"Z"
+        && procfs::proc_start(pid).unwrap_or_default() == *start
 }
 
 /// A box or name lock held (`lock_file`): the open, flocked file, and its entry in this thread's
@@ -1089,7 +1104,8 @@ fn set_keys(bj: &Path, keys: Vec<(&str, serde_json::Value)>) -> Option<Vec<u8>> 
 /// caller then says so.
 pub fn take_over(ctx: &Ctx, held: bool) -> Res<bool> {
     let d = &ctx.d;
-    if meta(d, "agent").0.is_empty() || agent_alive(d) || !select::session_box(ctx) {
+    let dead_agent = |m: &BoxMeta| !m.agent.is_empty() && !agent_alive_of(m);
+    if !dead_agent(&BoxMeta::load(d)) || !select::session_box(ctx) {
         return Ok(true);
     }
     let Some((pid, start)) = select::agent_proc() else {
@@ -1111,7 +1127,7 @@ pub fn take_over(ctx: &Ctx, held: bool) -> Res<bool> {
     let mut up = true;
     if !box_alive(ctx)? {
         up = false;
-    } else if !meta(d, "agent").0.is_empty() && !agent_alive(d) {
+    } else if dead_agent(&BoxMeta::load(d)) {
         let start = serde_json::Value::String(String::from_utf8_lossy(&start).into_owned());
         let set = serde_json::from_slice::<serde_json::Value>(&pid)
             .is_ok_and(|pid| set_box_json(ctx, vec![("agent", pid), ("agent_start", start)]));

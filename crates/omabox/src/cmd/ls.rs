@@ -4,7 +4,8 @@
 //! order, the same in every locale (finding 446; bash's glob followed the locale's collation).
 
 use crate::args::{unexpected, unknown_opt_hint};
-use crate::boxes::{box_state, list_names, meta, stray_names};
+use crate::boxes::{box_state, list_names, stray_names};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::cmd::save::pad;
 use crate::exit::{Ctx, Exit, Res, out, say};
@@ -85,8 +86,8 @@ fn ask_one(c: &Ctx) -> (Vec<u8>, Option<Kind>) {
     use crate::shellnote::{shell_hung, shell_live_pid};
     let k = crate::exit::muted(|| {
         if crate::hypr::hypr_answers_in(c, "1").unwrap_or(false) {
-            let hung = meta(&c.d, "shell").0 == b"true"
-                && shell_live_pid(c).is_some_and(|p| shell_hung(c, &p));
+            let hung =
+                BoxMeta::load(&c.d).shell && shell_live_pid(c).is_some_and(|p| shell_hung(c, &p));
             hung.then_some(Kind::Shell)
         } else if let Some(w) = crate::hypr::hypr_gone(c) {
             Some(Kind::Gone(w))
@@ -150,25 +151,25 @@ fn json(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
 /// Where a desk box's shell came from (#321 step 4), after its command in `ls`: ` (up --shell)`,
 /// ` (from your config)`, ` (guessed: NAME, from WHAT)` (box.json shell_guess and shell_from, what
 /// up found); nothing for another box, or one that has not said.
-fn desk_shell_from(ctx: &Ctx) -> Vec<u8> {
+fn desk_shell_from(ctx: &Ctx, m: &BoxMeta) -> Vec<u8> {
     use crate::shellnote::{DeskSlot, desk_slot};
     use crate::upspec::Desktop;
-    if Desktop::of_box(&meta(&ctx.d, "desktop").0) != Desktop::Desk {
+    if Desktop::of_box(&m.desktop) != Desktop::Desk {
         return Vec::new();
     }
-    if !meta(&ctx.d, "shell_cmd").0.is_empty() {
+    if !m.shell_cmd.is_empty() {
         return b" (up --shell)".to_vec();
     }
     match desk_slot(ctx) {
         DeskSlot::Config => b" (from your config)".to_vec(),
         DeskSlot::Guess => {
-            let (guess, from) = (meta(&ctx.d, "shell_guess").0, meta(&ctx.d, "shell_from").0);
+            let (guess, from) = (&m.shell_guess, &m.shell_from);
             cat!(
                 " (guessed",
                 if guess.is_empty() { "" } else { ": " },
-                crate::term::plain_cap(&guess, 64),
+                crate::term::plain_cap(guess, 64),
                 if from.is_empty() { "" } else { ", from " },
-                crate::term::plain_cap(&from, 120),
+                crate::term::plain_cap(from, 120),
                 ")"
             )
         }
@@ -218,14 +219,15 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
         if state == "up" && !gw.is_empty() {
             state = gw.to_string();
         }
-        let (idle, ok) = meta(&ctx.d, "idle");
-        if !ok {
+        let m = BoxMeta::load(&ctx.d);
+        if !m.read {
             continue;
         }
+        let idle = &m.idle;
         let limit = if idle.is_empty() {
             Some(0)
         } else {
-            shell::test_int(&idle)
+            shell::test_int(idle)
         };
         // (stat -c %Y: the file's own time, a link not followed)
         let used = ctx
@@ -251,7 +253,7 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
             _ => b"never".to_vec(),
         };
         let mut sh = b"-".to_vec();
-        if state == "up" && meta(&ctx.d, "shell").0 == b"true" {
+        if state == "up" && m.shell {
             sh = crate::shellnote::shell_state_given(ctx, hung.shell_word(&n))
                 .as_bytes()
                 .to_vec();
@@ -266,21 +268,17 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
         };
         let size =
             if shell::test_int(if nm.is_empty() { b"0" } else { &nm }).is_some_and(|m| m <= 1) {
-                let sc = meta(&ctx.d, "scale").0;
-                size_text(
-                    &meta(&ctx.d, "size").0,
-                    if sc.is_empty() { b"1" } else { &sc },
-                )
+                size_text(&m.size, m.scale_or_1())
             } else {
                 cat!(nm, " monitors")
             };
         out(row([
             &ctx.name,
-            &meta(&ctx.d, "mode").0,
+            &m.mode,
             &size,
             state.as_bytes(),
             &sh,
-            &meta(&ctx.d, "net").0,
+            &m.net,
             &idle_col,
             &jq_box(ctx, PLUGINS_JQ).0,
         ]))?;
@@ -290,8 +288,8 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
             out(cat!("  addresses: ", al, " (on its loopback)\n"))?;
         }
         // A box whose desktop is not Omarchy's (#247), under its line: an Omarchy box's rows as before.
-        let desktop = meta(&ctx.d, "desktop").0;
-        if crate::upspec::Desktop::of_box(&desktop) != crate::upspec::Desktop::Omarchy {
+        let desktop = &m.desktop;
+        if crate::upspec::Desktop::of_box(desktop) != crate::upspec::Desktop::Omarchy {
             // ...with its shell's command (`up --shell CMD`), one line, control characters shown; a
             // desk box's (#321 step 4) what its slot runs, and where it came from.
             let cmd = crate::shellnote::slot_cmd(ctx);
@@ -305,17 +303,18 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
                 cat!(
                     ", shell: ",
                     crate::term::plain_cap(&one, 200),
-                    desk_shell_from(ctx)
+                    desk_shell_from(ctx, &m)
                 )
             };
             out(cat!("  desktop: ", desktop, shell, "\n"))?;
         }
         // A box on a Hyprland build of its own (finding 116), and one whose shell runs a Quickshell
         // build (finding 358), under its line: never taken for a stock one.
-        for (key, label) in [("hyprland", "Hyprland"), ("quickshell", "Quickshell")] {
-            let b = meta(&ctx.d, key).0;
+        for (b, v, label) in [
+            (&m.hyprland, &m.hyprland_version, "Hyprland"),
+            (&m.quickshell, &m.quickshell_version, "Quickshell"),
+        ] {
             if !b.is_empty() {
-                let v = meta(&ctx.d, &format!("{key}_version")).0;
                 let v = if v.is_empty() {
                     Vec::new()
                 } else {

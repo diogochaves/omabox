@@ -1846,8 +1846,8 @@ pub fn box_json(ctx: &Ctx, hung: bool, shell_given: &str, gone: &str) -> Vec<u8>
     let orphan = state == "up" && box_orphan(ctx);
     // A desk box's slot (#321, finding 709): its shell_cmd is what the slot runs (the box's own file,
     // shown as `ls` shows it), and shell_from where it came from: config, guess or none.
-    let (slot, from) = if meta(&ctx.d, "shell_cmd").0.is_empty() && crate::boxes::slot_shell(&ctx.d)
-    {
+    let m = crate::boxmeta::BoxMeta::load(&ctx.d);
+    let (slot, from) = if m.shell_cmd.is_empty() && crate::boxes::slot_shell_of(&m) {
         use crate::shellnote::{DeskSlot, desk_slot};
         let from = match desk_slot(ctx) {
             DeskSlot::Config => "config",
