@@ -15195,7 +15195,8 @@ from them.
     the broker can trust (the suite's jail is a copy of bash). Peek's host window checked the box's
     Wayland socket in its runtime dir, then connected to that path later: the box could swap a link
     to your own desktop's socket in between and the peek would mirror your desktop. It now gets
-    `omabox env`'s hard link in the box folder (`env::socket_link`, 493). `save_keyring` opened the
+    `omabox env`'s hard link in the box folder (`env::socket_link`, 493); `marks.rs`'s `peek_pid`
+    finds a peek by either path (`--box D/wayland` or an older one's `--box D/run/`). `save_keyring` opened the
     save's `*.keyring` files following links (one bit of a host file read: whether a line starts
     `[digit`); it now opens each through `boxes::open_beneath`, bounded. Tests: cargo's
     `find_jail_wants_ai_jail_in_the_brokers_namespaces` (a stand-in /proc: an ai-jail in another

@@ -538,7 +538,7 @@ box_aq_unfixed() {
 # that such a peek would fail; failing while one is open on BOX, it is skipped, saying so (`no`).
 your_peek() {
   local p
-  for p in $(pgrep -f "omabox-peek --box $XDG_RUNTIME_DIR/omabox/$1/run/"); do
+  for p in $(pgrep -f "omabox-peek --box $XDG_RUNTIME_DIR/omabox/$1/(run/|wayland( |$))"); do
     tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -x OMABOX_PEEK_BY=you >/dev/null && return 0
   done
   return 1
@@ -15851,7 +15851,7 @@ t_peek_monitors() {
   "${in[@]}" down "$C" >/dev/null 2>&1
   check "down closes both peek windows" until_ok 5 peeks 0
   # shellcheck disable=SC2329 # called through until_ok
-  none_left() { ! ob run -b "$S" -- pgrep -f "^$ROOT/tools/peek/omabox-peek --box $d/run/"; }
+  none_left() { ! ob run -b "$S" -- pgrep -f "^$ROOT/tools/peek/omabox-peek --box $d/(run/|wayland( |$))"; }
   check "...and every peek process of the box" until_ok 3 none_left
   ob down "$S" >/dev/null
 }
