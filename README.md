@@ -101,6 +101,16 @@ render node: AMD and Intel iGPUs and NVIDIA RTX cards are tested. Where it runs:
 - **Not yet**: NixOS (a box looks for its programs in `/usr/bin`). Ubuntu 26.04 LTS, Alpine and Void
   ship no Hyprland with the Lua config.
 
+Which versions omabox supports follows two floors that move on their own:
+
+- **Omarchy**: the release on Omarchy's stable channel. When a new one reaches stable, the one
+  before it keeps working for one more month with a `deprecated:` line, and the first omabox
+  release after that month drops it.
+- **Hyprland**, everywhere (with or without Omarchy): the oldest Hyprland that a supported Omarchy
+  or Arch's `extra` repository still ships, and never older than 0.56 (the Lua config). The floor
+  rises only when keeping the older version costs something, and never past what either ships.
+  Other distributions are tested as listed above; `omabox doctor` warns about known-bad builds.
+
 ```bash
 git clone https://github.com/diogochaves/omabox && cd omabox
 ./install.sh                            # packages (or the command that installs them), omabox, links
