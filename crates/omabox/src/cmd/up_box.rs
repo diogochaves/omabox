@@ -66,10 +66,8 @@ fn write(p: &[u8], data: &[u8]) -> bool {
 }
 
 pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
-    let d = ctx.d.clone();
     let name = ctx.name.clone();
     let homes = paths::homes();
-    let home_dir = cat!(homes, "/", name, "/home");
     // A HOME under this name that is another box's (one up in another runtime dir, which this up
     // cannot see): never removed, nor shared (finding 584).
     if let Some(why) = ready::home_taken(ctx) {
@@ -126,6 +124,40 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             t.forget();
         }
     };
+    let made = make_home(ctx, &mut u)?;
+    let devs = pick_devices(ctx, &u)?;
+    let started = launch(ctx, &u, &devs, &made, &launched)?;
+    let crashed = wait_up(ctx, &u, started.owner, made.shell_before, &drop_trap)?;
+    drop_trap();
+    up_said(
+        ctx,
+        &mut u,
+        UpEnd {
+            starter: started.starter,
+            at_term: started.at_term,
+            crashed,
+        },
+    )
+}
+
+/// What `make_home` hands on: what the desk seeding copied, and what is known before the box runs.
+struct Made {
+    /// The desk copy's lines, for box.json (#321).
+    desk_files: Vec<u8>,
+    /// The desk's fonts, bound read-only into the box HOME (#261).
+    desk_fonts: Vec<(Vec<u8>, Vec<u8>)>,
+    /// The shell crash dirs before the box, so only its own crashes are said (#126).
+    shell_before: Vec<u8>,
+}
+
+/// Phase one of `make`: the box dir and its HOME made (or a save copied in) and seeded, the desk
+/// copy and --seed files, --clean's shell defaults, the seed recorded for `diff --seed`, and the
+/// confirm-close setting read once more. Hands on what box.json and bwrap need of the seeding.
+fn make_home(ctx: &mut Ctx, u: &mut Up) -> Res<Made> {
+    let d = ctx.d.clone();
+    let name = ctx.name.clone();
+    let homes = paths::homes();
+    let home_dir = cat!(homes, "/", name, "/home");
     ready::rm_box(ctx);
     // (from here, a HOME another process removes is named with its remover: #433)
     let since = crate::homeuse::now_ns();
@@ -177,7 +209,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     u.newlock = None;
     ready::sweep_homes(ctx);
     let h = cat!(d, "/home");
-    let plan = seed_plan(&u);
+    let plan = seed_plan(u);
     let desk_files = crate::seed::seed_home(ctx, &plan, &h).map_err(gone)?;
     // A desk box's copy of the desktop (#321 step 2): seed_home's own on a plain base; on Omarchy's
     // (finding 709) after Omarchy's seeding (the look, --desk-shell's plugins and shell.json), which
@@ -236,37 +268,31 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             u.aq.howto()
         ));
     }
-    let render = u
-        .render
-        .clone()
-        .ok_or_else(|| ctx.die("up: no render node"))?;
-    let mut renders: Vec<RenderNode> = Vec::new();
-    let mut nvidia_devs: Vec<NvidiaDev> = Vec::new();
-    let mut nvidia_cards: Vec<Vec<u8>> = Vec::new();
-    let mut wayland_screen = false;
-    if u.interactive {
-        renders = render::render_nodes();
-        // An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering
-        // on it.
-        for n in &renders {
-            if n.driver() != b"nvidia" {
-                continue;
-            }
-            if let Some(dev) = crate::exit::muted(|| render::nvidia_device(ctx, n, false).ok()) {
-                nvidia_devs.push(dev);
-                nvidia_cards.push(render::nvidia_card(n).unwrap_or_default());
-            }
-        }
-    } else if render.driver() == b"nvidia" {
-        renders.push(render.clone());
-        let dev = render::nvidia_device(ctx, &render, true)
-            .map_err(|_| ctx.die(cat!("cannot use NVIDIA render node ", render.as_bytes())))?;
-        nvidia_devs.push(dev);
-        nvidia_cards.push(render::nvidia_card(&render).unwrap_or_default());
-        wayland_screen = true;
-    } else {
-        renders.push(render.clone());
-    }
+    Ok(Made {
+        desk_files,
+        desk_fonts,
+        shell_before,
+    })
+}
+
+/// What `launch` hands on: the owner and the starter, for the wait and for what up says.
+struct Started {
+    owner: Option<Owner>,
+    starter: Vec<u8>,
+    at_term: bool,
+}
+
+/// Phase three of `make`: box.json, the clean and pointer files, the box's /etc, the bwrap words,
+/// launch.sh written; the reaper started; then the box launched (headless, or by the host Hyprland
+/// for an interactive one) under the lock its undo takes. Hands on the owner and who started it.
+fn launch(
+    ctx: &mut Ctx,
+    u: &Up,
+    devs: &Devices,
+    made: &Made,
+    launched: &Mutex<Launched>,
+) -> Res<Started> {
+    let d = ctx.d.clone();
     // The owner's start time with its pid, as for an agent: a pid reused after a SIGKILLed run is
     // not it.
     let owner = (!u.owner.is_empty()).then(|| Owner {
@@ -288,14 +314,13 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     let helpers = helper_binds(u.polkit, u.desktop == Desktop::Desk);
     let bj = box_json(
         ctx,
-        &u,
-        &render,
-        wayland_screen,
+        u,
+        devs,
         &owner,
         &starter,
         at_term,
-        &desk_files,
-        &desk_fonts,
+        &made.desk_files,
+        &made.desk_fonts,
         &helpers,
     );
     if !write(&cat!(d, "/box.json"), &bj) {
@@ -306,7 +331,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     }
     // --clean (#252): animations off, read by the box's config on every load; a plain box's sentinel
     // background too (#247: plain.lua's misc.background_color), what check's holes look for.
-    let clean_lines = clean_lines(&u);
+    let clean_lines = clean_lines(u);
     if !clean_lines.is_empty() && !boxes::box_file(ctx, &ctx.at("run/omabox.clean"), &clean_lines) {
         return Err(ctx.die("up: could not write the box's clean settings"));
     }
@@ -317,21 +342,10 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             return Err(ctx.die("up: could not write the box's pointer setting"));
         }
     }
-    let etc = etc_files(ctx, &u)?;
+    let etc = etc_files(ctx, u)?;
     let protect = u.protect.clone();
-    let args = bwrap_args(
-        ctx,
-        &u,
-        &render,
-        &renders,
-        &nvidia_devs,
-        &nvidia_cards,
-        wayland_screen,
-        &etc,
-        &desk_fonts,
-        &helpers,
-    )?;
-    let script = launch_script(ctx, &u, &args, &protect)?;
+    let args = bwrap_args(ctx, u, devs, &etc, &made.desk_fonts, &helpers)?;
+    let script = launch_script(ctx, u, &args, &protect)?;
     if !write(&cat!(d, "/launch.sh"), &script) {
         return Err(ctx.die(cat!("up: could not write ", d, "/launch.sh")));
     }
@@ -350,7 +364,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     boxes::touch(&ctx.at("used"));
     // (and for a connected box with protected ports, whose rule it keeps on the host's addresses:
     // #399)
-    if u.idle_s != 0 || !u.owner.is_empty() || !u.agent.is_empty() || u.interactive || guarded(&u) {
+    if u.idle_s != 0 || !u.owner.is_empty() || !u.agent.is_empty() || u.interactive || guarded(u) {
         start_reaper(ctx);
     }
     // From here a box may be running.
@@ -408,13 +422,33 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             }
         }
     }
+    Ok(Started {
+        owner,
+        starter,
+        at_term,
+    })
+}
+
+/// Phase four of `make`: the box's pid waited for, its namespaces recorded, a jailed caller's
+/// covers checked, Hyprland waited for and the seat checked (S1), the box waited for until ready,
+/// its extra monitors and desk steps, the shell watched, --dnd/--no-dock/--audio, the owner checked.
+/// Hands on the shell's crash, if it crashed just after its bar came.
+fn wait_up(
+    ctx: &mut Ctx,
+    u: &Up,
+    owner: Option<Owner>,
+    shell_before: Vec<u8>,
+    drop_trap: &dyn Fn(),
+) -> Res<Option<Vec<u8>>> {
+    let d = ctx.d.clone();
+    let name = ctx.name.clone();
     let r_owner = owner;
     let mut r = Ready {
         owner: r_owner,
         covers: !u.cover_srcs.is_empty(),
         shell_before,
         bar_at: 0,
-        before_end: &drop_trap,
+        before_end: drop_trap,
         aq_unfixed: if u.aq.fixed {
             Vec::new()
         } else {
@@ -471,7 +505,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     }
     // A jailed caller's covers (#210): checked on the box's own mounts while its PID 1 waits.
     if !u.cover_srcs.is_empty() {
-        covers_check(ctx, &u, &r)?;
+        covers_check(ctx, u, &r)?;
     }
     ready::wait_hyprland(ctx, &r)?;
     // S1 (#355): the started box's own mounts read back; one of the seat's paths there ends it. Once
@@ -495,8 +529,8 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     crate::mon::set_up_locked(false);
     // A desk box once it is ready (#321): its shell's step (4) and its guards' (5).
     if u.desktop == Desktop::Desk {
-        crate::deskshell::after_ready(ctx, &u)?;
-        crate::deskguard::after_ready(ctx, &u)?;
+        crate::deskshell::after_ready(ctx, u)?;
+        crate::deskguard::after_ready(ctx, u)?;
     }
     // The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
     let crashed = if u.shell {
@@ -532,7 +566,27 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         )));
     }
     ready::up_owner_check(ctx, r.owner.as_ref(), r.before_end)?;
-    drop_trap();
+    Ok(crashed)
+}
+
+/// What `up_said` needs of the start: who started the box, and its shell's crash.
+struct UpEnd {
+    starter: Vec<u8>,
+    at_term: bool,
+    crashed: Option<Vec<u8>>,
+}
+
+/// What up says once the box is up, after its undo is dropped: its size, VRAM, theme notes, the
+/// chosen desktop, clean/stock lines, the orphan note, repo links, plugin notes, a deprecated
+/// Omarchy, the --json/--new output; exit 1 for a crashed shell or a Hyprland that stopped answering.
+fn up_said(ctx: &mut Ctx, u: &mut Up, end: UpEnd) -> Res<()> {
+    let d = ctx.d.clone();
+    let name = ctx.name.clone();
+    let UpEnd {
+        starter,
+        at_term,
+        crashed,
+    } = end;
     if u.interactive {
         say(cat!(
             "box '",
@@ -704,6 +758,61 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     Ok(())
 }
 
+/// The GPU devices a box gets (S1: render nodes and NVIDIA's own nodes, never a card), chosen once
+/// by `pick_devices` and handed to `box_json` (what it records) and `bwrap_args` (what it binds).
+struct Devices {
+    /// The render node the box renders on (box.json's `render`, OMABOX_RENDER_NODE).
+    render: RenderNode,
+    /// Every render node bound into the box: the chosen one, or an interactive box's all.
+    renders: Vec<RenderNode>,
+    /// Each NVIDIA render node's userspace device with its card's name (empty when it has none),
+    /// whose placeholder file stands at /dev/dri/cardN (#204): always found together.
+    nvidia: Vec<(NvidiaDev, Vec<u8>)>,
+    /// A headless box on an NVIDIA node: its screen is reapplied once it is up (box.json's
+    /// `wayland_screen`).
+    wayland_screen: bool,
+}
+
+/// The box's GPU devices: an interactive box gets every render node (with the NVIDIA ones whose
+/// userspace nodes are there), a headless one its own render node, and that node's NVIDIA nodes when
+/// it is NVIDIA's (up ends when they are missing).
+fn pick_devices(ctx: &Ctx, u: &Up) -> Res<Devices> {
+    let render = u
+        .render
+        .clone()
+        .ok_or_else(|| ctx.die("up: no render node"))?;
+    let mut renders: Vec<RenderNode> = Vec::new();
+    let mut nvidia: Vec<(NvidiaDev, Vec<u8>)> = Vec::new();
+    let mut wayland_screen = false;
+    if u.interactive {
+        renders = render::render_nodes();
+        // An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering
+        // on it.
+        for n in &renders {
+            if n.driver() != b"nvidia" {
+                continue;
+            }
+            if let Some(dev) = crate::exit::muted(|| render::nvidia_device(ctx, n, false).ok()) {
+                nvidia.push((dev, render::nvidia_card(n).unwrap_or_default()));
+            }
+        }
+    } else if render.driver() == b"nvidia" {
+        renders.push(render.clone());
+        let dev = render::nvidia_device(ctx, &render, true)
+            .map_err(|_| ctx.die(cat!("cannot use NVIDIA render node ", render.as_bytes())))?;
+        nvidia.push((dev, render::nvidia_card(&render).unwrap_or_default()));
+        wayland_screen = true;
+    } else {
+        renders.push(render.clone());
+    }
+    Ok(Devices {
+        render,
+        renders,
+        nvidia,
+        wayland_screen,
+    })
+}
+
 /// What up launched, for its undo: the headless box's launcher (`bash launch.sh`, which becomes
 /// pasta, or bwrap without it), or that the host Hyprland was asked to run it (interactive).
 #[derive(Default)]
@@ -850,8 +959,7 @@ fn start_reaper(ctx: &Ctx) {
 fn box_json(
     ctx: &Ctx,
     u: &Up,
-    render: &RenderNode,
-    wayland_screen: bool,
+    devs: &Devices,
     owner: &Option<Owner>,
     starter: &[u8],
     at_term: bool,
@@ -938,7 +1046,7 @@ fn box_json(
     // runs one tells it replaced on the host since, which the box keeps as it was.
     let binds: Vec<(&str, Vec<u8>)> = helpers.iter().map(|h| (h.name, h.src.clone())).collect();
     o.insert("helpers".into(), crate::helpers::record(&binds));
-    o.insert("wayland_screen".into(), Value::Bool(wayland_screen));
+    o.insert("wayland_screen".into(), Value::Bool(devs.wayland_screen));
     o.insert("xwayland".into(), Value::Bool(u.xwayland));
     o.insert("autoreload".into(), Value::Bool(u.autoreload));
     o.insert("shell".into(), Value::Bool(u.shell));
@@ -983,6 +1091,7 @@ fn box_json(
     }
     o.insert("aquamarine".into(), Value::Object(aq));
     if !u.interactive {
+        let render = &devs.render;
         let mut r = Map::new();
         r.insert("node".into(), s(render.as_bytes()));
         r.insert("pci".into(), s(&render.slot()));
@@ -1357,15 +1466,10 @@ pub(crate) fn helper_binds(polkit: bool, desk: bool) -> Vec<HelperBind> {
 
 /// cmd_up's `args`: the bwrap words after `--unshare-user --uid --gid --die-with-parent`, through
 /// Bwrap's checked methods (S1, S3, S4), in bash's order; ends with the session's command.
-#[allow(clippy::too_many_arguments)]
 fn bwrap_args(
     ctx: &Ctx,
     u: &Up,
-    render: &RenderNode,
-    renders: &[RenderNode],
-    nvidia_devs: &[NvidiaDev],
-    nvidia_cards: &[Vec<u8>],
-    wayland_screen: bool,
+    devs: &Devices,
     etc: &Etc,
     desk_fonts: &[(Vec<u8>, Vec<u8>)],
     helpers: &[HelperBind],
@@ -1474,23 +1578,23 @@ fn bwrap_args(
     let dev = |p: &[u8]| {
         DevNode::new(p).ok_or_else(|| ctx.die(cat!(p, " is not a device a box may have")))
     };
-    for n in renders {
+    for n in &devs.renders {
         b.dev(&dev(n.as_bytes())?).map_err(refused)?;
     }
-    if !nvidia_devs.is_empty() {
+    if !devs.nvidia.is_empty() {
         b.dev(&dev(NvidiaDev::ctl().as_bytes())?).map_err(refused)?;
         // CUDA allocates through /dev/nvidia-uvm (#149), there when the driver made it.
         if is_char(b"/dev/nvidia-uvm") {
             b.dev(&dev(NvidiaDev::uvm().as_bytes())?).map_err(refused)?;
         }
     }
-    for n in nvidia_devs {
+    for (n, _) in &devs.nvidia {
         b.dev(&dev(n.as_bytes())?).map_err(refused)?;
     }
     // NVIDIA's Wayland EGL stats the GPU's card node (#204, finding 294): an empty read-only file at
     // that path, never the device.
-    if !nvidia_cards.is_empty() {
-        for c in nvidia_cards {
+    if !devs.nvidia.is_empty() {
+        for (_, c) in &devs.nvidia {
             if c.is_empty() {
                 // (the file is made all the same, as bash's `: >` before the loop)
                 let _ = std::fs::write(shell::path(&cat!(d, "/card-placeholder")), b"");
@@ -1600,9 +1704,9 @@ fn bwrap_args(
         (b"XDG_STATE_HOME", cat!(u.box_home(), "/.local/state")),
         (b"QT_FORCE_STDERR_LOGGING", b"1".to_vec()),
         (b"ATSPI_DBUS_IMPLEMENTATION", b"dbus-daemon".to_vec()),
-        (b"OMABOX_RENDER_NODE", render.as_bytes().to_vec()),
+        (b"OMABOX_RENDER_NODE", devs.render.as_bytes().to_vec()),
         (b"OMABOX_CALLER_PATH", crate::exec::caller_path(true)),
-        (b"OMABOX_WAYLAND_SCREEN", bit(wayland_screen).to_vec()),
+        (b"OMABOX_WAYLAND_SCREEN", bit(devs.wayland_screen).to_vec()),
         (b"OMABOX_SIZE", u.size.clone()),
         (b"OMABOX_SCALE", u.scale.clone()),
         (b"OMABOX_INTERACTIVE", bit(u.interactive).to_vec()),
@@ -2673,11 +2777,22 @@ mod tests {
                 };
                 let render =
                     RenderNode::new(b"/dev/dri/renderD128").ok_or(TestCaseError::fail("node"))?;
-                let devs: Vec<NvidiaDev> = NvidiaDev::new(b"/dev/nvidia0").into_iter().collect();
-                let cards: Vec<Vec<u8>> = cards
-                    .iter()
-                    .map(|n| format!("card{n}").into_bytes())
-                    .collect();
+                // (NVIDIA's node with each card, or with none: the dev's words are always there)
+                let dev = NvidiaDev::new(b"/dev/nvidia0").ok_or(TestCaseError::fail("nvidia"))?;
+                let nvidia: Vec<(NvidiaDev, Vec<u8>)> = if cards.is_empty() {
+                    vec![(dev, Vec::new())]
+                } else {
+                    cards
+                        .iter()
+                        .map(|n| (dev.clone(), format!("card{n}").into_bytes()))
+                        .collect()
+                };
+                let devs = Devices {
+                    render: render.clone(),
+                    renders: vec![render],
+                    nvidia,
+                    wayland_screen: false,
+                };
                 let fonts: Vec<(Vec<u8>, Vec<u8>)> = fonts;
                 let etc = Etc {
                     overlay: etc_overlay,
@@ -2687,11 +2802,7 @@ mod tests {
                     bwrap_args(
                         &ctx,
                         &u,
-                        &render,
-                        std::slice::from_ref(&render),
                         &devs,
-                        &cards,
-                        false,
                         &etc,
                         &fonts,
                         &helper_binds(u.polkit, u.desktop == Desktop::Desk),
