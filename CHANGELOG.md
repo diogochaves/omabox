@@ -3,11 +3,21 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.5.3 — 2026-11-22
+
+Fixes and a cleanup of the code behind them, with no change to what commands do or print otherwise:
+`ls --json` is byte for byte what 1.5.2 wrote.
 
 ### Fixed
 - **`down`'s list of your boxes put `~` before every box folder when `HOME` was empty**; it shows
   them as they are now. Paths are compared by one rule everywhere (finding 759).
+- **The check for a repo link that leads out of the repo took a top folder with trailing slashes
+  wrongly** (`/r//` crashed it); no command passes one today (finding 760).
+
+### Changed
+- **The code behind `up`, `record`, `look` and box.json is restructured**: one "is this path under
+  that folder" rule instead of about 40 copies, box.json read once into a typed record, `record`'s
+  timing arithmetic done in-process instead of by awk (checked against awk on edge values).
 
 ## 1.5.2 — 2026-11-22
 
