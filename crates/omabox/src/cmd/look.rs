@@ -742,7 +742,7 @@ fn plain(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     // What was logged since the last look.
     let old = mark_read(ctx);
-    let now = mark_now(ctx, name);
+    let now = mark_now(ctx);
     problems.extend(new_problems(ctx, name, &old, &now, &ids));
     mark_write(ctx, &now);
     let n = wins.len().to_string();
@@ -806,7 +806,7 @@ fn window_line(w: &Value) -> Vec<u8> {
 
 /// Where each log of the box ends now: its run -d logs by size, the shell's by its first line (a
 /// restarted shell starts its log again) and its length.
-fn mark_now(ctx: &Ctx, name: &[u8]) -> Value {
+fn mark_now(ctx: &Ctx) -> Value {
     let mut logs = serde_json::Map::new();
     if let Ok(rd) = std::fs::read_dir(ctx.at("home")) {
         for e in rd.flatten() {
@@ -818,13 +818,44 @@ fn mark_now(ctx: &Ctx, name: &[u8]) -> Value {
             }
         }
     }
-    let shell_log = ob(&[b"log", b"-b", name, b"shell", b"-n", b"all", b"--full"]).out;
-    let first = shell_log.split(|&c| c == b'\n').next().unwrap_or(b"");
+    let (first, len) = shell_log_mark(&ctx.d);
     serde_json::json!({
         "logs": logs,
-        "shell_first": String::from_utf8_lossy(first),
-        "shell_len": shell_log.len(),
+        "shell_first": String::from_utf8_lossy(&first),
+        "shell_len": len,
     })
+}
+
+/// The first line of the box's shell log (4 KiB of it at most) and its length, read from the
+/// file through the box's folder, never the whole log (S7: a box can make its log a sparse
+/// terabyte; finding 755).
+fn shell_log_mark(d: &[u8]) -> (Vec<u8>, u64) {
+    let Some(f) = crate::boxes::box_home_file(d, "shell.log") else {
+        return (Vec::new(), 0);
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut head = Vec::new();
+    let _ = std::io::Read::read_to_end(&mut std::io::Read::take(f, 4096), &mut head);
+    let first = head.split(|&c| c == b'\n').next().unwrap_or(b"").to_vec();
+    (first, len)
+}
+
+/// The box's shell log from byte FROM on (all of it with none), READ_CAP bytes at most: the last
+/// READ_CAP when there is more.
+fn shell_log_since(d: &[u8], from: Option<u64>) -> Vec<u8> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some(mut f) = crate::boxes::box_home_file(d, "shell.log") else {
+        return Vec::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let cap = crate::boxes::READ_CAP;
+    let from = from.filter(|&w| w <= len).unwrap_or(0);
+    let at = from.max(len.saturating_sub(cap));
+    let mut v = Vec::new();
+    if f.seek(SeekFrom::Start(at)).is_ok() {
+        let _ = f.take(cap).read_to_end(&mut v);
+    }
+    v
 }
 
 fn mark_read(ctx: &Ctx) -> Option<Value> {
@@ -901,17 +932,19 @@ fn new_problems(
             found.extend(lines.into_iter().map(|l| cat!(who.as_str(), ": ", l)));
         }
     }
-    let shell_log = ob(&[b"log", b"-b", name, b"shell", b"-n", b"all", b"--full"]).out;
-    let first = shell_log.split(|&c| c == b'\n').next().unwrap_or(b"");
+    let first = now
+        .get("shell_first")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let same = old
         .as_ref()
         .and_then(|o| o.get("shell_first")?.as_str())
-        .is_some_and(|f| f.as_bytes() == String::from_utf8_lossy(first).as_bytes());
+        .is_some_and(|f| f == first);
     let was_len = old
         .as_ref()
         .and_then(|o| o.get("shell_len")?.as_u64())
         .filter(|_| same);
-    let warn = crate::plugins::shell_warnings_of(since(&shell_log, was_len));
+    let warn = crate::plugins::shell_warnings_of(&shell_log_since(&ctx.d, was_len));
     for id in ids {
         found.extend(plugin_warnings(&warn, id.as_bytes()));
     }
@@ -1361,7 +1394,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     if a.own {
         head.push(("box", name));
         // (what this look reported is not new to the next one)
-        mark_write(ctx, &mark_now(ctx, name));
+        mark_write(ctx, &mark_now(ctx));
     }
     out(report(
         &head,
@@ -1909,7 +1942,7 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     if a.own {
         head.push(("box", name));
         // (what this look reported is not new to the next one)
-        mark_write(ctx, &mark_now(ctx, name));
+        mark_write(ctx, &mark_now(ctx));
     }
     out(report(
         &head,
@@ -2160,7 +2193,7 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
     if a.own {
         head.push(("box", name));
         // (what this look reported is not new to the next one)
-        mark_write(ctx, &mark_now(ctx, name));
+        mark_write(ctx, &mark_now(ctx));
     }
     out(report(
         &head,
@@ -2806,6 +2839,33 @@ mod tests {
         assert_eq!(r.1, b"", "a link to a host file");
         assert_eq!(r.2, b"", "a FIFO");
         assert_eq!(r.3, b"", "not a file of a box HOME");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Finding 755: the shell log's mark and what is read since it come from the file through the
+    /// box's folder, bounded: a sparse terabyte of a log is never read whole, a link reads nothing.
+    #[test]
+    fn the_shell_log_is_read_bounded() {
+        let d = std::env::temp_dir().join(format!("omabox-shelllog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("home")).unwrap();
+        let db = shell::bytes(&d).to_vec();
+        let f = std::fs::File::create(d.join("home/shell.log")).unwrap();
+        std::io::Write::write_all(&mut &f, b"first line\nWARN x\n").unwrap();
+        f.set_len(1 << 40).unwrap();
+        drop(f);
+        let (first, len) = shell_log_mark(&db);
+        assert_eq!((first.as_slice(), len), (&b"first line"[..], 1 << 40));
+        assert_eq!(
+            shell_log_since(&db, None).len() as u64,
+            crate::boxes::READ_CAP
+        );
+        assert_eq!(shell_log_since(&db, Some((1 << 40) - 3)).len(), 3);
+        std::fs::remove_file(d.join("home/shell.log")).unwrap();
+        std::fs::write(d.join("secret"), "host\n").unwrap();
+        std::os::unix::fs::symlink(d.join("secret"), d.join("home/shell.log")).unwrap();
+        assert_eq!(shell_log_mark(&db), (Vec::new(), 0));
+        assert!(shell_log_since(&db, None).is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 
