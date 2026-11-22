@@ -572,8 +572,10 @@ struct LinkPass {
     left_out: Vec<(Vec<u8>, Vec<u8>)>,
     /// where a walk stopped short (finding 752), and why
     cut: Option<(Vec<u8>, Vec<u8>)>,
-    /// the box's mounts (SeedPlan's), for homelinks::View::with_mounts
+    /// the box's mounts and its linked plugins, (id, dir) each (SeedPlan's), for
+    /// homelinks::View::with_mounts
     mounts: Vec<(Vec<u8>, Vec<u8>)>,
+    plugins: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 static LINK_PASS: std::sync::Mutex<LinkPass> = std::sync::Mutex::new(LinkPass {
@@ -582,6 +584,7 @@ static LINK_PASS: std::sync::Mutex<LinkPass> = std::sync::Mutex::new(LinkPass {
     left_out: Vec::new(),
     cut: None,
     mounts: Vec::new(),
+    plugins: Vec::new(),
 });
 
 /// home_links_out's caps: a picture, any other file, and all it copies in one up (deskcopy's IMAGES, and
@@ -619,7 +622,11 @@ fn home_links_under(ctx: &Ctx, h: &[u8], rel: &[u8]) -> Res<()> {
     let Some(view) = crate::homelinks::View::new(h, &shell::env_or_empty("HOME")) else {
         return Ok(());
     };
-    let view = view.with_mounts(link_pass().mounts.clone());
+    let (mounts, plugins) = {
+        let lp = link_pass();
+        (lp.mounts.clone(), lp.plugins.clone())
+    };
+    let view = view.with_mounts(mounts, plugins);
     // (each judged against the HOME as it is before any is taken out: `a -> r/home/USER/x` stays out
     // after `r -> /` is gone)
     let mut out: Vec<(Vec<u8>, crate::homelinks::Out, Option<Vec<u8>>)> = Vec::new();
@@ -1072,11 +1079,15 @@ fn seed_copy_leaves_out(n: &[u8], top: bool) -> bool {
     hidden || n == b"node_modules" || n == b"api-keys.env"
 }
 
+/// The largest file of the desk's extensions/ extensions_held_back looks into (and so seeds).
+const EXTENSION_FILE_MAX: u64 = 8 << 20;
+
 /// What of the desk's extensions/ (SRC) stays out of the box by what it holds (finding 458): each
 /// regular file seed_copy would copy (no hidden name, no node_modules or api-keys.env on its way; a
 /// link is copied as the link, its target never read) that desk_content_refused refuses, as
 /// (`NAME/...` from its top, why). seed_copy's SKIP takes the paths. 4096 files at most are looked at;
-/// past that the rest are held back too (a plugin's settings are a handful).
+/// past that the rest are held back too (a plugin's settings are a handful). A file over
+/// EXTENSION_FILE_MAX is held back unread: grep -z holds a whole file as one record (finding 758).
 fn extensions_held_back(src: &[u8]) -> Vec<(Vec<u8>, &'static str)> {
     const MAX: usize = 4096;
     let Some(root) = readlink_f(src).filter(|r| p(r).is_dir()) else {
@@ -1118,6 +1129,8 @@ fn extensions_held_back(src: &[u8]) -> Vec<(Vec<u8>, &'static str)> {
                 seen += 1;
                 let why = if seen > MAX {
                     Some("past the 4096 files looked at")
+                } else if m.len() > EXTENSION_FILE_MAX {
+                    Some("over 8 MiB, not looked into")
                 } else {
                     desk_content_refused(&full)
                 };
@@ -1996,6 +2009,12 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
         left_out: Vec::new(),
         cut: None,
         mounts: plan.mounts.clone(),
+        plugins: plan
+            .plugins
+            .iter()
+            .filter(|(id, _)| plan.linked.contains(id))
+            .cloned()
+            .collect(),
     };
     // A save made before #448, or with a link planted in it, may hold links into your HOME: the same
     // pass over all of it, whatever box it is restored in (finding 752: an Omarchy box's save in a
@@ -2886,6 +2905,7 @@ mod tests {
             left_out: Vec::new(),
             cut: None,
             mounts: Vec::new(),
+            plugins: Vec::new(),
         };
         seed_copy(
             &c,
@@ -2974,6 +2994,7 @@ mod tests {
             left_out: Vec::new(),
             cut: None,
             mounts: Vec::new(),
+            plugins: Vec::new(),
         };
         home_links_under(&c, h("box").as_bytes(), b"").unwrap();
         assert!(!sc_there(&h("box/r")), "a link to /: gone");
@@ -3660,6 +3681,29 @@ mod tests {
         );
         assert!(!sc_holds(&h, "planted"), "...nothing planted in it");
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Finding 758: a big file in extensions/ is held back unread (grep -z would hold it whole), said
+    /// so; one at the cap is still looked into.
+    #[test]
+    fn extensions_big_file_held_back() {
+        if !crate::exec::tools_or_skip("extensions_big_file_held_back", &["grep"]) {
+            return;
+        }
+        let d = sc_tmp("extbig");
+        let e = format!("{d}/extensions");
+        sc_mk(&format!("{e}/p"));
+        sc_put(&format!("{e}/p/ok.json"), "{\"x\": 1}");
+        let f = std::fs::File::create(format!("{e}/p/big.json")).unwrap();
+        f.set_len(EXTENSION_FILE_MAX + 1).unwrap();
+        let f = std::fs::File::create(format!("{e}/p/at.json")).unwrap();
+        f.set_len(EXTENSION_FILE_MAX).unwrap();
+        let held = extensions_held_back(e.as_bytes());
+        assert_eq!(
+            held,
+            vec![(b"p/big.json".to_vec(), "over 8 MiB, not looked into")]
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// t_unit_no_seed (#231): the desk's extensions/ in the box HOME, without its hidden files; each

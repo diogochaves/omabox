@@ -9870,6 +9870,13 @@ t_plugin_link() {
   out=$(ob restart-shell -b "$B" 2>&1)
   check_match "...fixed, restart-shell: the shell up again" "shell restarted" "$out"
   check_fails "...the plugin loaded (not named as failed)" grep -q "$P.lw" <<<"$out"
+  # Finding 758: path --home names no linked plugin's own link, but every other link into what the box
+  # mounts at its same path (the repo, a --ro-bind) that a box process plants: an agent's edit
+  # through it would change the real file.
+  check_eq "path --home: the linked plugins' own links not named" "" "$(ob path -b "$B" --home 2>&1 >/dev/null)"
+  ob run -b "$B" -- sh -c "mkdir -p /home/sbx/.config/app && ln -s '$R/tools/sibling.txt' /home/sbx/.config/app/settings.json && ln -s '$M/tools/sibling.txt' /home/sbx/.config/app/rb.json"
+  check_match "...a box-planted link to a repo file and one into a --ro-bind: both named" \
+    "HOME holds 2 links out of it" "$(ob path -b "$B" --home 2>&1 >/dev/null)"
   ob down "$B" >/dev/null
 }
 
@@ -12060,6 +12067,12 @@ t_hostile_reads() {
   ob run -b "$B" -- sh -c "printf 'l755 \\033]52;c;aGk=\\007 end\\n' > /home/sbx/apps.log"
   out=$(timeout 60 "$CLI" log -b "$B" apps 2>&1)
   check_match "log: a box log's escape said plain" 'l755 \?\]52;c;aGk=\? end' "$out"
+  check_fails "...no ESC byte reaches the terminal" grep -q $'\e' <<<"$out"
+  # Finding 758: colours (SGR, as quickshell writes into shell.log) dropped whole, never `?[90m`; a
+  # cursor move still a `?`.
+  ob run -b "$B" -- sh -c "printf '\\033[90m2026-11-22 l758\\033[32m  INFO\\033[0m: up \\033[2Jx\\n' > /home/sbx/apps.log"
+  out=$(timeout 60 "$CLI" log -b "$B" apps 2>&1)
+  check_match "log: a box log's colours dropped, other escapes plain" '2026-11-22 l758  INFO: up \?\[2Jx' "$out"
   check_fails "...no ESC byte reaches the terminal" grep -q $'\e' <<<"$out"
   # A sparse terabyte of a log: its last 8 MiB read, said, no hang and no memory taken whole.
   ob run -b "$B" -- sh -c 'truncate -s 1T /home/sbx/apps.log; printf "x\\ntail755\\n" >> /home/sbx/apps.log'
@@ -20183,6 +20196,16 @@ t_unit_guard_theme_set() {
   : > "$d/stub.log"
   check_eq "...nor one whose words only hold the name" "4|" \
     "$("${gx[@]}" bash -c 'omarchy-theme-set x; exit $?' omarchy-migrate-x >/dev/null 2>&1; echo $?)|$(cat "$d/stub.log")"
+  # Finding 758: an agent's command is one `bash -c` word; a line of it ending in such a path (reading
+  # Omarchy's update script, then setting a theme) is no hand-off, nor is the name as a later word.
+  check_eq "...nor an agent command with a line ending in .../omarchy-migrate" "4|" \
+    "$("${gx[@]}" bash -c $'true /usr/share/omarchy/bin/omarchy-migrate\nomarchy-theme-set foo; exit $?' >/dev/null 2>&1; echo $?)|$(cat "$d/stub.log")"
+  check_eq "...nor Claude Code's shape (eval of the command, a line ending in .../omarchy-update)" "4|" \
+    "$("${gx[@]}" bash -c -l $'eval \'true /usr/share/omarchy/bin/omarchy-update\nomarchy-theme-set foo; exit $?\'' >/dev/null 2>&1; echo $?)|$(cat "$d/stub.log")"
+  check_eq "...nor one line naming it after a comment" "4|" \
+    "$("${gx[@]}" bash -c 'omarchy-theme-set foo; exit $? # see /omarchy-update' >/dev/null 2>&1; echo $?)|$(cat "$d/stub.log")"
+  check_eq "...nor the name as \$0 of a bash -c" "4|" \
+    "$("${gx[@]}" bash -c 'omarchy-theme-set foo; exit $?' omarchy-update >/dev/null 2>&1; echo $?)|$(cat "$d/stub.log")"
   check_eq "...a hand-off without the name it was run under" unset \
     "$("${env[@]}" PATH="$ROOT/share/guard:$TMP/g750env:$PATH" sh -c 'mkdir -p "$1"; printf "#!/bin/sh\necho \${OMABOX_GUARD_AS-unset}\n" > "$1/omarchy-theme-bg-set"; chmod +x "$1/omarchy-theme-bg-set"; printf "#!/bin/sh\nomarchy-theme-bg-set x\n" > "$1/omarchy-update"; chmod +x "$1/omarchy-update"; "$1/omarchy-update"' _ "$TMP/g750env")"
 }

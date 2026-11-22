@@ -60,12 +60,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // every box's since #448, whose seeding leaves none: one there is a save's from before, or
         // planted)
         let user = shell::env_or_empty("HOME");
-        let mounts = std::fs::read(ctx.at("box.json"))
+        let bj = std::fs::read(ctx.at("box.json"))
             .ok()
-            .and_then(|t| serde_json::from_slice::<Value>(&t).ok())
-            .map(|bj| crate::cmd::plugin::box_mounts(&bj))
+            .and_then(|t| serde_json::from_slice::<Value>(&t).ok());
+        let mounts = bj
+            .as_ref()
+            .map(crate::cmd::plugin::box_mounts)
             .unwrap_or_default();
-        let found = real_home_links(&cat!(ctx.d, "/home"), &user, mounts);
+        let plugins = bj
+            .as_ref()
+            .map(crate::cmd::plugin::linked_plugins)
+            .unwrap_or_default();
+        let found = real_home_links(&cat!(ctx.d, "/home"), &user, mounts, plugins);
         if let Some((first, to, what)) = &found.first {
             let n = found.n;
             say(cat!(
@@ -147,11 +153,16 @@ struct Found {
 /// session's live sockets or secrets, or through /proc). Within homelinks' caps; where it stopped is
 /// said. A theme's own folder as a link (.config/omarchy/themes/NAME) is up --theme-dir's: live,
 /// as asked.
-fn real_home_links(dir: &[u8], user: &[u8], mounts: Vec<(Vec<u8>, Vec<u8>)>) -> Found {
+fn real_home_links(
+    dir: &[u8],
+    user: &[u8],
+    mounts: Vec<(Vec<u8>, Vec<u8>)>,
+    plugins: Vec<(Vec<u8>, Vec<u8>)>,
+) -> Found {
     let Some(view) = crate::homelinks::View::new(dir, user) else {
         return Found::default();
     };
-    let view = view.with_mounts(mounts);
+    let view = view.with_mounts(mounts, plugins);
     let mut f = Found::default();
     let cut =
         crate::homelinks::walk_links::<()>(&view.own, b"", crate::homelinks::PATH_CAPS, |r, _| {
@@ -197,7 +208,7 @@ mod tests {
         let db = shell::bytes(&bx).to_vec();
         ln("../../../../Pictures/w.png", &cur.join("background"));
         ln("/usr/share/x", &bx.join("share"));
-        let f = real_home_links(&db, &ub, Vec::new());
+        let f = real_home_links(&db, &ub, Vec::new(), Vec::new());
         assert!(
             f.first.is_none() && f.cut.is_none(),
             "relative into the box, /usr: none"
@@ -215,16 +226,16 @@ mod tests {
             &format!("{}/dev/live", user.display()),
             &themes.join("live"),
         );
-        let f = real_home_links(&db, &ub, Vec::new());
+        let f = real_home_links(&db, &ub, Vec::new(), Vec::new());
         let (first, _, _) = f.first.unwrap();
         assert_eq!(f.n, 3, "{}", String::from_utf8_lossy(&first));
         assert!(first.starts_with(b".local/state/omarchy/current/"));
         ln(&real, &themes.join("t/backgrounds/1.png"));
-        assert_eq!(real_home_links(&db, &ub, Vec::new()).n, 4);
+        assert_eq!(real_home_links(&db, &ub, Vec::new(), Vec::new()).n, 4);
         // (a link to /, and one through it whose text stays in the box HOME)
         ln("/", &bx.join("r"));
         ln(&format!("r{}/.bashrc", user.display()), &bx.join("via"));
-        let f = real_home_links(&db, &ub, Vec::new());
+        let f = real_home_links(&db, &ub, Vec::new(), Vec::new());
         assert_eq!(f.n, 6);
         assert!(f.cut.is_none());
         // (finding 756: up's rule, so a file you can write outside your HOME and a link through
@@ -234,14 +245,14 @@ mod tests {
         ln("/dev/null", &bx.join("null"));
         ln(&format!("{}/data", d.display()), &bx.join("data"));
         assert_eq!(
-            real_home_links(&db, &ub, Vec::new()).n,
+            real_home_links(&db, &ub, Vec::new(), Vec::new()).n,
             6,
             "a device, a folder elsewhere"
         );
         ln(&format!("{}/data/f", d.display()), &bx.join("f"));
         ln("/proc/self/cwd/x", &bx.join("cwd"));
         assert_eq!(
-            real_home_links(&db, &ub, Vec::new()).n,
+            real_home_links(&db, &ub, Vec::new(), Vec::new()).n,
             8,
             "a writable file, through /proc"
         );

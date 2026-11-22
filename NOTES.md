@@ -15418,6 +15418,45 @@ from them.
     not written, well under 60 s); t_throwaway_term (a TERM while run's own down runs: run ends, its
     box gone).
 
+758. **Only a linked plugin's own link is the box's view; the guard's update hand-off reads whole
+    words; `log` drops colours; the gone line asks box.json** (2026-11-22, the review's third round).
+    **Links into a mount:** 756 kept any link in the box HOME whose target was at or under what the
+    box mounts at that same path (the repo `up` runs from, a same-path `--ro-bind`, an `--overlay`),
+    before the HOME and writable-file checks. In the box those are read-only or a throwaway overlay;
+    on the host they are the user's writable folders, so a box process that planted
+    `~/.config/app/settings.json -> REPO/src/main.rs` went unnamed by `path --home`, and an agent's
+    edit of the box's settings through it overwrote the repo file. `View::judge` now keeps only
+    finding 241's case (`plugin_own`): `.config/omarchy/plugins/ID` itself, resolving to the folder
+    the box records for that linked plugin (`SeedPlan`'s `plugins` with `linked`; for `path --home`,
+    box.json's `plugin_dirs` whose `plugin_via` is `linked`, `plugin::linked_plugins`), which the box
+    still has at that same path (`own_path_among`). Any other link into a mount, the plugin's folder
+    under another name, or the whole repo at a plugin's name, is judged as the rest. **The guard:**
+    757's walk split each caller's command line into lines and matched any line's last part, so an
+    agent command (one `bash -c` word, `eval '...'` for Claude Code) with a line ending in
+    `.../omarchy-migrate` (`grep x /usr/share/omarchy/bin/omarchy-migrate`) let a later
+    `omarchy-theme-set` through to the real one. The stand-in now reads a caller's argv[0], or
+    argv[1] when argv[0] is a shell (`bash`, `sh`, `dash`, `zsh`: how a script runs), as whole words
+    (a newline inside one made `\001` first) and hands over only when its last part is exactly
+    `omarchy-update` or `omarchy-migrate`; the name as `$0` of a `bash -c` no longer counts either.
+    **`log`'s colours:** 755's `plain_log` turned quickshell's SGR codes into `?[90m...?[32m  INFO?[0m`
+    on every `log shell` line. It drops `ESC [` digits, `;` or `:`, `m` whole first (`strip_sgr`, in
+    `cmd/log.rs`: `term::plain`'s other callers keep showing an SGR as `?`); every other control is a
+    `?` still, so OSC 52/8 and cursor moves stay off the terminal. **The gone line:** 757 called a
+    box a throwaway by its name too (`NAME-run<digits>`, `look-<digits>`), so a user's `ci-run42`
+    was told no `up` brings it back. box.json's `owner` (run's and look's boxes have one) decides
+    now; with no box.json left, such a name says "if it was a throwaway ...; else start it with:
+    omabox up NAME". **Extensions:** `extensions_held_back` ran 757's `grep -z` (a whole file as one
+    record) on every file of `extensions/` with no size cap; one over 8 MiB (`EXTENSION_FILE_MAX`) is
+    now held back unread, said "over 8 MiB, not looked into", on the desk's side and on the copy.
+    Tests: cargo `only_a_linked_plugin_is_the_boxs` (was `same_path_mounts_are_the_boxs`),
+    `a_box_log_is_capped_and_plain` (SGR dropped, `ESC[2J` a `?`), `gone_hint_by_kind` and
+    `gone_text_reads_the_owner`, `extensions_big_file_held_back`; t_unit_guard_theme_set (an agent
+    command with a line ending in `.../omarchy-migrate`, Claude Code's `eval` shape with
+    `.../omarchy-update`, the name after a comment, the name as `$0`: each exit 4, nothing reached;
+    the stand-in `omarchy-migrate`/`omarchy-update` hand-offs still pass); t_plugin_link (`path
+    --home` silent on the linked plugins; a box-planted link to a repo file and one into the
+    `--ro-bind` named); t_hostile_reads (a log line's colours dropped, `ESC[2J` shown as `?[2J`).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

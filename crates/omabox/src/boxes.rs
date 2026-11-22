@@ -183,22 +183,35 @@ pub fn unknown_text(name: &[u8]) -> Vec<u8> {
 
 /// What a call says of box NAME (dir D) that went down after need_box let it through (box_pid's
 /// None), ending with the command that fixes it (findings 740, 744, 754), as gone_hint words it from
-/// what D's box.json still holds.
+/// what D's box.json still holds: its `owner` (run's and look's boxes have one) says whether it was
+/// a throwaway; with no box.json left, nothing does (finding 758).
 pub fn gone_text(d: &[u8], name: &[u8]) -> Vec<u8> {
-    let throwaway = !meta(d, "owner").0.is_empty();
+    let (owner, read) = meta(d, "owner");
+    let known = read && std::fs::metadata(at(d, "box.json")).is_ok_and(|m| m.len() > 0);
+    let throwaway = known.then_some(!owner.is_empty());
     gone_hint(name, throwaway, &meta(d, "mode").0, &meta(d, "desktop").0)
 }
 
-/// gone_text's words. A throwaway (`run`'s `NAME-run<pid>`, box.json's `owner`, or a look's own
-/// `look-<pid>`) went with its command: no `up` of that name brings it back (round-2 review). Any
-/// other: `omabox up NAME`, with --interactive and --desktop as box.json recorded them (MODE,
-/// DESKTOP; empty when it is gone), and a word that the rest of its options are not known.
-pub fn gone_hint(name: &[u8], throwaway: bool, mode: &[u8], desktop: &[u8]) -> Vec<u8> {
-    if throwaway || is_look_name(name) || is_run_name(name) {
+/// gone_text's words. A throwaway (box.json's `owner`: `run`'s or a look's box) went with its
+/// command: no `up` of that name brings it back (round-2 review). Any other: `omabox up NAME`, with
+/// --interactive and --desktop as box.json recorded them (MODE, DESKTOP; empty when it is gone), and
+/// a word that the rest of its options are not known. THROWAWAY None (no box.json left): a name
+/// shaped like a throwaway's (`NAME-run<pid>`, `look-<pid>`) only makes it a maybe, said with the
+/// `up` too, since a user may name a box so (`ci-run42`, finding 758).
+pub fn gone_hint(name: &[u8], throwaway: Option<bool>, mode: &[u8], desktop: &[u8]) -> Vec<u8> {
+    if throwaway == Some(true) {
         return cat!(
             "box '",
             name,
             "' is not up: it was a throwaway, taken down when the command that made it ended (start a box first, omabox up, and work in it)"
+        );
+    }
+    if throwaway.is_none() && (is_look_name(name) || is_run_name(name)) {
+        return cat!(
+            "box '",
+            name,
+            "' is not up: if it was a throwaway (run's or look's), it went with the command that made it (start a box first, omabox up, and work in it); else start it with: omabox up ",
+            name
         );
     }
     let mut up = cat!("omabox up ", name);
@@ -1133,44 +1146,89 @@ mod tests {
     use super::*;
 
     /// Round-2 review: the gone line names no `up` for a throwaway (run's, look's), and keeps an
-    /// interactive or desk box's options box.json recorded.
+    /// interactive or desk box's options box.json recorded. Finding 758: box.json's `owner` decides,
+    /// not the name: a user's `ci-run42` gets its `up`; with no box.json, a throwaway's name is a maybe.
     #[test]
     fn gone_hint_by_kind() {
-        let t = |n: &str, o: bool, m: &str, dk: &str| {
+        let t = |n: &str, o: Option<bool>, m: &str, dk: &str| {
             String::from_utf8(gone_hint(n.as_bytes(), o, m.as_bytes(), dk.as_bytes())).unwrap()
         };
         let thrown = "' is not up: it was a throwaway, taken down when the command that made it ended (start a box first, omabox up, and work in it)";
         assert_eq!(
-            t("proj-run12345", false, "", ""),
+            t("proj-run12345", Some(true), "", ""),
             format!("box 'proj-run12345{thrown}")
         );
         assert_eq!(
-            t("look-777", false, "", ""),
-            format!("box 'look-777{thrown}")
-        );
-        assert_eq!(
-            t("x", true, "headless", "omarchy"),
+            t("x", Some(true), "headless", "omarchy"),
             format!("box 'x{thrown}")
         );
+        // (a user's box whose name only looks like a run's or a look's: box.json has no owner)
         assert_eq!(
-            t("bx", false, "", ""),
+            t("ci-run42", Some(false), "headless", "omarchy"),
+            "box 'ci-run42' is not up (start it with: omabox up ci-run42, and its other options as you gave them)"
+        );
+        assert_eq!(
+            t("look-777", Some(false), "", ""),
+            "box 'look-777' is not up (start it with: omabox up look-777)"
+        );
+        // (no box.json left: the name makes it a maybe, the `up` said too)
+        for n in ["proj-run12345", "look-777"] {
+            assert_eq!(
+                t(n, None, "", ""),
+                format!(
+                    "box '{n}' is not up: if it was a throwaway (run's or look's), it went with the command that made it (start a box first, omabox up, and work in it); else start it with: omabox up {n}"
+                )
+            );
+        }
+        assert_eq!(
+            t("bx", None, "", ""),
             "box 'bx' is not up (start it with: omabox up bx)"
         );
         assert_eq!(
-            t("bx", false, "headless", "omarchy"),
+            t("bx", Some(false), "headless", "omarchy"),
             "box 'bx' is not up (start it with: omabox up bx, and its other options as you gave them)"
         );
         assert_eq!(
-            t("d", false, "interactive", "desk"),
+            t("d", Some(false), "interactive", "desk"),
             "box 'd' is not up (start it with: omabox up d --interactive --desktop desk, and its other options as you gave them)"
         );
         // (not a run's: no pid after -run, or the word only)
         for n in ["-run12", "my-run", "a-run0", "a-runx1", "rerun5"] {
             assert!(
-                t(n, false, "", "").contains("start it with: omabox up"),
+                t(n, None, "", "").contains("start it with: omabox up"),
                 "{n}"
             );
         }
+    }
+
+    /// Finding 758: gone_text reads box.json's owner, whatever the name.
+    #[test]
+    fn gone_text_reads_the_owner() {
+        let d = std::env::temp_dir().join(format!("omabox-gone-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let db = d.as_os_str().as_encoded_bytes().to_vec();
+        std::fs::write(
+            d.join("box.json"),
+            br#"{"mode": "headless", "desktop": "omarchy"}"#,
+        )
+        .unwrap();
+        let s = String::from_utf8(gone_text(&db, b"ci-run42")).unwrap();
+        assert!(s.contains("start it with: omabox up ci-run42"), "{s}");
+        assert!(!s.contains("throwaway"), "{s}");
+        std::fs::write(
+            d.join("box.json"),
+            br#"{"owner": 4242, "mode": "headless"}"#,
+        )
+        .unwrap();
+        let s = String::from_utf8(gone_text(&db, b"bench")).unwrap();
+        assert!(s.contains("it was a throwaway"), "{s}");
+        std::fs::remove_file(d.join("box.json")).unwrap();
+        let s = String::from_utf8(gone_text(&db, b"ci-run42")).unwrap();
+        assert!(
+            s.contains("if it was a throwaway") && s.contains("omabox up ci-run42"),
+            "{s}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// Finding 754: a box gone after need_box, or one this namespace cannot read, said in one text
