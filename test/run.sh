@@ -18349,6 +18349,84 @@ t_record_sheet_frames() {
   check_match "...a jailed caller's, through its fds: its name said" "^0 .*contact sheet of 3 frames.*: /j/s\.png /j/s\.png$" "$rc $(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
   check_eq "...the same sheet in its file" 0 "$(magick compare -metric AE "$o-j.png" "$o-c1.png" null: 2>&1 | cut -d' ' -f1)"
 }
+# Finding 749: record's files in a folder the box can write (-o in its HOME) are made and renamed in
+# that folder held, never through a link the box plants: at the name (before the start, or after it),
+# at FILE.part, at the marks' and captions' .part names, or as the folder itself. A host file the
+# links lead to stays as it was; the record refuses, keeping the box's video.
+t_record_links() {
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "record through a box's links" "no render node here but NVIDIA's"; return; }
+  rec_tools || { skip "record through a box's links" "$REC_WHY"; return; }
+  local B=$P-rln H sec=$TMP/$P-rln-secret hd=$TMP/$P-rln-hostdir out rc
+  OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated || { no "up for record's links" "$UP_OUT"; return; }
+  # (as record says it: resolved, the box dir's home link followed)
+  H=$(realpath "$(ob path -b "$B" --home)")
+  printf 'keep\n' > "$sec"; mkdir -p "$hd"
+  intact() { check_eq "$1: the host file as it was, nothing in the host folder" "keep|" "$(cat "$sec")|$(ls -A "$hd")"; }
+  # rstop [ARGS...]: record stop, its status in rc and its words in out.
+  rstop() { rc=0; out=$(ob record -b "$B" stop "$@" 2>&1) || rc=$?; }
+  # A link at the name before the start: refused.
+  ob run -b "$B" -- ln -s "$sec" /home/sbx/a.mp4
+  rc=0; out=$(ob record -b "$B" start -o "$H/a.mp4" 2>&1) || rc=$?
+  check_match "record start -o a link the box planted: refused" "^1 .*$H/a\.mp4 is a link: omabox writes through none" "$rc $out"
+  # ...and at the marks' name beside it.
+  ob run -b "$B" -- ln -s "$sec" /home/sbx/m.vtt
+  rc=0; out=$(ob record -b "$B" start -o "$H/m.mp4" 2>&1) || rc=$?
+  check_match "...a link at its captions' name: refused" "^1 .*$H/m\.vtt is a link" "$rc $out"
+  intact "...refused at the start"
+  # Links planted at FILE.part and the marks' .part names after the start: the stop refuses, the
+  # video kept in the box.
+  if ob record -b "$B" start -o "$H/b.mp4" >/dev/null 2>&1; then
+    ob run -b "$B" -- sh -c "ln -s '$sec' /home/sbx/b.mp4.part; ln -s '$sec' /home/sbx/b.marks.tsv.part; ln -s '$sec' /home/sbx/b.vtt.part"
+    ob record -b "$B" mark one >/dev/null 2>&1; sleep 1
+    rstop
+    check_match "record stop: a link at FILE.part planted since the start: refused, the video kept" "^1 .*$H/b\.mp4\.part is a link: omabox writes through none.*out\.mp4 there is kept" "$rc $(tr '\n' ' ' <<<"$out")"
+    intact "...FILE.part"
+  else no "record start -o in the box HOME" "it failed"; fi
+  ob run -b "$B" -- rm -f /home/sbx/b.mp4.part /home/sbx/b.marks.tsv.part /home/sbx/b.vtt.part
+  ob record -b "$B" stop >/dev/null 2>&1
+  # The marks' .part names alone: the video in place, the marks refused.
+  if ob record -b "$B" start -o "$H/b.mp4" >/dev/null 2>&1; then
+    ob run -b "$B" -- sh -c "ln -sf '$sec' /home/sbx/b.marks.tsv.part; ln -sf '$sec' /home/sbx/b.vtt.part"
+    ob record -b "$B" mark one >/dev/null 2>&1; sleep 1
+    rstop
+    check_match "...links at the marks' .part names: the marks refused" "^1 .*b\.marks\.tsv\.part is a link" "$rc $(tr '\n' ' ' <<<"$out")"
+    check "...the video in place, a file of its own" test -f "$H/b.mp4" -a ! -L "$H/b.mp4" -a -s "$H/b.mp4"
+    intact "...the marks' .part names"
+  else no "record start -o in the box HOME (again)" "it failed"; fi
+  ob run -b "$B" -- rm -f /home/sbx/b.marks.tsv.part /home/sbx/b.vtt.part
+  # A link at the name after the start, and one at the sheet's .part name: the stop refuses.
+  if ob record -b "$B" start -o "$H/c.mp4" >/dev/null 2>&1; then
+    ob run -b "$B" -- ln -s "$sec" /home/sbx/c.mp4; sleep 1
+    rstop
+    check_match "record stop: a link at the name planted since the start: refused" "^1 .*$H/c\.mp4 is a link" "$rc $(tr '\n' ' ' <<<"$out")"
+    intact "...the name"
+  else no "record start -o c.mp4" "it failed"; fi
+  ob record -b "$B" stop >/dev/null 2>&1
+  if ob record -b "$B" start -o "$H/s.mp4" >/dev/null 2>&1; then
+    ob run -b "$B" -- ln -s "$sec" /home/sbx/s.sheet.png.part; sleep 1
+    rstop --sheet --frames 2
+    check_match "...a link at the sheet's .part name: the sheet refused, the video made" "^1 .*$H/s\.sheet\.png\.part is a link.* $H/s\.mp4 $" "$rc $(tr '\n' ' ' <<<"$out")"
+    intact "...the sheet's .part name"
+  else no "record start -o s.mp4" "it failed"; fi
+  # The folder swapped for a link to a host folder after the start: refused, never followed.
+  ob run -b "$B" -- mkdir -p /home/sbx/sub
+  if ob record -b "$B" start -o "$H/sub/d.mp4" >/dev/null 2>&1; then
+    ob run -b "$B" -- sh -c "mv /home/sbx/sub /home/sbx/sub-moved && ln -s '$hd' /home/sbx/sub"; sleep 1
+    rstop
+    check_match "record stop: its folder swapped for a link since the start: refused" "^1 .*cannot write $H/sub/d\.mp4: Not a directory.*out\.mp4 there is kept" "$rc $(tr '\n' ' ' <<<"$out")"
+    intact "...the folder"
+  else no "record start -o sub/d.mp4" "it failed"; fi
+  ob record -b "$B" stop >/dev/null 2>&1
+  # A take with nothing planted still works there.
+  if ob record -b "$B" start -o "$H/e.mp4" >/dev/null 2>&1; then
+    ob record -b "$B" mark one >/dev/null 2>&1; sleep 1
+    rstop
+    check_eq "...a take with nothing planted: the video, marks and captions" "0 $H/e.mp4 yes" \
+      "$rc $(tail -n 1 <<<"$out") $(test -s "$H/e.marks.tsv" -a -s "$H/e.vtt" && echo yes)"
+  else no "record start -o e.mp4" "it failed"; fi
+  ob down "$B" >/dev/null 2>&1 || true
+}
 t_record_hold() {
   local n; n=$(gpu_node other)
   [ -n "$n" ] || { skip "record --for and record hold" "no render node here but NVIDIA's"; return; }
@@ -24341,6 +24419,13 @@ HTML
   x1=$(magick "${shot%.png}-1.png" -fill black +opaque '#4fc3f7' -trim -format %X info: 2>/dev/null)
   x4=$(magick "${shot%.png}-4.png" -fill black +opaque '#4fc3f7' -trim -format %X info: 2>/dev/null)
   check "...the square moved on the held key (x ${x1:-?} to ${x4:-?})" test "${x4:-0}" -gt "$((${x1:-0} + 40))"
+  # Finding 749: a link at the sheet's name (as a box would plant one where -o is in its HOME) is
+  # never written through: no sheet, said, each shot named; the file it leads to as it was.
+  local sl=$TMP/$P-lookl.png sec=$TMP/$P-lookl-secret
+  printf 'keep\n' > "$sec"; ln -sfn "$sec" "${sl%.png}-sheet.png"
+  out=$(ob look page "$d/game.html" --net isolated --shots 2 --after 1s -o "$sl" 2>&1)
+  check_match "...a link at the sheet's name: no sheet, said" "no contact sheet \(${sl%.png}-sheet\.png is a link: omabox writes through none" "$out"
+  check_eq "...the file it leads to as it was" "keep" "$(cat "$sec")"
   # #471 (#477): the window line names the selector that picks it (Chromium's --app class is not
   # "chromium"); the broken page's box kept to try it.
   check_match "...its window, with the selector that picks it" $'\n''window: chromium "game" [0-9]+x[0-9]+ \((tiled|floating); select it with --window 0x[0-9a-f]+\)'$'\n' "$out"
@@ -24996,7 +25081,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_guard_theme_set t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch t_unit_bench_checks
   t_unit_aquamarine t_unit_aq_runpath t_unit_theme_check t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_shot_layer t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_record_links t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_shot_layer t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's

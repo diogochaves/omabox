@@ -15061,6 +15061,31 @@ from them.
     mount it, so `run -- test -e /run/dbus` pointed an agent at copying the system bus. When
     `refuse_src` refuses the path's folder the note now says only that no box may have it and why;
     under `/run/dbus` it adds that a box has a session bus of its own (`up --polkit` for polkit).
+749. **`record`'s files and look's contact sheet are written through no link** (2026-11-22, the
+    2026-11-22 review). 621 (#338) gave `shot` a held output folder but left `record` its old writes
+    as a choice of the user's path. That holds only while the box cannot choose: with `-o` in a box
+    HOME, a box process could plant a link at FILE (start resolved it with `readlink -f`, and stop
+    renamed the video over the host file it led to), at FILE.part (start and stop opened it
+    following links and truncated the host file), at the marks' and captions' `.part` names
+    (`fs::write`), at the sheet's `.part` (magick wrote `PNG:` through it), or swap FILE's folder
+    for a link between start and stop. `shots.rs`'s `OutFile` now carries every one of them: the
+    name refused as named if it is a link (or, for a PNG, `overwrite_refusal`'s rules), resolved,
+    its folder held (`OutDir`), NAME and NAME.part checked again there, NAME.part made new with
+    O_EXCL|O_NOFOLLOW (a link or FIFO planted after the check fails it, never opened), filled, and
+    renamed NAME in that folder after NAME is checked once more. A regular file at NAME is replaced
+    by the rename, never written into, so a hard link's other name keeps its bytes. `record start`
+    checks the video's, the marks' and the captions' names; `record stop` takes the path start
+    resolved as it is (`OutFile::resolved`: a folder on its way that became a link is refused, not
+    resolved again) and, refused, keeps the box's `out.mp4`. The captions are made from the TSV's
+    text in memory, not by awk reading the file back by name; the sheet's marks are read through
+    the held folder's fd (or `open_regular`), 16 MiB at most; magick writes the sheet into a folder
+    of omabox's own and the bytes are put in place. look `--shots`' sheet reads each shot as a
+    regular file into a private folder, montages `png:` names there, and puts the sheet at OUT
+    the same way. Tests: `shots.rs`'s `out_file_writes_through_no_link`, `record_marks_as_bash`
+    (links at the `.part` names), `look.rs`'s `contact_sheet_through_no_link`; t_record_links (links
+    planted by the box at the name before and after start, FILE.part, the marks' and the sheet's
+    `.part`, the folder swapped: the host file as it was, each refused); look_page_checks (a link at
+    the sheet's name: no sheet, said).
 750. **Omarchy's theme, wallpaper and font commands changed the real desktop under the guard; Codex's
     guard was less than its docs said** (2026-11-22, review). The README and docs/guard.md said
     `omarchy-theme-set` fails under the guard. Omarchy 4.5's has no `set -e` and needs no display:

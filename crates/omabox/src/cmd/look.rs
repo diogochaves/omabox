@@ -1240,26 +1240,17 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
                     || cat!(shot.clone().unwrap_or_default(), "-sheet.png"),
                     |o| suffixed(o, "sheet"),
                 );
-                let mut m = std::process::Command::new("magick");
-                m.arg("montage")
-                    .args(paths.iter().map(|p| OsStr::from_bytes(p)))
-                    .args([
-                        "-tile",
-                        &format!("{}x", a.shots.min(4)),
-                        "-geometry",
-                        "480x+4+4",
-                        "-label",
-                        "%t",
-                    ])
-                    .arg(OsStr::from_bytes(&out_s))
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
-                if m.status().is_ok_and(|st| st.success()) {
-                    sheet = Some(out_s);
-                } else {
-                    notes.push(b"no contact sheet (ImageMagick's magick montage): the shots are each named in order".to_vec());
-                    for (n, p) in paths.iter().enumerate() {
-                        notes.push(cat!(format!("shot {}: ", n + 1), p));
+                match contact_sheet(&paths, a.shots.min(4), &out_s) {
+                    Ok(p) => sheet = Some(p),
+                    Err(why) => {
+                        notes.push(cat!(
+                            "no contact sheet (",
+                            why,
+                            "): the shots are each named in order"
+                        ));
+                        for (n, p) in paths.iter().enumerate() {
+                            notes.push(cat!(format!("shot {}: ", n + 1), p));
+                        }
                     }
                 }
             } else {
@@ -1587,6 +1578,60 @@ fn plugin_id(dir: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// PATH with -SUFFIX before its extension (`/x/a.png`, `panel`: `/x/a-panel.png`).
+/// look --shots N's contact sheet of PATHS (COLS a row) at OUT (finding 749): each shot read as the
+/// regular file it is (no link followed: a shot's -o may be in a box HOME) into a folder of omabox's
+/// own, montaged there by magick as PNGs (`png:`, no coder taken from a name), and the sheet put at
+/// OUT in its folder held, made and renamed there: never through a link at OUT or OUT.part, never
+/// over a file that is not an image. OUT resolved, or the words for why there is none.
+fn contact_sheet(paths: &[Vec<u8>], cols: u32, out: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
+    use crate::shots::{OutFile, open_regular, png_arg};
+    let to = OutFile::at(out, true)?;
+    let magick = || b"ImageMagick's magick montage".to_vec();
+    let Ok((_, tmp)) = shell::mktemp_args(&[b"-d"]) else {
+        return Err(magick());
+    };
+    let r = (|| {
+        let mut args: Vec<Vec<u8>> = vec![b"montage".to_vec()];
+        for (n, p) in paths.iter().enumerate() {
+            // (each in a folder of its own, under its own name: magick's %t label is its name)
+            let d = cat!(tmp, "/", (n + 1).to_string());
+            let f = cat!(d, "/", shell::basename(p));
+            let mut src = open_regular(p).ok_or_else(|| cat!("cannot read the shot ", p))?;
+            std::fs::create_dir(shell::path(&d))
+                .and_then(|()| std::fs::File::create_new(shell::path(&f)))
+                .and_then(|mut dst| std::io::copy(&mut src, &mut dst))
+                .map_err(|_| magick())?;
+            args.push(png_arg(&f));
+        }
+        let made = cat!(tmp, "/sheet.png");
+        args.extend(
+            [
+                "-tile".to_string(),
+                format!("{cols}x"),
+                "-geometry".into(),
+                "480x+4+4".into(),
+                "-label".into(),
+                "%t".into(),
+            ]
+            .map(String::into_bytes),
+        );
+        args.push(png_arg(&made));
+        let mut m = std::process::Command::new("magick");
+        m.args(args.iter().map(|a| OsStr::from_bytes(a)))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if !m.status().is_ok_and(|st| st.success()) {
+            return Err(magick());
+        }
+        let mut f = open_regular(&made).ok_or_else(magick)?;
+        to.put(&mut f)?;
+        Ok(to.path())
+    })();
+    let _ = std::fs::remove_dir_all(shell::path(&tmp));
+    r
+}
+
 fn suffixed(path: &[u8], suffix: &str) -> Vec<u8> {
     let slash = path.iter().rposition(|&c| c == b'/').map_or(0, |i| i + 1);
     match path[slash..].iter().rposition(|&c| c == b'.') {
@@ -2188,6 +2233,48 @@ pub fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Finding 749: look --shots' sheet never written through a link at its name, a shot read
+    /// through none (a box's -o), a text file at the name kept; else made, a PNG.
+    #[test]
+    #[ignore = "runs magick: run by test/run.sh (cargo test -- --ignored)"]
+    fn contact_sheet_through_no_link() {
+        let t = std::env::temp_dir().join(format!("omabox-lsheet-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        std::fs::create_dir_all(&t).unwrap();
+        let p = |n: &str| shell::bytes(&t.join(n)).to_vec();
+        for n in ["a.png", "b.png"] {
+            let ok = std::process::Command::new("magick")
+                .args(["-size", "8x8", "xc:red"])
+                .arg(format!("png:{}", t.join(n).display()))
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "magick made {n}");
+        }
+        let secret = t.join("secret");
+        std::fs::write(&secret, "keep").unwrap();
+        let shots = vec![p("a.png"), p("b.png")];
+        std::os::unix::fs::symlink(&secret, t.join("s1.png")).unwrap();
+        let e = contact_sheet(&shots, 2, &p("s1.png")).unwrap_err();
+        assert!(e.ends_with(
+            b" is a link: omabox writes through none (name the file itself, or a new path)"
+        ));
+        std::os::unix::fs::symlink(&secret, t.join("s2.png.part")).unwrap();
+        assert!(contact_sheet(&shots, 2, &p("s2.png")).is_err());
+        std::fs::write(t.join("s3.png"), "text").unwrap();
+        assert!(contact_sheet(&shots, 2, &p("s3.png")).is_err());
+        std::os::unix::fs::symlink(&secret, t.join("c.png")).unwrap();
+        let e = contact_sheet(&[p("a.png"), p("c.png")], 2, &p("s4.png")).unwrap_err();
+        assert!(
+            e.starts_with(b"cannot read the shot "),
+            "a shot that is a link"
+        );
+        assert_eq!(std::fs::read_to_string(&secret).unwrap(), "keep");
+        assert_eq!(std::fs::read_to_string(t.join("s3.png")).unwrap(), "text");
+        assert_eq!(contact_sheet(&shots, 2, &p("s5.png")), Ok(p("s5.png")));
+        assert!(crate::shots::png_size(&p("s5.png")).is_some());
+        let _ = std::fs::remove_dir_all(&t);
+    }
 
     /// #478: a folder whose subfolder is the plugin or theme: the look again with it.
     #[test]

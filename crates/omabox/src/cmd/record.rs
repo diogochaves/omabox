@@ -1818,26 +1818,18 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
             let t = shell::date("%H%M%S");
             file = cat!(tmp, "/omabox-", ctx.name, "-", t, ".mp4");
         }
-        let dir = crate::shots::dirname(&file);
-        if !crate::shots::mkdir_p(&dir) {
-            return Err(ctx.die(cat!("record: cannot make the directory ", dir)));
+        // FILE, FILE.part and the marks' and captions' names beside it: never a link (a box can
+        // plant one where `-o` is in its HOME), checked here and again at `record stop`, which
+        // writes them in their folder held (finding 749).
+        let out =
+            crate::shots::OutFile::at(&file, false).map_err(|m| ctx.die(cat!("record: ", m)))?;
+        file = out.path();
+        let base = out.name.strip_suffix(b".mp4").unwrap_or(&out.name).to_vec();
+        for n in [cat!(base, ".marks.tsv"), cat!(base, ".vtt")] {
+            if let Err(m) = out.beside(&n, false).check() {
+                return Err(ctx.die(cat!("record: ", m)));
+            }
         }
-        file = crate::shots::real_or_end(ctx, &file)?;
-        let part = cat!(file, ".part");
-        if let Err(e) = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(shell::path(&part))
-        {
-            return Err(ctx.die(cat!(
-                "record: cannot write ",
-                file,
-                ": ",
-                crate::shots::why(&e)
-            )));
-        }
-        rm(&shell::path(&part));
     }
     // --no-pointer (#228): hidden before the first frame; `record stop` shows it again (and this
     // omabox, should it fail before the recording runs).

@@ -114,19 +114,13 @@ pub fn overwrite_refusal(p: &[u8]) -> Option<Vec<u8>> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
     let path = shell::path(p);
+    if let Some(m) = link_refusal(p) {
+        return Some(m);
+    }
     // (a path that cannot be looked at cannot be written either: its own words come where it is)
     let Ok(m) = std::fs::symlink_metadata(&path) else {
         return None;
     };
-    if m.file_type().is_symlink() {
-        return Some(cat!(
-            p,
-            " is a link: omabox writes through none (name the file itself, or a new path)"
-        ));
-    }
-    if !m.is_file() {
-        return Some(cat!(p, " is there and is not a file (name a new path)"));
-    }
     if m.len() == 0 {
         return None;
     }
@@ -144,6 +138,21 @@ pub fn overwrite_refusal(p: &[u8]) -> Option<Vec<u8>> {
             " is there and is not a PNG: omabox writes over no file but an image (name a new path, or remove it first)"
         )
     })
+}
+
+/// What omabox replaces at a path its caller named when the file is not an image (a recording, its
+/// marks and captions: finding 749): nothing there, or a regular file, never a link or anything
+/// else. A regular file is replaced by a rename in its folder (OutFile), never written into, so a
+/// hard link to another file leaves that file as it was.
+pub fn link_refusal(p: &[u8]) -> Option<Vec<u8>> {
+    let m = std::fs::symlink_metadata(shell::path(p)).ok()?;
+    if m.file_type().is_symlink() {
+        return Some(cat!(
+            p,
+            " is a link: omabox writes through none (name the file itself, or a new path)"
+        ));
+    }
+    (!m.is_file()).then(|| cat!(p, " is there and is not a file (name a new path)"))
 }
 
 /// A PNG named to magick: `png:PATH`, so no `coder:` prefix in PATH (`msl:`, `ephemeral:`,
@@ -228,6 +237,33 @@ impl OutDir {
         self.0.as_raw_fd()
     }
 
+    /// NAME in the folder made new for writing (O_EXCL): never anything already there, a link or
+    /// a FIFO planted after a check included.
+    pub fn create_new(&self, name: &[u8]) -> std::io::Result<std::fs::File> {
+        use std::os::fd::FromRawFd;
+        let c = c_name(name)?;
+        let fl = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: the folder's fd is open, c a valid C string; openat only adds a descriptor.
+        let fd = rc(unsafe { libc::openat(self.fd(), c.as_ptr(), fl, 0o666 as libc::c_uint) })?;
+        // SAFETY: fd was just opened and is ours alone.
+        Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+    }
+
+    /// NAME in the folder open for reading as the regular file it is: never through a link, never
+    /// a FIFO or a device (None for those, or for nothing there).
+    pub fn open_regular(&self, name: &[u8]) -> Option<std::fs::File> {
+        use std::os::fd::FromRawFd;
+        let c = c_name(name).ok()?;
+        let fl =
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
+        // SAFETY: the folder's fd is open, c a valid C string; openat only adds a descriptor.
+        let fd = rc(unsafe { libc::openat(self.fd(), c.as_ptr(), fl) }).ok()?;
+        // SAFETY: fd was just opened and is ours alone.
+        let f = unsafe { std::fs::File::from_raw_fd(fd) };
+        f.metadata().ok().filter(|m| m.is_file())?;
+        Some(f)
+    }
+
     /// NAME in the folder made or truncated for writing, never through a link there.
     pub fn create(&self, name: &[u8]) -> std::io::Result<std::fs::File> {
         use std::os::fd::FromRawFd;
@@ -256,6 +292,11 @@ impl OutDir {
 
     /// overwrite_refusal of NAME in the folder (SHOWN: its path, as the refusal says it).
     pub fn refusal(&self, name: &[u8], shown: &[u8]) -> Option<Vec<u8>> {
+        self.refusal_as(name, shown, true)
+    }
+
+    /// link_refusal of NAME in the folder, or with PNG overwrite_refusal's.
+    pub fn refusal_as(&self, name: &[u8], shown: &[u8], png: bool) -> Option<Vec<u8>> {
         use std::os::fd::FromRawFd;
         let Ok(c) = c_name(name) else {
             return Some(cat!(shown, " is no file name (name a new path)"));
@@ -277,7 +318,7 @@ impl OutDir {
             libc::S_IFREG => {}
             _ => return Some(cat!(shown, " is there and is not a file (name a new path)")),
         }
-        if st.st_size == 0 {
+        if !png || st.st_size == 0 {
             return None;
         }
         let fl = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
@@ -324,6 +365,180 @@ pub fn shot_path(ctx: &Ctx, out: &[u8]) -> Res<(Vec<u8>, Vec<u8>, OutDir)> {
     }
     let _ = held.remove(&fb);
     Ok((out, file, held))
+}
+
+/// A file omabox puts at a path its caller named, in the folder it is in held (finding 749: a
+/// recording, its marks, captions and contact sheet; look's contact sheet): made new as NAME.part
+/// (O_EXCL, so nothing planted there is written through), filled, and renamed NAME in that folder,
+/// never through a link at NAME or on its way. PNG: written over only as overwrite_refusal lets it
+/// be, else only as link_refusal does.
+#[derive(Clone)]
+pub struct OutFile {
+    pub dir: OutDir,
+    /// Its folder (resolved, as held) and its name there.
+    pub folder: Vec<u8>,
+    pub name: Vec<u8>,
+    png: bool,
+}
+
+impl OutFile {
+    /// OUT as the caller named it: refused if it is a link (or as PNG says), its folder made, OUT
+    /// resolved, the folder held, NAME and NAME.part checked again in it, and NAME.part made once
+    /// and removed (a path that cannot be written stops here). Err: the words for why.
+    pub fn at(out: &[u8], png: bool) -> Result<OutFile, Vec<u8>> {
+        let named = if png {
+            overwrite_refusal(out)
+        } else {
+            link_refusal(out)
+        };
+        if let Some(m) = named {
+            return Err(m);
+        }
+        let dir = dirname(out);
+        if !mkdir_p(&dir) {
+            return Err(cat!("cannot make the directory ", dir));
+        }
+        let Some(real) = crate::repo::readlink_f(out) else {
+            return Err(cat!(
+                "cannot resolve ",
+                out,
+                " (a folder on its way is missing or cannot be looked into, or a link loops)"
+            ));
+        };
+        let folder = dirname(&real);
+        let held = OutDir::open(&folder).map_err(|e| cant_write(&real, &e))?;
+        let f = OutFile {
+            dir: held,
+            folder,
+            name: shell::basename(&real),
+            png,
+        };
+        f.check()?;
+        let part = f.part_name();
+        f.clear_part()?;
+        f.dir
+            .create_new(&part)
+            .map_err(|e| cant_write(&f.path(), &e))?;
+        let _ = f.dir.remove(&part);
+        Ok(f)
+    }
+
+    /// PATH as `at` resolved it before (record start's, for record stop): its folder held with no
+    /// link on its way (a folder a box swapped for a link since is refused, never followed), NAME
+    /// and NAME.part checked.
+    pub fn resolved(path: &[u8], png: bool) -> Result<OutFile, Vec<u8>> {
+        let f = OutFile::in_dir(&dirname(path), &shell::basename(path), png)?;
+        f.check()?;
+        Ok(f)
+    }
+
+    /// The folder DIR (absolute, resolved) held, with NAME in it.
+    pub fn in_dir(dir: &[u8], name: &[u8], png: bool) -> Result<OutFile, Vec<u8>> {
+        let held = OutDir::open(dir).map_err(|e| cant_write(&cat!(dir, "/", name), &e))?;
+        Ok(OutFile {
+            dir: held,
+            folder: dir.to_vec(),
+            name: name.to_vec(),
+            png,
+        })
+    }
+
+    /// Another NAME in the same folder held.
+    pub fn beside(&self, name: &[u8], png: bool) -> OutFile {
+        OutFile {
+            dir: self.dir.clone(),
+            folder: self.folder.clone(),
+            name: name.to_vec(),
+            png,
+        }
+    }
+
+    /// Its path, as said (the folder as it was held).
+    pub fn path(&self) -> Vec<u8> {
+        if self.folder == b"/" {
+            cat!("/", self.name)
+        } else {
+            cat!(self.folder, "/", self.name)
+        }
+    }
+
+    pub fn part_name(&self) -> Vec<u8> {
+        cat!(self.name, ".part")
+    }
+
+    /// NAME and NAME.part as the rules let them be written over; Err: the refusal.
+    pub fn check(&self) -> Result<(), Vec<u8>> {
+        let (path, part) = (self.path(), self.part_name());
+        match self
+            .dir
+            .refusal_as(&self.name, &path, self.png)
+            .or_else(|| self.dir.refusal_as(&part, &cat!(path, ".part"), self.png))
+        {
+            Some(m) => Err(m),
+            None => Ok(()),
+        }
+    }
+
+    /// A NAME.part left by an earlier run, gone (a regular file only: check says so first).
+    fn clear_part(&self) -> Result<(), Vec<u8>> {
+        let part = self.part_name();
+        if let Some(m) = self
+            .dir
+            .refusal_as(&part, &cat!(self.path(), ".part"), self.png)
+        {
+            return Err(m);
+        }
+        let _ = self.dir.remove(&part);
+        Ok(())
+    }
+
+    /// NAME.part made new for writing (never anything already there).
+    pub fn create_part(&self) -> Result<std::fs::File, Vec<u8>> {
+        self.clear_part()?;
+        self.dir
+            .create_new(&self.part_name())
+            .map_err(|e| cant_write(&cat!(self.path(), ".part"), &e))
+    }
+
+    /// NAME.part removed.
+    pub fn remove_part(&self) {
+        let _ = self.dir.remove(&self.part_name());
+    }
+
+    /// NAME.part renamed NAME, NAME checked once more just before (a link planted at it since is
+    /// refused, not replaced); NAME.part gone when it cannot be.
+    pub fn commit(&self) -> Result<(), Vec<u8>> {
+        let r = match self.dir.refusal_as(&self.name, &self.path(), self.png) {
+            Some(m) => Err(m),
+            None => self
+                .dir
+                .rename(&self.part_name(), &self.name)
+                .map_err(|e| cant_write(&self.path(), &e)),
+        };
+        if r.is_err() {
+            self.remove_part();
+        }
+        r
+    }
+
+    /// FROM's bytes put at NAME: NAME.part made, filled, renamed.
+    pub fn put(&self, from: &mut dyn std::io::Read) -> Result<(), Vec<u8>> {
+        self.check()?;
+        let mut f = self.create_part()?;
+        if let Err(e) = std::io::copy(from, &mut f).and_then(|_| f.flush()) {
+            self.remove_part();
+            return Err(cant_write(&self.path(), &e));
+        }
+        drop(f);
+        self.commit()
+    }
+
+    /// NAME removed (an earlier take's file): only a regular file, never what a link leads to.
+    pub fn remove(&self) {
+        if self.dir.refusal_as(&self.name, b"", false).is_none() {
+            let _ = self.dir.remove(&self.name);
+        }
+    }
 }
 
 /// stat -f's names of the filesystems fd_file takes (ext4 says ext2/ext3). No network filesystem: a
@@ -1012,6 +1227,85 @@ mod tests {
             held.create(b"ln").is_err(),
             "never through a link at the name"
         );
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    /// Finding 749: a recording's files (and a contact sheet) put at a caller's path through its
+    /// folder held, never through a link at the name or NAME.part, never into a FIFO there, a link
+    /// planted after the checks refused at the rename, a regular file replaced (its inode, a hard
+    /// link's other name, left as it was), a folder swapped for a link not followed.
+    #[test]
+    fn out_file_writes_through_no_link() {
+        use std::os::unix::fs::symlink;
+        let t = std::env::temp_dir().join(format!("omabox-outfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let (home, host) = (t.join("home"), t.join("host"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&host).unwrap();
+        let secret = host.join("bashrc");
+        std::fs::write(&secret, "keep").unwrap();
+        let p = |n: &str| shell::bytes(&home.join(n)).to_vec();
+        let intact = || std::fs::read_to_string(&secret).unwrap() == "keep";
+        // A link at the name, at NAME.part: refused, as named and in the folder.
+        symlink(&secret, home.join("a.mp4")).unwrap();
+        let e = OutFile::at(&p("a.mp4"), false).err().unwrap();
+        assert!(e.ends_with(
+            b" is a link: omabox writes through none (name the file itself, or a new path)"
+        ));
+        symlink(&secret, home.join("b.mp4.part")).unwrap();
+        assert!(OutFile::at(&p("b.mp4"), false).is_err());
+        assert!(
+            OutFile::at(&p("b.png"), true).is_ok(),
+            "another name is fine"
+        );
+        // A FIFO at NAME.part: refused, not opened (no hang).
+        let fifo = std::ffi::CString::new(p("c.mp4.part")).unwrap();
+        // SAFETY: a valid C string.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert!(OutFile::at(&p("c.mp4"), false).is_err());
+        // Made, then a link planted at the name and at NAME.part before the write: the part made
+        // new is refused (O_EXCL), the rename refused.
+        let f = OutFile::at(&p("d.mp4"), false).unwrap();
+        symlink(&secret, home.join("d.mp4.part")).unwrap();
+        assert!(f.create_part().is_err());
+        std::fs::remove_file(home.join("d.mp4.part")).unwrap();
+        let mut part = f.create_part().unwrap();
+        part.write_all(b"video").unwrap();
+        symlink(&secret, home.join("d.mp4")).unwrap();
+        assert!(f.commit().is_err());
+        assert!(!home.join("d.mp4.part").exists(), "the part gone");
+        assert!(intact());
+        // A regular file at the name (a hard link to another file): replaced by the rename, the
+        // other name's bytes as they were.
+        let other = host.join("other");
+        std::fs::write(&other, "other").unwrap();
+        std::fs::hard_link(&other, home.join("e.mp4")).unwrap();
+        let f = OutFile::at(&p("e.mp4"), false).unwrap();
+        f.put(&mut b"video".as_slice()).unwrap();
+        assert_eq!(std::fs::read(home.join("e.mp4")).unwrap(), b"video");
+        assert_eq!(std::fs::read(&other).unwrap(), b"other");
+        // A PNG's: a text file at the name refused, an image replaced.
+        std::fs::write(home.join("s.png"), "text").unwrap();
+        assert!(OutFile::at(&p("s.png"), true).is_err());
+        std::fs::write(home.join("s.png"), PNG_MAGIC).unwrap();
+        assert!(OutFile::at(&p("s.png"), true).is_ok());
+        // The folder swapped for a link after `at`: the write lands in the folder held.
+        let sub = home.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let f = OutFile::at(&p("sub/v.mp4"), false).unwrap();
+        std::fs::rename(&sub, home.join("sub-moved")).unwrap();
+        symlink(&host, &sub).unwrap();
+        f.put(&mut b"video".as_slice()).unwrap();
+        assert!(home.join("sub-moved/v.mp4").exists() && !host.join("v.mp4").exists());
+        // ...and taken again by its resolved path (record stop's), refused, not followed.
+        assert!(OutFile::resolved(&p("sub/v.mp4"), false).is_err());
+        assert!(OutFile::resolved(&p("e.mp4"), false).is_ok());
+        // An earlier take's file removed, a link at its name left (never what it leads to).
+        symlink(&secret, home.join("old.vtt")).unwrap();
+        OutFile::in_dir(shell::bytes(&home), b"old.vtt", false)
+            .unwrap()
+            .remove();
+        assert!(intact());
         let _ = std::fs::remove_dir_all(&t);
     }
 

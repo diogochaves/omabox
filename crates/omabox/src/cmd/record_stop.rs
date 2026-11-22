@@ -330,7 +330,7 @@ fn size_of(p: &std::path::Path) -> Option<i64> {
 /// stop there as it did before finding 432; one trap is enough (finding 452).
 struct Tmps {
     v: Arc<Mutex<Vec<Vec<u8>>>>,
-    part: Arc<Mutex<Vec<u8>>>,
+    part: Arc<Mutex<Option<crate::shots::OutFile>>>,
     trap: Option<crate::trap::Trap>,
 }
 
@@ -338,7 +338,7 @@ impl Tmps {
     fn new() -> Tmps {
         Tmps {
             v: Arc::new(Mutex::new(Vec::new())),
-            part: Arc::new(Mutex::new(Vec::new())),
+            part: Arc::new(Mutex::new(None)),
             trap: None,
         }
     }
@@ -353,9 +353,9 @@ impl Tmps {
                     rm(&p);
                 }
             }
-            let part = p.lock().map(|x| x.clone()).unwrap_or_default();
-            if !part.is_empty() {
-                rm(&shell::path(&part));
+            // (in its folder held: never by a name a box can lead elsewhere)
+            if let Some(part) = p.lock().ok().and_then(|x| x.clone()) {
+                part.remove_part();
             }
         }
     }
@@ -378,9 +378,9 @@ impl Tmps {
         self.arm();
     }
 
-    fn set_part(&mut self, p: &[u8]) {
+    fn set_part(&mut self, p: Option<&crate::shots::OutFile>) {
         if let Ok(mut x) = self.part.lock() {
-            *x = p.to_vec();
+            *x = p.cloned();
         }
         self.arm();
     }
@@ -421,7 +421,8 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     }
     // A jailed agent's recording stopped from outside the jail: a file in omabox's records folder
     // (in its data dir: never among the box HOMEs, whose sweep took it, #433).
-    if so.tofd.is_empty() && ctx.at("record.as").is_file() {
+    let in_records = so.tofd.is_empty() && ctx.at("record.as").is_file();
+    if in_records {
         let asname = rec.file.clone();
         let dir = crate::paths::records();
         if !crate::shots::mkdir_p(&dir) {
@@ -792,6 +793,9 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     let base = rec.file.strip_suffix(b".mp4").unwrap_or(&rec.file).to_vec();
     let max = rec_max();
     let outmp4 = format!("{}/out.mp4", rec_dir(&ctx.d)).into_bytes();
+    // (the video's file in its folder held, when it is written at a path: its marks, captions and
+    // sheet go beside it there)
+    let mut out_file: Option<crate::shots::OutFile> = None;
     if !so.tofd.is_empty() {
         // Streamed into the caller's file, as the bytes of the box's `cat`.
         let fd = num(&so.tofd) as i32;
@@ -813,20 +817,43 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             )));
         }
     } else {
-        let part = cat!(rec.file, ".part");
-        tmps.set_part(&part);
-        let ok = match std::fs::File::create(shell::path(&part)) {
+        // FILE's folder held, FILE and FILE.part checked again (a box may have planted a link at
+        // either since the start), FILE.part made new there and renamed FILE (finding 749).
+        let kept = || {
+            cat!(
+                " (box '",
+                ctx.name,
+                "''s ",
+                &rec_dir(&ctx.d),
+                "/out.mp4 there is kept)"
+            )
+        };
+        // (a path record start resolved: taken as it is, no link on its way; omabox's own records
+        // folder, for a jailed agent's take, resolved here)
+        let vid = if in_records {
+            crate::shots::OutFile::at(&rec.file, false)
+        } else {
+            crate::shots::OutFile::resolved(&rec.file, false)
+        };
+        let vid = match vid {
+            Ok(v) => v,
+            Err(m) => return Err(ctx.die(cat!("record: ", m, kept()))),
+        };
+        tmps.set_part(Some(&vid));
+        let ok = match vid.create_part() {
             Ok(f) => {
                 let got = box_copy(ctx, &outmp4, max, &f);
-                got.is_some_and(|s| size_of(&shell::path(&part)) == Some(s))
+                got.is_some_and(|s| {
+                    f.metadata().ok().and_then(|m| i64::try_from(m.len()).ok()) == Some(s)
+                })
             }
-            Err(e) => {
-                say(cat!("record: ", crate::shots::cant_write(&part, &e)));
+            Err(m) => {
+                say(cat!("record: ", m));
                 false
             }
         };
         if !ok {
-            rm(&shell::path(&part));
+            vid.remove_part();
             return Err(ctx.die(cat!(
                 "record: could not copy the video out of box '",
                 ctx.name,
@@ -835,12 +862,14 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 "/out.mp4 there is kept)"
             )));
         }
-        // (mv's failure said, 1, the .part gone with rec_traps: bash's set -e ended it unsaid but
-        // for mv's own words, finding 442)
-        if !crate::shots::mv_f(&part, &rec.file) {
+        // (the .part gone with it when it cannot: finding 442)
+        if let Err(m) = vid.commit() {
+            say(cat!("record: ", m));
             return Err(ctx.die(cat!("record: could not put the video at ", rec.file)));
         }
-        tmps.set_part(b"");
+        tmps.set_part(None);
+        rec.file = vid.path();
+        out_file = Some(vid);
     }
     if !so.tofd.is_empty() {
         // The marks and captions made in a folder of the box dir's own, then copied into the
@@ -851,16 +880,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             Some(t)
         })
         .ok_or_else(|| ctx.die(cat!("record: cannot write in ", ctx.d)))?;
-        record_marks(
-            ctx,
-            &marks,
-            &first,
-            &durb,
-            &cat!(tmpd, "/v"),
-            &cuts,
-            &base,
-            &fps,
-        )?;
+        let mt = crate::shots::OutFile::in_dir(&tmpd, b"v.marks.tsv", false)
+            .map_err(|m| ctx.die(cat!("record: ", m)))?;
+        let mv = mt.beside(b"v.vtt", false);
+        record_marks(ctx, &marks, &first, &durb, (&mt, &mv), &cuts, &base, &fps)?;
         let tsv = cat!(tmpd, "/v.marks.tsv");
         if shell::path(&tsv).is_file() {
             // (`cat -- FILE >&FD`: a foreground child, as bash's)
@@ -880,26 +903,51 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             }
         }
         let _ = std::fs::remove_dir_all(shell::path(&tmpd));
-    } else {
-        record_marks(ctx, &marks, &first, &durb, &base, &cuts, &base, &fps)?;
+    } else if let Some(v) = &out_file {
+        let bn = v.name.strip_suffix(b".mp4").unwrap_or(&v.name).to_vec();
+        let (mt, mv) = (
+            v.beside(&cat!(bn, ".marks.tsv"), false),
+            v.beside(&cat!(bn, ".vtt"), false),
+        );
+        record_marks(ctx, &marks, &first, &durb, (&mt, &mv), &cuts, &base, &fps)?;
     }
     let mut sp = Vec::new();
     if so.sheet {
         // (`sp=$(record_sheet ...) || sp=""`: a refusal in it ends only the substitution)
-        sp = record_sheet(
-            ctx,
-            Src::Box(&outmp4),
-            &cat!(base, ".marks.tsv"),
-            &cat!(base, ".sheet.png"),
-            &so.frames,
-            so.every,
-            &so.fit,
-            &so.more,
-            b"",
-        )
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+        // (beside the video in its folder held; the marks read there as the regular file they are)
+        let (sheet, tsv) = match &out_file {
+            Some(v) => {
+                let bn = v.name.strip_suffix(b".mp4").unwrap_or(&v.name).to_vec();
+                (
+                    Ok(v.beside(&cat!(bn, ".sheet.png"), true)),
+                    v.dir.open_regular(&cat!(bn, ".marks.tsv")),
+                )
+            }
+            None => (
+                crate::shots::OutFile::at(&cat!(base, ".sheet.png"), true),
+                crate::shots::open_regular(&cat!(base, ".marks.tsv")),
+            ),
+        };
+        sp = match sheet {
+            Ok(sheet) => record_sheet(
+                ctx,
+                Src::Box(&outmp4),
+                tsv,
+                &sheet,
+                &so.frames,
+                so.every,
+                &so.fit,
+                &so.more,
+                b"",
+            )
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+            Err(m) => {
+                say(cat!("record: the contact sheet: ", m));
+                Vec::new()
+            }
+        };
     }
     let mut rmd = w(&[
         format!("{}/raw.mkv", rec_dir(&ctx.d)),
@@ -1342,23 +1390,24 @@ fn sort(args: &[&str], input: &[u8]) -> Vec<u8> {
     jq::tool("sort", args, Some(input), jq::Err::Inherit).out
 }
 
-/// record_marks MARKS FIRST_US DURATION_MS BASE CUTS SHOWN: the marks in the video's clock as
-/// BASE.marks.tsv and BASE.vtt; no marks: no files, an earlier take's gone.
+/// record_marks MARKS FIRST_US DURATION_MS (TSV, VTT) CUTS SHOWN: the marks in the video's clock as
+/// TSV (BASE.marks.tsv) and VTT (BASE.vtt), each made and renamed in its folder held, never through
+/// a link (finding 749); no marks: no files, an earlier take's gone.
 #[allow(clippy::too_many_arguments)]
 fn record_marks(
     ctx: &Ctx,
     marks: &[u8],
     first: &[u8],
     dur: &[u8],
-    base: &[u8],
+    (tsvf, vttf): (&crate::shots::OutFile, &crate::shots::OutFile),
     cuts: &[u8],
     shown: &[u8],
     fps: &[u8],
 ) -> Res<()> {
-    let (tsv, vtt) = (cat!(base, ".marks.tsv"), cat!(base, ".vtt"));
+    let (tsv, vtt) = (tsvf.path(), vttf.path());
     if marks.is_empty() {
-        rm(&shell::path(&tsv));
-        rm(&shell::path(&vtt));
+        tsvf.remove();
+        vttf.remove();
         return Ok(());
     }
     let dur = if dur.is_empty() {
@@ -1388,16 +1437,14 @@ fn record_marks(
         Some(&sorted),
         jq::Err::Inherit,
     );
-    let tpart = cat!(tsv, ".part");
-    let wrote = std::fs::write(shell::path(&tpart), cat!("ms\ttime\ttext\n", r.out));
-    if wrote.is_err() || !r.ok() {
-        if let Err(e) = wrote {
-            say(cat!("record: ", crate::shots::cant_write(&tpart, &e)));
-        }
-        rm(&shell::path(&tpart));
+    // (the TSV's text kept here: the captions are made from it, never from the file read back by
+    // its name, which a box could have swapped since)
+    let tsv_text = cat!("ms\ttime\ttext\n", r.out);
+    if !r.ok() {
         return Err(ctx.die(cat!("record: cannot write ", tsv)));
     }
-    if !crate::shots::mv_f(&tpart, &tsv) {
+    if let Err(m) = tsvf.put(&mut tsv_text.as_slice()) {
+        say(cat!("record: ", m));
         return Err(ctx.die(cat!("record: cannot write ", tsv)));
     }
     let v = jq::tool(
@@ -1408,27 +1455,18 @@ fn record_marks(
             b"-v".to_vec(),
             cat!("dur=", dur),
             P::VTT_AWK.as_bytes().to_vec(),
-            tsv.clone(),
         ],
-        None,
+        Some(&tsv_text),
         jq::Err::Inherit,
     );
-    let vpart = cat!(vtt, ".part");
-    let wrote = std::fs::write(shell::path(&vpart), &v.out);
-    if wrote.is_err() || !v.ok() {
-        if let Err(e) = wrote {
-            say(cat!("record: ", crate::shots::cant_write(&vpart, &e)));
-        }
-        rm(&shell::path(&vpart));
+    if !v.ok() {
         return Err(ctx.die(cat!("record: cannot write ", vtt)));
     }
-    if !crate::shots::mv_f(&vpart, &vtt) {
+    if let Err(m) = vttf.put(&mut v.out.as_slice()) {
+        say(cat!("record: ", m));
         return Err(ctx.die(cat!("record: cannot write ", vtt)));
     }
-    let n = std::fs::read(shell::path(&tsv))
-        .map(|d| d.iter().filter(|&&c| c == b'\n').count())
-        .unwrap_or(0) as i64
-        - 1;
+    let n = tsv_text.iter().filter(|&&c| c == b'\n').count() as i64 - 1;
     say(cat!(
         "record: ",
         n.to_string(),
@@ -1971,7 +2009,7 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
     let base = so.video.strip_suffix(b".mp4").unwrap_or(&so.video).to_vec();
     let bv = format!("{}/sheet-{}.mp4", rec_dir(&ctx.d), std::process::id()).into_bytes();
     let max = rec_max();
-    let (tsv, outp, tmpd);
+    let (tsv, outp, tmpd, sheet);
     let mut size: i64;
     if !so.fromfd.is_empty() {
         size = fd_size(&so.fromfd).unwrap_or(-1);
@@ -1993,6 +2031,8 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
         .ok_or_else(|| ctx.die(cat!("record sheet: cannot write in ", ctx.d)))?;
         tsv = cat!(tmpd, "/v.marks.tsv");
         outp = cat!(tmpd, "/v.sheet.png");
+        sheet = crate::shots::OutFile::in_dir(&tmpd, b"v.sheet.png", true)
+            .map_err(|m| ctx.die(cat!("record sheet: ", m)))?;
         // (In 10 s: a file the caller passed is not one to wait on.)
         if !so.mfromfd.is_empty() {
             let ok = std::fs::File::create(shell::path(&tsv))
@@ -2030,7 +2070,7 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
         } else {
             so.out.clone()
         };
-        sheet_out_ok(ctx, &outp)?;
+        sheet = sheet_out(ctx, &outp)?;
         tsv = cat!(base, ".marks.tsv");
         let f = std::fs::File::open(shell::path(&so.video));
         let ok = match f {
@@ -2065,8 +2105,8 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
     let sp = record_sheet(
         ctx,
         Src::Box(&bv),
-        &tsv,
-        &outp,
+        crate::shots::open_regular(&tsv),
+        &sheet,
         &so.frames,
         so.every,
         &so.fit,
@@ -2101,14 +2141,10 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
 /// --from-fd); the frames, and a jailed caller's marks and sheet, in a folder of omabox's cache
 /// (on disk, not /tmp's memory), gone however it ends.
 /// A sheet's OUT (and OUT.part) written over only as shot's are (#338's review): nothing there, or
-/// an image, never a link; refused before any video is read.
-fn sheet_out_ok(ctx: &Ctx, outp: &[u8]) -> Res<()> {
-    match crate::shots::overwrite_refusal(outp)
-        .or_else(|| crate::shots::overwrite_refusal(&cat!(outp, ".part")))
-    {
-        Some(m) => Err(ctx.die(cat!("record sheet: ", m))),
-        None => Ok(()),
-    }
+/// an image, never a link; refused before any video is read. Its folder held, where the sheet is
+/// made and renamed (finding 749).
+fn sheet_out(ctx: &Ctx, outp: &[u8]) -> Res<crate::shots::OutFile> {
+    crate::shots::OutFile::at(outp, true).map_err(|m| ctx.die(cat!("record sheet: ", m)))
 }
 
 pub fn sheet_file_host(ctx: &mut Ctx, so: &SheetOpts) -> Res<()> {
@@ -2150,7 +2186,7 @@ pub fn sheet_file_host(ctx: &mut Ctx, so: &SheetOpts) -> Res<()> {
 }
 
 fn sheet_host_in(ctx: &mut Ctx, so: &SheetOpts, tmpd: &[u8]) -> Res<()> {
-    let (fd, size, tsv, outp) = if so.fromfd.is_empty() {
+    let (fd, size, tsv, outp, sheet) = if so.fromfd.is_empty() {
         let base = so.video.strip_suffix(b".mp4").unwrap_or(&so.video).to_vec();
         let f = std::fs::File::open(shell::path(&so.video)).map_err(|e| {
             ctx.die(cat!(
@@ -2170,8 +2206,14 @@ fn sheet_host_in(ctx: &mut Ctx, so: &SheetOpts, tmpd: &[u8]) -> Res<()> {
         } else {
             so.out.clone()
         };
-        sheet_out_ok(ctx, &outp)?;
-        (OwnedFd::from(f), size, cat!(base, ".marks.tsv"), outp)
+        let sheet = sheet_out(ctx, &outp)?;
+        (
+            OwnedFd::from(f),
+            size,
+            cat!(base, ".marks.tsv"),
+            outp,
+            sheet,
+        )
     } else {
         // (as the box's way: its marks read in 10 s at most, 1 MiB; the video as the fd is)
         let tsv = cat!(tmpd, "/v.marks.tsv");
@@ -2193,7 +2235,9 @@ fn sheet_host_in(ctx: &mut Ctx, so: &SheetOpts, tmpd: &[u8]) -> Res<()> {
         }
         let fd = dup_hi(num(&so.fromfd) as i32).map_err(|_| Exit(1))?;
         let size = fd_size(&so.fromfd).unwrap_or(0);
-        (fd, size, tsv, cat!(tmpd, "/v.sheet.png"))
+        let sheet = crate::shots::OutFile::in_dir(tmpd, b"v.sheet.png", true)
+            .map_err(|m| ctx.die(cat!("record sheet: ", m)))?;
+        (fd, size, tsv, cat!(tmpd, "/v.sheet.png"), sheet)
     };
     // Only the frames' folder goes into the sandbox, not the marks or the sheet beside it.
     let fdir = cat!(tmpd, "/frames");
@@ -2216,8 +2260,8 @@ fn sheet_host_in(ctx: &mut Ctx, so: &SheetOpts, tmpd: &[u8]) -> Res<()> {
             fd: fd.as_raw_fd(),
             dir: &fdir,
         },
-        &tsv,
-        &outp,
+        crate::shots::open_regular(&tsv),
+        &sheet,
         &so.frames,
         so.every,
         &so.fit,
@@ -2286,8 +2330,8 @@ fn copy_in(ctx: &mut Ctx, bv: &[u8], from: InFrom) -> Res<i32> {
 fn record_sheet(
     ctx: &mut Ctx,
     v: Src,
-    tsv: &[u8],
-    png: &[u8],
+    tsv: Option<std::fs::File>,
+    png: &crate::shots::OutFile,
     frames: &[u8],
     every: Option<i64>,
     fit: &[u8],
@@ -2582,8 +2626,11 @@ fn record_sheet(
     rm_bd(ctx);
     // The marks, each under the first tile at or after it (the last tile for any after that).
     let mut has_marks = false;
-    if shell::path(tsv).is_file() {
-        let d = std::fs::read(shell::path(tsv)).unwrap_or_default();
+    // (the marks as the regular file the caller opened, no link followed, 16 MiB at most)
+    if let Some(f) = tsv {
+        use std::io::Read;
+        let mut d = Vec::new();
+        let _ = f.take(16_777_216).read_to_end(&mut d);
         has_marks = !d.is_empty();
         // (`while read`: a last line with no newline is not read)
         let mut lines: Vec<&[u8]> = d.split(|&c| c == b'\n').skip(1).collect();
@@ -2633,7 +2680,13 @@ fn record_sheet(
         args.push(l);
         args.push(format!("png:{}", frame(i)).into_bytes());
     }
-    let part = cat!(png, ".part");
+    // magick writes into a folder of omabox's own (the frames' copies, or beside a host sheet's
+    // frames, out of the sandbox's reach), and the sheet is put at PNG from there, made and renamed
+    // in its folder held: never through a link at PNG or PNG.part (finding 749).
+    let made = match v {
+        Src::Box(_) => cat!(tmp, "/sheet.png"),
+        Src::Host { dir, .. } => cat!(crate::shots::dirname(dir), "/.sheet-made.png"),
+    };
     args.extend(w(&[
         b"-tile".as_slice(),
         format!("{cols}x").as_bytes(),
@@ -2647,36 +2700,45 @@ fn record_sheet(
         b"off",
         b"-depth",
         b"8",
-        &cat!("PNG:", part),
+        &cat!("PNG:", made),
     ]));
-    let mut why: Vec<u8> = Vec::new();
-    let mut err = !crate::shots::mkdir_p(&crate::shots::dirname(png)) || {
-        let r = jq::tool("magick", &args, None, jq::Err::Out);
-        why = crate::grid::last_line(&r.out).to_vec();
-        !r.ok()
-    };
+    let r = jq::tool("magick", &args, None, jq::Err::Out);
+    let why = crate::grid::last_line(&r.out).to_vec();
+    let mut err = !r.ok();
     if !err && !fit.is_empty() {
         err = !jq::tool(
             "magick",
             &w(&[
-                cat!("PNG:", part),
+                cat!("PNG:", made),
                 b"-resize".to_vec(),
                 cat!(fit, "x", fit, ">"),
                 b"-depth".to_vec(),
                 b"8".to_vec(),
-                cat!("PNG:", part),
+                cat!("PNG:", made),
             ]),
             None,
             jq::Err::Null,
         )
         .ok();
     }
+    let mut sz = Vec::new();
+    let put = if err {
+        None
+    } else {
+        sz = crate::shots::png_size(&made)
+            .map(|(a, b)| format!("{a}x{b}").into_bytes())
+            .unwrap_or_default();
+        Some(match crate::shots::open_regular(&made) {
+            Some(mut f) => png.put(&mut f),
+            None => Err(cat!("cannot read ", made)),
+        })
+    };
+    rm(&shell::path(&made));
     drop(tmp_g);
     if err {
-        rm(&shell::path(&part));
         say(cat!(
             "record: the contact sheet failed (magick montage, to ",
-            png,
+            png.path(),
             if why.is_empty() {
                 b"".as_slice()
             } else {
@@ -2687,11 +2749,11 @@ fn record_sheet(
         ));
         return Ok(None);
     }
-    crate::shots::mv_f(&part, png);
-    let png = crate::repo::readlink_f(png).unwrap_or_default();
-    let sz = crate::shots::png_size(&png)
-        .map(|(a, b)| format!("{a}x{b}").into_bytes())
-        .unwrap_or_default();
+    if let Some(Err(m)) = put {
+        say(cat!("record: the contact sheet: ", m));
+        return Ok(None);
+    }
+    let png = png.path();
     let shown = if shown.is_empty() {
         png.clone()
     } else {
@@ -3173,6 +3235,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let rb = shell::bytes(&d.join("take")).to_vec();
+        let mt = crate::shots::OutFile::in_dir(shell::bytes(&d), b"take.marks.tsv", false).unwrap();
+        let mv = mt.beside(b"take.vtt", false);
         let mut ctx = Ctx::new(b"record", Vec::new());
         ctx.parsed();
         let marks = |m: &str, first: &str, dur: &str, cuts: &str| {
@@ -3182,7 +3246,7 @@ mod tests {
                     m.as_bytes(),
                     first.as_bytes(),
                     dur.as_bytes(),
-                    &rb,
+                    (&mt, &mv),
                     cuts.as_bytes(),
                     &rb,
                     b"",
@@ -3237,6 +3301,29 @@ mod tests {
             "ms text|500 before|1000 in|1500 after",
             "record_marks with a cut (frames 30 to 60, 1 s at 30 fps): one after it 1 s earlier, one in it at its start"
         );
+        // Finding 749: a link a box planted at a .part's name (or the name) is never written
+        // through; the marks are refused, the file it leads to as it was.
+        let secret = d.join("secret");
+        std::fs::write(&secret, "keep").unwrap();
+        for n in ["take.marks.tsv.part", "take.vtt.part", "take.vtt"] {
+            let _ = std::fs::remove_file(d.join(n));
+            std::os::unix::fs::symlink(&secret, d.join(n)).unwrap();
+            let (r, _) = crate::exit::heard(|| {
+                record_marks(
+                    &ctx,
+                    b"1000000500000\tx",
+                    b"1000000000000",
+                    b"4000",
+                    (&mt, &mv),
+                    b"",
+                    &rb,
+                    b"",
+                )
+            });
+            assert!(r.is_err(), "{n}: refused");
+            assert_eq!(std::fs::read_to_string(&secret).unwrap(), "keep", "{n}");
+            std::fs::remove_file(d.join(n)).unwrap();
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 
