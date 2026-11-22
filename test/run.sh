@@ -8767,6 +8767,13 @@ t_connected() {
 # box's is on the host's abstract sockets, and down leaves no process of it, its server's included.
 t_net_host() {
   local B=$P-nhost D=$XDG_RUNTIME_DIR/omabox/$P-nhost before out ns port tok spid hport htok pidns
+  # (a machine whose config protects ports refuses every host box, #313: that refusal is what runs)
+  if grep -q '^protect-ports=.' "$HOME/.config/omabox/config" 2>/dev/null; then
+    out=$(ob up "$B" --no-shell --net host 2>&1) && no "up --net host refused while protect-ports is set" "$out"
+    check_match "up --net host is refused while protect-ports is set (#313)" "up: --net host: protect-ports in ~/.config/omabox/config protects " "$out"
+    skip "up --net host and the rest" "protect-ports is set in ~/.config/omabox/config"
+    return
+  fi
   before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
   if out=$(ob up "$B" --no-shell --net host 2>&1); then ok "up --net host"
   else no "up --net host" "$out"; return; fi
