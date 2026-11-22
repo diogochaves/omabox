@@ -136,7 +136,12 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if let Err(e) = std::fs::create_dir_all(&sp)
         .and_then(|()| std::fs::set_permissions(&sp, std::fs::Permissions::from_mode(0o700)))
     {
-        return Err(ctx.die(cat!("save: cannot make ", saves, ": ", e.to_string())));
+        return Err(ctx.die(cat!(
+            "save: cannot make ",
+            saves,
+            ": ",
+            crate::shots::why(&e)
+        )));
     }
     // One save per name at a time (locked where the boxes' are); what a killed one left behind goes
     // now (its own leftovers only: bash's glob took another save's whose name starts with this one's).
@@ -203,7 +208,7 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         .create(shell::path(&tmp));
     let mk = mk.and_then(|()| std::fs::create_dir(shell::path(&cat!(tmp, "/home"))));
     if let Err(e) = mk {
-        return Err(ctx.die(cat!("save: cannot make ", tmp, ": ", e.to_string())));
+        return Err(ctx.die(cat!("save: cannot make ", tmp, ": ", crate::shots::why(&e))));
     }
     if let Ok(h) = held.lock() {
         signal_all(&h.pids, libc::SIGSTOP);
@@ -238,13 +243,18 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             "save: cannot write ",
             tmp,
             "/save.json: ",
-            e.to_string()
+            crate::shots::why(&e)
         )));
     }
     let old = cat!(saves, "/.old-", save, "-", me);
     if destp.exists() || destp.is_symlink() {
         if let Err(e) = std::fs::rename(&destp, shell::path(&old)) {
-            return Err(ctx.die(cat!("save: cannot move ", dest, " aside: ", e.to_string())));
+            return Err(ctx.die(cat!(
+                "save: cannot move ",
+                dest,
+                " aside: ",
+                crate::shots::why(&e)
+            )));
         }
     }
     if let Err(e) = std::fs::rename(shell::path(&tmp), &destp) {
@@ -254,7 +264,7 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             " to ",
             dest,
             ": ",
-            e.to_string()
+            crate::shots::why(&e)
         )));
     }
     let oldp = shell::path(&old);

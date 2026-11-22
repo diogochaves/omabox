@@ -90,7 +90,7 @@ pub fn ipc(ctx: &mut Ctx, words: &[&[u8]]) -> Result<Vec<u8>, Vec<u8>> {
         b"sh".to_vec(),
     ];
     argv.extend(words.iter().map(|w| w.to_vec()));
-    let (r, wr) = pipe().map_err(|e| e.to_string().into_bytes())?;
+    let (r, wr) = pipe().map_err(|e| crate::shots::why(&e).into_bytes())?;
     let reader = std::thread::spawn(move || read_all(r, Some(65_536)));
     let rc = {
         let _e = Redir::null(2);

@@ -521,7 +521,7 @@ fn rm_tree_with(chmod: &str, what: &[u8], paths: &[Vec<u8>]) -> bool {
     });
     let (rc, err) = match r {
         Ok((err, (rc, _))) => (rc, err),
-        Err(e) => (127, cat!("rm: ", e.to_string())),
+        Err(e) => (127, cat!("rm: ", crate::exec::exec_failed(b"rm", &e).0)),
     };
     if rc == 0 {
         return true;

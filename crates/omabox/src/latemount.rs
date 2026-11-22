@@ -196,7 +196,7 @@ fn step_words(step: u8, e: i32, src: Option<&[u8]>, parent: &[u8], name: &[u8]) 
     let src = src.unwrap_or_default();
     let dest = cat!(parent, "/", name);
     // (here, in the parent: the system's own words for it)
-    let why = std::io::Error::from_raw_os_error(e).to_string();
+    let why = crate::shots::why(&std::io::Error::from_raw_os_error(e));
     match step {
         1 => cat!("cannot join the box's user namespace: ", why),
         2 => cat!("cannot make a mount namespace: ", why),

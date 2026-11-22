@@ -1495,7 +1495,7 @@ fn bwrap_args(
                     "up: could not make the card placeholder in ",
                     d,
                     ": ",
-                    e.to_string()
+                    crate::shots::why(&e)
                 ))
             })?;
             b.card_placeholder(ph.src(), ph.dest()).map_err(refused)?;
@@ -2006,7 +2006,7 @@ pub fn seat_visible(pid: &[u8], runtime: &[u8], own: &[u8]) -> Option<Vec<u8>> {
             "mounts that cannot be read (",
             p,
             ": ",
-            e.to_string(),
+            crate::shots::why(&e),
             ")"
         ))
     };

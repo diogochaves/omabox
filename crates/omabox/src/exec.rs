@@ -511,11 +511,7 @@ fn ns_said_with(
 fn alive_quiet(ctx: &Ctx) -> Result<bool, (Vec<u8>, u8)> {
     match box_pid(&ctx.d) {
         BoxPid::Unknown => {
-            let m = cat!(
-                "omabox: cannot tell whether box '",
-                ctx.name,
-                "' is up from this user namespace (a sandbox's?): run omabox outside it\n"
-            );
+            let m = cat!("omabox: ", crate::boxes::unknown_text(&ctx.name), "\n");
             Err((m, ctx.die_rc.unwrap_or(1)))
         }
         BoxPid::Pid(p) => Ok(procfs::running(&p)),
@@ -630,12 +626,9 @@ fn on_box_with(
             gone_said: false,
         }
     };
-    let pid = match box_pid(&ctx.d) {
-        BoxPid::Pid(p) => p,
-        // (box_pid's 3 leaves it empty: callers run it in an || list, where set -e does not hold.)
-        BoxPid::None | BoxPid::Unknown => {
-            return refuse(&mut buf, cat!("box '", ctx.name, "' is not up"));
-        }
+    let pid = match crate::boxes::pid_or_text(ctx) {
+        Ok(p) => p,
+        Err(m) => return refuse(&mut buf, m),
     };
     if covers_held(ctx).is_err() {
         // (covers_held's die, its words to wherever this call's stderr is)
@@ -936,12 +929,7 @@ fn sys_env(d: &[u8]) -> Vec<Vec<u8>> {
 /// stderr are never a file, a terminal or a device of the host's (finding 325), and it gets no other
 /// fd but those it is given (#224).
 pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
-    let pid = match box_pid(&ctx.d) {
-        BoxPid::Pid(p) => p,
-        BoxPid::None | BoxPid::Unknown => {
-            return Err(ctx.die(cat!("box '", ctx.name, "' is not up")));
-        }
-    };
+    let pid = crate::boxes::need_pid(ctx)?;
     covers_held(ctx)?;
     let mut wd = shell::pwd();
     let env: Vec<Vec<u8>> = if o.sys {
@@ -1408,17 +1396,9 @@ fn stdio_relay_with(
     let rc = match spawned {
         Ok(rc) => rc,
         Err(e) => {
-            // (omabox's words: bash's were its own, "gdb: command not found", finding 441)
-            let _ = writeln!(
-                std::io::stderr(),
-                "omabox: cannot run {}: {}",
-                String::from_utf8_lossy(argv.first().map_or(&b""[..], |a| a)),
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    "not found in PATH".to_string()
-                } else {
-                    e.to_string()
-                }
-            );
+            // (omabox's words: bash's were its own, "gdb: command not found", finding 441; said
+            // through say, so the command log records it, finding 754)
+            crate::exit::say(cant_run(argv.first().map_or(&b""[..], |a| a), &e).0);
             127
         }
     };
@@ -1440,6 +1420,13 @@ pub fn exec_failed(prog: &[u8], e: &std::io::Error) -> (String, u8) {
         std::io::ErrorKind::PermissionDenied => ("permission denied".into(), 126),
         _ => (crate::shots::why(e), 126),
     }
+}
+
+/// `cannot run PROG: WHY`, exec_failed's words and status: the one line for a program that would
+/// not start (finding 754: four wordings before, some with Rust's "(os error 2)").
+pub fn cant_run(prog: &[u8], e: &std::io::Error) -> (Vec<u8>, u8) {
+    let (why, rc) = exec_failed(prog, e);
+    (cat!("cannot run ", prog, ": ", why), rc)
 }
 
 /// `command -v NAME >/dev/null` for a program: an executable file of that name in a dir of PATH.
@@ -1727,6 +1714,51 @@ fn drain(outs: Vec<Child>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Finding 754: a program that would not start, in exec_failed's words, never Rust's
+    /// "(os error N)"; and on_box's refusal for a box gone says how to start it.
+    #[test]
+    fn cant_run_said_once() {
+        let e = |n| std::io::Error::from_raw_os_error(n);
+        let s = |p: &str, n| {
+            let (m, rc) = cant_run(p.as_bytes(), &e(n));
+            (String::from_utf8(m).unwrap(), rc)
+        };
+        assert_eq!(
+            s("gdb", libc::ENOENT),
+            ("cannot run gdb: not found in PATH".into(), 127)
+        );
+        assert_eq!(
+            s("/x/v", libc::ENOENT),
+            ("cannot run /x/v: no such file".into(), 127)
+        );
+        assert_eq!(
+            s("v", libc::EACCES),
+            ("cannot run v: permission denied".into(), 126)
+        );
+        let (m, rc) = s("v", libc::E2BIG);
+        assert_eq!(
+            (m.as_str(), rc),
+            ("cannot run v: Argument list too long", 126)
+        );
+        let mut ctx = Ctx::new(b"run", b"/nonexistent/omabox-754".to_vec());
+        ctx.parsing = false;
+        ctx.name = b"bx".to_vec();
+        ctx.d = cat!(ctx.boxes, "/bx");
+        let r = on_box(
+            &ctx,
+            &[b"true".to_vec()],
+            true,
+            Out::Capture(None),
+            ErrTo::Out,
+        );
+        assert!(r.refused);
+        assert_eq!(r.rc, 1);
+        assert_eq!(
+            String::from_utf8_lossy(&r.out),
+            "omabox: box 'bx' is not up (start it with: omabox up bx)\n"
+        );
+    }
 
     // #364: a program is looked for in the PATH given, not the caller's: an nft only on the caller's
     // PATH is not one a box's start (PATH=/usr/bin) finds; a file that cannot run, or a folder, is none.

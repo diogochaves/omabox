@@ -172,13 +172,45 @@ pub fn box_pasta(d: &[u8]) -> Option<Vec<u8>> {
         .then_some(pasta)
 }
 
+/// What a call says of box NAME whose PID 1 this user namespace cannot read (box_pid's Unknown).
+pub fn unknown_text(name: &[u8]) -> Vec<u8> {
+    cat!(
+        "cannot tell whether box '",
+        name,
+        "' is up from this user namespace (a sandbox's?): run omabox outside it"
+    )
+}
+
+/// What a call says of box NAME that went down after need_box let it through (box_pid's None),
+/// ending with the command that fixes it (findings 740, 744, 754).
+pub fn gone_text(name: &[u8]) -> Vec<u8> {
+    cat!(
+        "box '",
+        name,
+        "' is not up (start it with: omabox up ",
+        name,
+        ")"
+    )
+}
+
+/// The box's PID 1, or the line that says why there is none (unknown_text or gone_text): one text
+/// for every caller that needs the pid (finding 754).
+pub fn pid_or_text(ctx: &Ctx) -> Result<Vec<u8>, Vec<u8>> {
+    match box_pid(&ctx.d) {
+        BoxPid::Pid(p) => Ok(p),
+        BoxPid::Unknown => Err(unknown_text(&ctx.name)),
+        BoxPid::None => Err(gone_text(&ctx.name)),
+    }
+}
+
+/// pid_or_text, its line said (die).
+pub fn need_pid(ctx: &Ctx) -> Res<Vec<u8>> {
+    pid_or_text(ctx).map_err(|m| ctx.die(m))
+}
+
 pub fn box_alive(ctx: &Ctx) -> Res<bool> {
     match box_pid(&ctx.d) {
-        BoxPid::Unknown => Err(ctx.die(cat!(
-            "cannot tell whether box '",
-            ctx.name,
-            "' is up from this user namespace (a sandbox's?): run omabox outside it"
-        ))),
+        BoxPid::Unknown => Err(ctx.die(unknown_text(&ctx.name))),
         // Not a zombie (#166): a PID 1 that has exited but is not reaped yet answers kill -0,
         // while its namespaces are gone.
         BoxPid::Pid(p) => Ok(procfs::running(&p)),
@@ -854,6 +886,30 @@ pub fn box_file(ctx: &Ctx, p: &std::path::Path, value: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Finding 754: a box gone after need_box, or one this namespace cannot read, said in one text
+    /// for every caller, each ending with what fixes it (740, 744).
+    #[test]
+    fn need_pid_says_its_fix() {
+        let mut ctx = Ctx::new(b"run", b"/nonexistent/omabox-754".to_vec());
+        ctx.parsing = false;
+        ctx.name = b"bx".to_vec();
+        ctx.d = cat!(ctx.boxes, "/bx");
+        assert_eq!(
+            pid_or_text(&ctx),
+            Err(b"box 'bx' is not up (start it with: omabox up bx)".to_vec())
+        );
+        let (r, said) = crate::exit::heard(|| need_pid(&ctx));
+        assert_eq!(r, Err(crate::exit::Exit(1)));
+        assert!(
+            said.contains("omabox: box 'bx' is not up (start it with: omabox up bx)"),
+            "{said}"
+        );
+        assert_eq!(
+            unknown_text(b"bx"),
+            b"cannot tell whether box 'bx' is up from this user namespace (a sandbox's?): run omabox outside it".to_vec()
+        );
+    }
 
     /// #471: no box up where a look's own box was meant says so, and how to keep or start one.
     #[test]
