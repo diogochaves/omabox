@@ -15456,6 +15456,33 @@ from them.
     --home` silent on the linked plugins; a box-planted link to a repo file and one into the
     `--ro-bind` named); t_hostile_reads (a log line's colours dropped, `ESC[2J` shown as `?[2J`).
 
+759. **One "is P under DIR", one `tilde`, one `dir_of`** (2026-11-22, the review's struct-dup
+    clusters 2 and 3). About 40 inline `p == d || p.starts_with(d + "/")` checks and four helpers
+    (jailpath's and upspec's `at_or_under`/`under`, broker_side's `starts_dir`) now call
+    `paths::under` (the rest of P after DIR, empty when P is DIR), `at_or_under` and `below`, whose
+    rules a proptest holds: an empty DIR holds nothing; `/` holds every absolute path; trailing
+    slashes on either side are ignored; nothing is normalised (`/a/../b` is under `/a`: a caller
+    that must not be fooled resolves first, as bwrap's seat checks run `lexical`). The copies had
+    disagreed on all three edges; what changes for a user: **`down`'s "your boxes" list** wrote
+    `~` before every box dir when HOME was empty (`~/run/user/...`), and now shows them as they are;
+    **`log`/`events` on a dead box** took every regular file for the box's when its `run` or `home`
+    folder could not be resolved (bash's `"$(readlink -f DIR)"/*` read `/*`; not reachable today,
+    `log_host_path` returns first), and now take none. `whose`, `down` and deskguard's "no Hyprland
+    config in ~/..." share `paths::home_short` (a HOME of `/` shortens nothing). Left on their own
+    rule on purpose: `homelinks::within` (a security opener: a link target with a trailing slash
+    compares differently), repo's `refuse_path`/`refuse_src`/`link_mountable` and upspec's
+    `refuse_dest` (their `slash()` form reads an empty path as `/` and refuses it), and
+    `shots::under_box_part`. **`dir_of`** is coreutils' `dirname` now everywhere (`paths::dir_of`,
+    was `shots::dirname`); jailpath's and up's `${V%/*}` copies gave `""` for `/x`, so a jail whose
+    folder is `/` took a file straight in it (`/x`) for one in a subfolder (`jail_readable`,
+    `jail_deep`), and `up --hyprland /Hyprland` or `--quickshell /qs` (a binary at the top level)
+    named its folder `""` rather than `/` (refused either way, now saying `/`). `tilde`
+    (`${P/#\~/$HOME}`) is one function, `paths::tilde`, for up's and upspec's two copies. Tests:
+    cargo `paths::tests::under_rules`, `under_holds_its_rules` (proptest: the rest's shape, `/`, a
+    trailing slash, the part-by-part answer on plain absolute paths), `home_short_rules`,
+    `dir_of_as_coreutils` (against `/usr/bin/dirname` where installed: `/x`, `/`, `x`, `x/`, `//x`,
+    empty and more), `tilde_as_bash`.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -16,6 +16,7 @@ use crate::jail::in_jail;
 use crate::jailpath::{self, jail_path, jail_refuse};
 use crate::json;
 use crate::net::Ports;
+use crate::paths::{dir_of, tilde};
 use crate::procfs;
 use crate::render::{self, RenderNode};
 use crate::repo::{jail_root, norepo_note, readlink_f, refuse_src, repo_top};
@@ -219,27 +220,11 @@ impl Up {
     }
 }
 
-/// `${G/#\~/$HOME}`.
-fn tilde(g: &[u8]) -> Vec<u8> {
-    match g.strip_prefix(b"~") {
-        Some(rest) => cat!(shell::env_or_empty("HOME"), rest),
-        None => g.to_vec(),
-    }
-}
-
 /// `${V%%PAT*}`: what comes before PAT's first occurrence.
 pub fn before<'a>(v: &'a [u8], pat: &[u8]) -> &'a [u8] {
     v.windows(pat.len())
         .position(|w| w == pat)
         .map_or(v, |i| &v[..i])
-}
-
-/// `${V%/*}`: the folder a path is in.
-pub fn dir_of(v: &[u8]) -> Vec<u8> {
-    match v.iter().rposition(|&c| c == b'/') {
-        Some(i) => v[..i].to_vec(),
-        None => v.to_vec(),
-    }
 }
 
 pub fn pid_self() -> Vec<u8> {

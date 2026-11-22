@@ -320,9 +320,8 @@ pub(crate) fn open_video_in(
     let mut hops = 0;
     let f = loop {
         let name = shell::basename(&cur);
-        let (folder, held) =
-            crate::shots::hold_folder(&crate::shots::dirname(&cur), false, guarded)
-                .map_err(|m| cat!("cannot read ", v, ": ", m))?;
+        let (folder, held) = crate::shots::hold_folder(&crate::paths::dir_of(&cur), false, guarded)
+            .map_err(|m| cat!("cannot read ", v, ": ", m))?;
         if let Some(f) = held.open_regular(&name) {
             break f;
         }
@@ -759,7 +758,7 @@ pub(super) fn record_sheet(
     // in its folder held: never through a link at PNG or PNG.part (finding 749).
     let made = match v {
         Src::Box(_) => cat!(tmp, "/sheet.png"),
-        Src::Host { dir, .. } => cat!(crate::shots::dirname(dir), "/.sheet-made.png"),
+        Src::Host { dir, .. } => cat!(crate::paths::dir_of(dir), "/.sheet-made.png"),
     };
     args.extend(w(&[
         b"-tile".as_slice(),

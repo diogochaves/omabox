@@ -348,7 +348,7 @@ pub fn hypr_target(ctx: &Ctx, given: &[u8]) -> Res<Hypr> {
     let dir = crate::repo::readlink_f(given).filter(|p| shell::path(p).is_dir());
     let Some(dir) = dir else {
         let bin = hypr_bin(ctx, given)?;
-        let root = crate::cmd::up::dir_of(&bin);
+        let root = crate::paths::dir_of(&bin);
         return Ok(Hypr {
             bin,
             root,

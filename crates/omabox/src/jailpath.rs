@@ -4,7 +4,7 @@
 use crate::cat;
 use crate::exit::{Ctx, Exit};
 use crate::json;
-use crate::paths::{at_or_under, below};
+use crate::paths::{at_or_under, below, dir_of};
 use crate::repo::{coverable, readlink_e};
 use crate::shell::{self, strip_nl};
 use serde_json::Value;
@@ -45,14 +45,6 @@ fn masks(pol: &Value) -> Option<Vec<Vec<u8>>> {
             })
             .unwrap_or_default(),
     )
-}
-
-/// `sub("/[^/]*$"; "")`: P without its last component.
-fn dir_of(p: &[u8]) -> &[u8] {
-    match p.iter().rposition(|&c| c == b'/') {
-        Some(i) => &p[..i],
-        None => p,
-    }
 }
 
 /// jail_sees P: P resolved, when the jail sees it (inside one of its folders).
@@ -116,7 +108,7 @@ fn deep_in(pol: &Value, p: &[u8]) -> bool {
     let rs = roots(pol);
     let Some(r) = inner(&rs, p) else { return true };
     ms.iter()
-        .any(|m| below(m, r) && inner(&rs, m) == Some(r) && dir_of(m) != r.as_slice())
+        .any(|m| below(m, r) && inner(&rs, m) == Some(r) && dir_of(m) != *r)
 }
 
 /// jail_readable FILE (#210): FILE (resolved, inside the jail's folders) may be read on the host for
@@ -130,7 +122,7 @@ fn readable_in(pol: &Value, f: &[u8]) -> bool {
     if hidden_in(pol, f) {
         return false;
     }
-    roots(pol).iter().any(|r| r.as_slice() == dir_of(f)) || !deep_in(pol, f)
+    roots(pol).iter().any(|r| *r == dir_of(f)) || !deep_in(pol, f)
 }
 
 /// jail_masked P (#198 security): P at, under, or holding one of the jail's hidden paths (ai-jail
@@ -446,7 +438,7 @@ mod tests {
         assert!(!below(b"/ab", b"/a"));
         assert!(!below(b"/a", b"/a"));
         assert_eq!(dir_of(b"/a/b/c"), b"/a/b");
-        assert_eq!(dir_of(b"/a"), b"");
+        assert_eq!(dir_of(b"/a"), b"/");
     }
 
     #[test]

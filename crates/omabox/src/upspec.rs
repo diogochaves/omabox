@@ -254,14 +254,6 @@ pub fn chosen_text(d: Desktop, how: Chosen) -> Option<&'static str> {
 /// up --idle and $OMABOX_IDLE as whole seconds: `check run` shares bash's idle_duration.
 pub use crate::cmd::check::idle_duration;
 
-/// `${src/#\~/$HOME}`: a leading `~` (only the `~`) as HOME.
-fn tilde(p: &[u8]) -> Vec<u8> {
-    match p.strip_prefix(b"~") {
-        Some(rest) => cat!(shell::env_or_empty("HOME"), rest),
-        None => p.to_vec(),
-    }
-}
-
 /// `realpath -m -- P` (GNU's, canonicalize-missing): absolute from the physical cwd, each link that is
 /// there followed (`..` after it from where it leads), what is missing taken as written. None for a
 /// link loop (ELOOP).
@@ -320,7 +312,7 @@ pub fn robind_spec(spec: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
         Some(i) => (&spec[..i], Some(cat!("/", &spec[i + 2..]))),
         None => (spec, None),
     };
-    let src = tilde(src);
+    let src = crate::paths::tilde(src);
     let src = if in_jail() {
         let q = jail_path(&src)?;
         if !shell::path(&q).exists() {
@@ -391,7 +383,7 @@ pub fn seed_spec(spec: &[u8], home: &[u8]) -> Result<(Vec<u8>, Vec<u8>), SeedRef
         say(cat!("--seed: DEST must be inside the box HOME, got ", dest));
         return Err(SeedRefused::Bad);
     }
-    let src = tilde(src);
+    let src = crate::paths::tilde(src);
     let src = if in_jail() {
         let ok = jail_path(&src)
             .filter(|q| shell::path(q).exists())

@@ -117,6 +117,42 @@ pub fn home_short(dir: &[u8], home: &[u8]) -> Vec<u8> {
     }
 }
 
+/// `${P/#\~/$HOME}`: a leading `~` (only the `~`: `~user` too, as bash's substitution has it) as
+/// HOME.
+pub fn tilde(p: &[u8]) -> Vec<u8> {
+    match p.strip_prefix(b"~") {
+        Some(rest) => cat!(shell::env_or_empty("HOME"), rest),
+        None => p.to_vec(),
+    }
+}
+
+/// `$(dirname -- "$P")`, as coreutils has it: the folder P is in, trailing slashes first dropped;
+/// `/` for `/x`, `/` and `//x`, `.` for `x`, `x/` and an empty P. (Not `${P%/*}`, which gives `""`
+/// for `/x` and `x` for `x`.)
+pub fn dir_of(p: &[u8]) -> Vec<u8> {
+    if p.is_empty() {
+        return b".".to_vec();
+    }
+    let mut end = p.len();
+    while end > 1 && p[end - 1] == b'/' {
+        end -= 1;
+    }
+    match p[..end].iter().rposition(|&c| c == b'/') {
+        None => b".".to_vec(),
+        Some(i) => {
+            let mut j = i;
+            while j > 0 && p[j - 1] == b'/' {
+                j -= 1;
+            }
+            if j == 0 {
+                b"/".to_vec()
+            } else {
+                p[..j].to_vec()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +193,57 @@ mod tests {
         assert_eq!(u("/a/b", "a"), None);
         assert!(below(b"/a/b", b"/a") && !below(b"/a", b"/a") && !below(b"/a/", b"/a"));
         assert!(at_or_under(b"/a", b"/a") && !at_or_under(b"/a", b""));
+    }
+
+    #[test]
+    fn tilde_as_bash() {
+        shell::with_env(&[("HOME", Some("/home/u"))], || {
+            assert_eq!(tilde(b"~"), b"/home/u");
+            assert_eq!(tilde(b"~/x"), b"/home/u/x");
+            assert_eq!(tilde(b"~x"), b"/home/ux");
+            assert_eq!(tilde(b"/a/~"), b"/a/~");
+            assert_eq!(tilde(b""), b"");
+        });
+    }
+
+    /// dir_of is coreutils' dirname: the rows checked by hand, and against `dirname` itself where it
+    /// is installed.
+    #[test]
+    fn dir_of_as_coreutils() {
+        let rows = [
+            ("/x", "/"),
+            ("/", "/"),
+            ("x", "."),
+            ("x/", "."),
+            ("//x", "/"),
+            ("", "."),
+            ("//", "/"),
+            ("/a/", "/"),
+            ("/a/b", "/a"),
+            ("/a/b/", "/a"),
+            ("/a//b", "/a"),
+            ("//a/b", "//a"),
+            ("a//b///", "a"),
+            ("///a", "/"),
+            ("..", "."),
+            ("a/..", "a"),
+        ];
+        let coreutils = std::path::Path::new("/usr/bin/dirname").exists();
+        for (p, d) in rows {
+            assert_eq!(dir_of(p.as_bytes()), d.as_bytes(), "{p:?}");
+            if coreutils {
+                let out = std::process::Command::new("/usr/bin/dirname")
+                    .arg("--")
+                    .arg(p)
+                    .output()
+                    .unwrap();
+                assert_eq!(
+                    out.stdout,
+                    format!("{d}\n").as_bytes(),
+                    "coreutils on {p:?}"
+                );
+            }
+        }
     }
 
     #[test]
