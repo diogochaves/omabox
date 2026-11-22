@@ -15294,8 +15294,9 @@ from them.
     its HOME, as 749 expects) for a link to `~/.config/omarchy/api-keys.env` got the file copied into
     its `.cache/omabox-record`, a link to `/dev/zero` filled the disk (that copy had no cap), a FIFO
     hung the open. `record_stop.rs`'s `open_video` now holds VIDEO's folder as `shots::hold_folder`
-    walks it (below) and opens the name in it with no link followed, `O_NONBLOCK`, a regular file by
-    its fstat, at most REC_MAX (as a jailed caller's fd); the copy takes no more than that size. The
+    walks it (below) and opens the name in it (a link there followed only outside a box's folders,
+    as a folder link is: the user's own link to a video still works), `O_NONBLOCK`, a regular file
+    by its fstat, at most REC_MAX (as a jailed caller's fd); the copy takes no more than that size. The
     no-box way (`sheet_host_in`) opens it the same way (a FIFO hung it). **`log` and `look`** read a
     box's logs whole: `log` by `cat` into `Out::Capture(None)` (a dead box's on the host, the same),
     `events --since` by `tail -c +N`, and every look ran `log shell -n all --full` for its mark and

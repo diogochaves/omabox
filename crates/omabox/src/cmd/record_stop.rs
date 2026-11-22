@@ -2272,8 +2272,9 @@ enum InFrom {
 
 /// VIDEO, a file `record sheet` was named, open for reading and its size (finding 755): its folder
 /// held as walked from `/` with no link in a box's folder followed (shots::hold_folder: a box HOME's
-/// link to a host folder is refused), then the file in it as the regular file it is (no link at its
-/// name, a FIFO or a device refused, never waited on), at most MAX bytes. Err: the words for why.
+/// link to a host folder is refused), then the file in it as the regular file it is (a link at its
+/// name followed only outside a box's folders, a FIFO or a device refused, never waited on), at
+/// most MAX bytes. Err: the words for why.
 pub(crate) fn open_video(v: &[u8], max: i64) -> Result<(std::fs::File, i64), Vec<u8>> {
     open_video_in(v, max, &crate::shots::box_writable)
 }
@@ -2283,14 +2284,41 @@ pub(crate) fn open_video_in(
     max: i64,
     guarded: &dyn Fn(&[u8]) -> bool,
 ) -> Result<(std::fs::File, i64), Vec<u8>> {
-    let name = shell::basename(v);
-    let (_, held) = crate::shots::hold_folder(&crate::shots::dirname(v), false, guarded)
-        .map_err(|m| cat!("cannot read ", v, ": ", m))?;
-    let Some(f) = held.open_regular(&name) else {
-        let why = match std::fs::symlink_metadata(shell::path(v)) {
+    // (a link at the name is followed only outside a box's folders, as a folder link is: the
+    // user's own link to a video is fine, one a box planted is not)
+    let mut cur = v.to_vec();
+    let mut hops = 0;
+    let f = loop {
+        let name = shell::basename(&cur);
+        let (folder, held) =
+            crate::shots::hold_folder(&crate::shots::dirname(&cur), false, guarded)
+                .map_err(|m| cat!("cannot read ", v, ": ", m))?;
+        if let Some(f) = held.open_regular(&name) {
+            break f;
+        }
+        let p = if folder == b"/" {
+            cat!("/", name)
+        } else {
+            cat!(folder, "/", name)
+        };
+        let why = match std::fs::symlink_metadata(shell::path(&p)) {
             Err(e) => crate::shots::why(&e),
+            Ok(m) if m.file_type().is_symlink() && !guarded(&folder) && hops < 40 => {
+                let t = std::fs::read_link(shell::path(&p))
+                    .map_err(|e| cat!("cannot read ", v, ": ", crate::shots::why(&e)))?;
+                let t = shell::bytes(&t).to_vec();
+                cur = if t.first() == Some(&b'/') {
+                    t
+                } else {
+                    cat!(folder, "/", t)
+                };
+                hops += 1;
+                continue;
+            }
+            Ok(m) if m.file_type().is_symlink() && hops >= 40 => "too many links".to_string(),
             Ok(m) if m.file_type().is_symlink() => {
-                "it is a link (omabox reads through none: name the file itself)".to_string()
+                "it is a link in a box's folder (omabox reads through none there: name the file itself)"
+                    .to_string()
             }
             Ok(_) => "it is not a regular file".to_string(),
         };
@@ -3123,9 +3151,28 @@ mod tests {
             open_video_in(&p("host/v.mp4"), 100, &g).is_ok(),
             "outside a box"
         );
+        // The user's own link, outside a box's folders, to a regular video: followed.
+        symlink(t.join("host/v.mp4"), t.join("mine.mp4")).unwrap();
+        assert_eq!(open_video_in(&p("mine.mp4"), 100, &g).unwrap().1, 5);
+        // ...but not one that leads on to a link a box planted, or to /dev/zero.
+        symlink(home.join("ln.mp4"), t.join("via.mp4")).unwrap();
+        assert!(open_video_in(&p("via.mp4"), 100, &g).is_err());
+        symlink("/dev/zero", t.join("z.mp4")).unwrap();
+        assert!(open_video_in(&p("z.mp4"), i64::MAX, &g).is_err());
         let c = std::ffi::CString::new(p("homes/b/home/fifo.mp4")).unwrap();
         // SAFETY: a valid C string.
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        // A link of the user's to a FIFO: followed, the FIFO refused, not waited on.
+        symlink(home.join("fifo.mp4"), t.join("tofifo.mp4")).unwrap();
+        let tofifo = p("tofifo.mp4");
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx2.send(open_video_in(&tofifo, 100, &|_: &[u8]| false).is_err());
+        });
+        assert!(
+            rx2.recv_timeout(std::time::Duration::from_secs(5))
+                .expect("waited on a FIFO")
+        );
         let fifo = p("homes/b/home/fifo.mp4");
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
