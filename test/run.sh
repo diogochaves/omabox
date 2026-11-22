@@ -4824,7 +4824,7 @@ t_unit_capture_errors() {
   cx_want=(rc=0 "out=$r/out/x.ppm" "err~^omabox: shot: $r/out/x\\.ppm holds a PNG \\(shot writes PNG only, whatever the name\\)$")
   cx_case "shot -o x.ppm: a PNG, said" shot -b fk -o "$r/out/x.ppm"
   if [ -x /root ]; then skip "shot -o in a folder it cannot look into: said" "/root can be looked into here (root?)"; else
-    cx_want=(rc=1 out= "err=omabox: shot: cannot resolve /root/rp.png (a folder on its way is missing or cannot be looked into, or a link loops)")
+    cx_want=(rc=1 out= "err=omabox: shot: cannot write /root/rp.png: Permission denied")
     cx_case "shot -o in a folder it cannot look into: said" shot -b fk -o /root/rp.png
   fi
   # --burst: a frame failed, from the burst tool or from a grim a frame (a box without the tool): no
@@ -12056,6 +12056,35 @@ t_hostile_reads() {
   out=$(timeout 60 "$CLI" look app -b "$B" -- "$fx" --title $'t747\e]52;c;aGk=\a' --for 600000 2>&1)
   check_match "a window title's escape said plain" 'window: omabox-fixture "t747\?\]52;c;aGk=\?"' "$out"
   check_fails "...no ESC byte reaches the terminal" grep -q $'\e' <<<"$out"
+  # Finding 755: a box log is read bounded and said plain. One with a terminal escape: plain.
+  ob run -b "$B" -- sh -c "printf 'l755 \\033]52;c;aGk=\\007 end\\n' > /home/sbx/apps.log"
+  out=$(timeout 60 "$CLI" log -b "$B" apps 2>&1)
+  check_match "log: a box log's escape said plain" 'l755 \?\]52;c;aGk=\? end' "$out"
+  check_fails "...no ESC byte reaches the terminal" grep -q $'\e' <<<"$out"
+  # A sparse terabyte of a log: its last 8 MiB read, said, no hang and no memory taken whole.
+  ob run -b "$B" -- sh -c 'truncate -s 1T /home/sbx/apps.log; printf "x\\ntail755\\n" >> /home/sbx/apps.log'
+  out=$(timeout 60 prlimit --as=$((4 << 30)) "$CLI" log -b "$B" apps -n 1 2>&1); rc=$?
+  check_match "log: a sparse 1 TiB log: its last 8 MiB read, said (rc $rc)" "^0 .*apps\.log is larger than 8 MiB: its last 8 MiB read.*tail755" "$rc $(tr '\n' ' ' <<<"$out")"
+  ob run -b "$B" -- rm -f /home/sbx/apps.log
+  # record sheet VIDEO in the box HOME: swapped for a link to a host file, to /dev/zero, for a FIFO,
+  # or behind a folder link the box planted: refused, nothing of the host's copied into the box.
+  local H; H=$(realpath "$(ob path -b "$B" --home)")
+  ob run -b "$B" -- sh -c "ln -s '$sec' /home/sbx/v1.mp4; ln -s /dev/zero /home/sbx/v2.mp4; mkfifo /home/sbx/v3.mp4; ln -s '${sec%/*}' /home/sbx/up755"
+  local v
+  for v in v1.mp4 v2.mp4 v3.mp4 "up755/${sec##*/}"; do
+    out=$(timeout 60 "$CLI" record -b "$B" sheet "$H/$v" 2>&1); rc=$?
+    # (a FIFO or a device is not even taken at parse, 2: "no video"; the open refuses what parse let by)
+    local why="(cannot read|no video) $H/$v"; [[ $v != up755/* ]] || why="$H/up755 is a link in a box's folder"
+    check_match "record sheet: $v planted by the box: refused, no hang" "^[12] .*record sheet: .*$why" "$rc $(tr '\n' ' ' <<<"$out")"
+  done
+  check_fails "...nothing of the host's copied into the box" ob run -b "$B" -- sh -c 'grep -rqs HOSTSECRET747 /home/sbx/.cache/omabox-record'
+  # A shot's -o through a folder link the box planted in its HOME: refused, nothing in the host folder.
+  local hd=$TMP/$P-hread-dir; rm -rf "$hd"; mkdir -p "$hd"
+  ob run -b "$B" -- ln -s "$hd" /home/sbx/out755
+  out=$(timeout 60 "$CLI" shot -b "$B" -o "$H/out755/s.png" 2>&1); rc=$?
+  check_match "shot -o through a folder link the box planted: refused" "^1 .*$H/out755 is a link in a box's folder" "$rc $(tr '\n' ' ' <<<"$out")"
+  check_eq "...nothing in the host folder" "" "$(ls -A "$hd")"
+  rm -rf "$hd"
   ob down "$B" >/dev/null 2>&1
   # A throwaway whose up fails: its HOME's logs are copied out from the fd each was opened by. Its shell
   # swaps one, by rename, between a file, a link to a host file and a FIFO the whole time.
@@ -18512,6 +18541,12 @@ t_record_links() {
     check_match "...a link at the sheet's .part name: the sheet refused, the video made" "^1 .*$H/s\.sheet\.png\.part is a link.* $H/s\.mp4 $" "$rc $(tr '\n' ' ' <<<"$out")"
     intact "...the sheet's .part name"
   else no "record start -o s.mp4" "it failed"; fi
+  # A folder link the box planted in its HOME before the start (finding 755): refused, never followed.
+  ob run -b "$B" -- ln -s "$hd" /home/sbx/lnk
+  rc=0; out=$(ob record -b "$B" start -o "$H/lnk/l.mp4" 2>&1) || rc=$?
+  check_match "record start -o through a folder link the box planted: refused" "^1 .*$H/lnk is a link in a box's folder" "$rc $out"
+  intact "...a folder link"
+  ob record -b "$B" stop >/dev/null 2>&1
   # The folder swapped for a link to a host folder after the start: refused, never followed.
   ob run -b "$B" -- mkdir -p /home/sbx/sub
   if ob record -b "$B" start -o "$H/sub/d.mp4" >/dev/null 2>&1; then
