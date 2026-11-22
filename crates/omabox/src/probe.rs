@@ -449,21 +449,24 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
                 Some(a) => a.to_vec(),
                 None => cat!("0 0 ", w, " ", h),
             };
-            let ass = crate::cmd::record_stop::record_overlay(
-                input,
-                marks,
-                first,
+            let take = crate::cmd::record_stop::Take {
+                input: input.to_vec(),
+                marks: marks.to_vec(),
+                first: first.to_vec(),
+                show: *show == b"1",
+                caps: *caps == b"1",
+                ..Default::default()
+            };
+            let at = crate::cmd::record_stop::OverlayAt {
                 x0,
                 y0,
                 k,
                 w,
                 h,
                 dur,
-                *show == b"1",
-                *caps == b"1",
-                &area,
-            )
-            .ok_or(Exit(1))?;
+                area: &area,
+            };
+            let ass = crate::cmd::record_stop::record_overlay(&take, &at).ok_or(Exit(1))?;
             out(ass)
         }
         (b"jail_path", [p]) => line(&crate::jailpath::jail_path(p).ok_or(Exit(1))?),

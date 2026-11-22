@@ -108,6 +108,7 @@ pub const DRAIN_SH: &str = r###"dl=$1; shift; rc=0
 pub const STILL_SH: &str = r###"for p; do [ "$(cat "/proc/$p/comm" 2>/dev/null)" != wf-recorder ] || { [ -z "$S" ] || kill "-$S" "$p"; R=0; }; done; exit ${R:-1}"###;
 pub const WRITE_SH: &str = r###"mkdir -p "${1%/*}" && cat > "$1""###;
 pub const SHEETDIR_SH: &str = r###"rm -rf "$1" && mkdir -p "$1""###;
+#[cfg(test)]
 pub const BYTES_H_AWK: &str = r###"BEGIN { if (b < 1048576) printf "%d bytes", b; else if (b < 1073741824) printf "%.1f MiB", b / 1048576; else printf "%.1f GiB", b / 1073741824 }"###;
 pub const LAYOUT_JQ: &str = r###"
     [.[] | select((.disabled | not) and .width > 0 and .height > 0) | . + {lw: lw, lh: lh}] as $m
