@@ -15287,6 +15287,48 @@ from them.
     refusal too, `validator_not_there_said`, `compare_json_tab_in_paths`, which failed before:
     jq printed nothing); `t_throwaway_term` (a TERM to run as its up appears: 143, the up ended
     before run, within 2.5 s; before: 3445 ms, failed).
+755. **`record sheet`'s video, a box's logs and an output's folders are read and written as the
+    box cannot choose** (2026-11-22, the review's second round). Three ways a box still reached the
+    host. **`record sheet VIDEO`** with the box up opened VIDEO by path, following links, and piped
+    whatever it was into the box HOME: a box that swapped its own `take.mp4` (recorded with `-o` in
+    its HOME, as 749 expects) for a link to `~/.config/omarchy/api-keys.env` got the file copied into
+    its `.cache/omabox-record`, a link to `/dev/zero` filled the disk (that copy had no cap), a FIFO
+    hung the open. `record_stop.rs`'s `open_video` now holds VIDEO's folder as `shots::hold_folder`
+    walks it (below) and opens the name in it (a link there followed only outside a box's folders,
+    as a folder link is: the user's own link to a video still works), `O_NONBLOCK`, a regular file
+    by its fstat, at most REC_MAX (as a jailed caller's fd); the copy takes no more than that size. The
+    no-box way (`sheet_host_in`) opens it the same way (a FIFO hung it). **`log` and `look`** read a
+    box's logs whole: `log` by `cat` into `Out::Capture(None)` (a dead box's on the host, the same),
+    `events --since` by `tail -c +N`, and every look ran `log shell -n all --full` for its mark and
+    again for its problems. A box process that ran `truncate -s 1T ~/shell.log` made the next `log
+    shell` or look pull a terabyte of zeros into memory. `log`'s read is now the last 8 MiB
+    (`LOG_CAP`, boxes' `READ_CAP`: `timeout 20 tail -c` in the box, `tail_file` of an `open_regular`
+    fd on the host), from the first whole line, the cut said (`... is larger than 8 MiB: its last 8
+    MiB read`); events' from a mark the first 8 MiB, cut at a line; `-f`'s lines 1 MiB at most a
+    read; look reads `shell.log` itself through the box folder's HOME fd (`box_home_file`): its mark
+    the first line (4 KiB) and the fstat length, its problems from the mark on, 8 MiB at most. And
+    `log`'s lines (with `-f` too) and `events`' were printed as the box wrote them, so OSC 52 or OSC
+    8 in a log reached the terminal: they go through `term::plain` uncut (`log::plain_log`: control
+    characters but newline and tab, and bytes that are no UTF-8, as `?`). No `--raw` exists;
+    `--json` (notifications) was plain already. **An `-o` whose folder the box made a link**:
+    `OutFile::at` (and `shot_path`) ran `mkdir -p` and `readlink -f` on the path, then held the
+    folder they resolved, so `record -o BOXHOME/out/take.mp4` with `out` a box's link to `~/Videos`
+    replaced `~/Videos/take.mp4` (its marks and captions too), and `mkdir -p` made host folders
+    through it. `shots::hold_folder` resolves the folder itself, a component at a time from `/`, as
+    `readlink -f` would, but a link met in a box's folder (`box_writable`: a box HOME,
+    `HOMES/NAME/home`, or a runtime dir, `$XDG_RUNTIME_DIR/omabox/NAME/run`, or under them) is
+    refused (`... is a link in a box's folder: omabox follows none there`), whichever way the path
+    came there; the box dir's own `home` link (up's) is outside them and followed. The path it gives
+    has no link in it, so `OutDir::open` (`O_NOFOLLOW` a folder at a time) refuses one planted
+    after; missing folders are made by `mkdirat` from the held folder before them, never through a
+    link. A link outside a box's folders is followed as before. Tests: `shots.rs`'s
+    `out_file_follows_no_box_folder_link`, `record_stop.rs`'s `sheet_video_opens_no_link_no_fifo`,
+    `log.rs`'s `a_box_log_is_capped_and_plain`, `look.rs`'s `the_shell_log_is_read_bounded` (a
+    sparse 1 TiB log); `t_hostile_reads` (a log line's OSC 52 said plain; a sparse 1 TiB log read
+    under a 4 GiB address-space limit, its tail and the cut said; `record sheet` of a link to a host
+    file, to `/dev/zero`, a FIFO and a file behind a folder link: refused, nothing copied; `shot -o`
+    through a box's folder link: refused, nothing in the host folder); `t_record_links` (`record
+    start -o` through a folder link planted before the start: refused).
 
 757. **The guard's theme stand-ins no longer pass on a socket display; four of the review's fixes
     made gentler** (2026-11-22, the review's second round). **The display decided:** 750's

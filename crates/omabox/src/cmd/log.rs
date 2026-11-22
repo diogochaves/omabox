@@ -48,6 +48,34 @@ pub fn cut_lines(text: &[u8], width: usize) -> Vec<u8> {
     v.join(&b'\n')
 }
 
+/// The longest line -f holds at once.
+const LINE_CAP: u64 = 1 << 20;
+
+/// What a read of one box log takes at most (S7: bounded on the host's side; finding 755).
+pub const LOG_CAP: u64 = crate::boxes::READ_CAP;
+
+/// A log's tail read as CAP + 1 bytes: more than CAP means it was cut, and then only what follows its
+/// first newline in the last CAP bytes is kept (a line cut in two is not shown as a whole one).
+pub fn capped(mut v: Vec<u8>, cap: u64) -> (Vec<u8>, bool) {
+    let cap = usize::try_from(cap).unwrap_or(usize::MAX);
+    if v.len() <= cap {
+        return (v, false);
+    }
+    let from = v.len() - cap;
+    let start = v[from..]
+        .iter()
+        .position(|&c| c == b'\n')
+        .map_or(from, |i| from + i + 1);
+    v.drain(..start);
+    (v, true)
+}
+
+/// A box's log text, fit for the terminal (S7, finding 755): every control character but newline
+/// and tab, and every byte that is no UTF-8, as `?`; never cut here (the width cuts lines).
+pub fn plain_log(v: &[u8]) -> Vec<u8> {
+    crate::term::plain_cap(v, usize::MAX)
+}
+
 /// Where a log is read: in the box (as it sees the path) or on the host (the box dir's own).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -78,25 +106,45 @@ impl Reading {
         })
     }
 
-    /// log_cat: log KIND PATH whole (`$(...)`'s input: a refusal said, nothing read).
+    /// log_cat: log KIND PATH, its last LOG_CAP bytes at most (S7: a box writes its logs, and a
+    /// sparse terabyte of one would be read here whole; finding 755), from the first whole line in
+    /// them, the cut said (`$(...)`'s input: a refusal said, nothing read).
     pub fn cat(&self, ctx: &Ctx, kind: Kind, p: &[u8]) -> Vec<u8> {
         let host = |p: &[u8]| {
-            crate::sig::command("cat")
-                .arg("--")
-                .arg(std::ffi::OsStr::from_bytes(p))
-                .stderr(Stdio::inherit())
-                .output()
-                .map(|o| o.stdout)
+            crate::shots::open_regular(p)
+                .map(|f| crate::boxes::tail_file(f, LOG_CAP + 1))
                 .unwrap_or_default()
         };
-        match (kind, self.live) {
+        let got = match (kind, self.live) {
             (Kind::Host, _) => host(p),
             (Kind::Box, true) => {
-                let argv = vec![b"cat".to_vec(), b"--".to_vec(), p.to_vec()];
-                on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Inherit).out
+                let argv = vec![
+                    b"timeout".to_vec(),
+                    b"20".to_vec(),
+                    b"tail".to_vec(),
+                    b"-c".to_vec(),
+                    (LOG_CAP + 1).to_string().into_bytes(),
+                    b"--".to_vec(),
+                    p.to_vec(),
+                ];
+                let cap = usize::try_from(LOG_CAP + 1).unwrap_or(usize::MAX);
+                on_box(ctx, &argv, false, Out::Capture(Some(cap)), ErrTo::Inherit).out
             }
             (Kind::Box, false) => host(&log_dead_path(ctx, p).unwrap_or_default()),
+        };
+        let (data, cut) = capped(got, LOG_CAP);
+        if cut {
+            say(cat!(
+                ctx.label(),
+                p,
+                " is larger than ",
+                (LOG_CAP >> 20).to_string(),
+                " MiB: its last ",
+                (LOG_CAP >> 20).to_string(),
+                " MiB read"
+            ));
         }
+        data
     }
 
     /// log_grep: the lines matching --grep (all without one), each ending in a newline.
@@ -531,7 +579,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             sep = b"\n";
         }
         if !text.is_empty() {
-            out(cat!(cut_lines(&text, width), "\n"))?;
+            out(cat!(cut_lines(&plain_log(&text), width), "\n"))?;
         }
     }
     Ok(())
@@ -669,7 +717,8 @@ fn notices_lines(
     let mut line = Vec::new();
     loop {
         line.clear();
-        match lines.read_until(b'\n', &mut line) {
+        // (a line LINE_CAP long at most: a box's log with no newline is read a piece at a time)
+        match std::io::Read::take(&mut lines, LINE_CAP).read_until(b'\n', &mut line) {
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
@@ -721,7 +770,8 @@ fn show(
     let mut line = Vec::new();
     loop {
         line.clear();
-        match lines.read_until(b'\n', &mut line) {
+        // (a line LINE_CAP long at most: a box's log with no newline is read a piece at a time)
+        match std::io::Read::take(&mut lines, LINE_CAP).read_until(b'\n', &mut line) {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
@@ -747,7 +797,7 @@ fn show(
         }
         o.extend(std::iter::repeat_n(b'\n', blank));
         blank = 0;
-        o.extend_from_slice(&cat!(cut_line(l, width), "\n"));
+        o.extend_from_slice(&cat!(cut_line(&plain_log(l), width), "\n"));
         if stdout.write_all(&o).and_then(|()| stdout.flush()).is_err() {
             return 1;
         }
@@ -853,6 +903,21 @@ fn commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Finding 755: a box log read past LOG_CAP keeps the last CAP bytes from a whole line, and its
+    /// text reaches the terminal plain (newlines and tabs kept).
+    #[test]
+    fn a_box_log_is_capped_and_plain() {
+        assert_eq!(capped(b"ab\ncd".to_vec(), 5), (b"ab\ncd".to_vec(), false));
+        assert_eq!(capped(b"xab\ncd".to_vec(), 5), (b"cd".to_vec(), true));
+        assert_eq!(capped(b"xabcd".to_vec(), 3), (b"bcd".to_vec(), true));
+        assert_eq!(
+            plain_log(b"a\tb\n\x1b]52;c;aGk=\x07\x1b]8;;http://x\x1b\\l\r\xff"),
+            b"a\tb\n?]52;c;aGk=??]8;;http://x?\\l??"
+        );
+        let long = vec![b'a'; 1000];
+        assert_eq!(plain_log(&long), long, "never cut here");
+    }
 
     #[test]
     fn long_lines_cut() {

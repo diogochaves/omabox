@@ -283,6 +283,27 @@ impl OutDir {
         rc(unsafe { libc::renameat(self.fd(), f.as_ptr(), self.fd(), t.as_ptr()) }).map(|_| ())
     }
 
+    /// NAME made a folder in this one (there already: fine) and held, never through a link.
+    pub fn mkdir_open(&self, name: &[u8]) -> std::io::Result<OutDir> {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        let c = c_name(name)?;
+        // SAFETY: the folder's fd is open, c a valid C string.
+        let r = unsafe { libc::mkdirat(self.fd(), c.as_ptr(), 0o777) };
+        if r != 0 {
+            let e = std::io::Error::last_os_error();
+            if e.raw_os_error() != Some(libc::EEXIST) {
+                return Err(e);
+            }
+        }
+        let fl = libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: as above; openat only adds a descriptor of ours.
+        let fd = rc(unsafe { libc::openat(self.fd(), c.as_ptr(), fl) })?;
+        // SAFETY: fd was just opened and is ours alone.
+        Ok(OutDir(std::sync::Arc::new(unsafe {
+            OwnedFd::from_raw_fd(fd)
+        })))
+    }
+
     /// NAME in the folder removed.
     pub fn remove(&self, name: &[u8]) -> std::io::Result<()> {
         let c = c_name(name)?;
@@ -340,6 +361,148 @@ impl OutDir {
     }
 }
 
+/// Whether folder P (resolved) is one a box writes: a box HOME (`HOMES/NAME/home`) or a box's
+/// runtime dir (`$XDG_RUNTIME_DIR/omabox/NAME/run`), or anything under them. A link in there is the
+/// box's to plant, so a caller's path is never resolved through one (S7).
+pub fn box_writable(p: &[u8]) -> bool {
+    let runtime = shell::env_or_empty("XDG_RUNTIME_DIR");
+    let mut roots = vec![(real(&crate::paths::homes()), &b"home"[..])];
+    if !runtime.is_empty() {
+        roots.push((real(&cat!(runtime, "/omabox")), &b"run"[..]));
+    }
+    roots
+        .iter()
+        .any(|(root, sub)| !root.is_empty() && under_box_part(p, root, sub))
+}
+
+/// Whether P is ROOT/NAME/SUB or under it.
+pub fn under_box_part(p: &[u8], root: &[u8], sub: &[u8]) -> bool {
+    let Some(rest) = p.strip_prefix(root).and_then(|r| r.strip_prefix(b"/")) else {
+        return false;
+    };
+    let mut parts = rest.split(|&c| c == b'/');
+    parts.next().is_some_and(|n| !n.is_empty()) && parts.next() == Some(sub)
+}
+
+/// DIR resolved a folder at a time from `/` (or the cwd), as `readlink -f` resolves it, but a link
+/// met in a folder GUARDED names (box_writable) refused, never followed: the folders that are there
+/// (resolved, with no link in it) and the names after them that are not (each a plain name).
+#[allow(clippy::type_complexity)]
+pub fn walk_folder(
+    dir: &[u8],
+    guarded: &dyn Fn(&[u8]) -> bool,
+) -> Result<(Vec<u8>, Vec<Vec<u8>>), Vec<u8>> {
+    if dir.is_empty() {
+        return Err(b"cannot resolve an empty path".to_vec());
+    }
+    let mut cur: Vec<u8> = if dir[0] == b'/' {
+        b"/".to_vec()
+    } else {
+        std::env::current_dir()
+            .map(|d| shell::bytes(&d).to_vec())
+            .map_err(|e| cat!("cannot resolve ", dir, ": ", why(&e)))?
+    };
+    let mut todo: std::collections::VecDeque<Vec<u8>> = dir
+        .split(|&c| c == b'/')
+        .filter(|c| !c.is_empty() && *c != b".")
+        .map(<[u8]>::to_vec)
+        .collect();
+    let mut missing: Vec<Vec<u8>> = Vec::new();
+    let mut hops = 0;
+    let join = |a: &[u8], b: &[u8]| {
+        if a == b"/" {
+            cat!("/", b)
+        } else {
+            cat!(a, "/", b)
+        }
+    };
+    while let Some(c) = todo.pop_front() {
+        if c == b".." {
+            if missing.pop().is_none() && cur.len() > 1 {
+                let i = cur.iter().rposition(|&b| b == b'/').unwrap_or(0);
+                cur.truncate(i.max(1));
+            }
+            continue;
+        }
+        if !missing.is_empty() {
+            missing.push(c);
+            continue;
+        }
+        let next = join(&cur, &c);
+        let st = match std::fs::symlink_metadata(shell::path(&next)) {
+            Ok(st) => st,
+            Err(e) if e.raw_os_error() == Some(libc::ENOENT) => {
+                missing.push(c);
+                continue;
+            }
+            Err(e) => return Err(cat!("cannot resolve ", next, ": ", why(&e))),
+        };
+        if st.file_type().is_symlink() {
+            if guarded(&cur) {
+                return Err(cat!(
+                    next,
+                    " is a link in a box's folder: omabox follows none there (name a folder of the box's own, or one outside it)"
+                ));
+            }
+            hops += 1;
+            if hops > 40 {
+                return Err(cat!("cannot resolve ", dir, ": too many links"));
+            }
+            let t = std::fs::read_link(shell::path(&next))
+                .map_err(|e| cat!("cannot resolve ", next, ": ", why(&e)))?;
+            let t = shell::bytes(&t).to_vec();
+            if t.first() == Some(&b'/') {
+                cur = b"/".to_vec();
+            }
+            for p in t
+                .split(|&b| b == b'/')
+                .filter(|p| !p.is_empty() && *p != b".")
+                .rev()
+            {
+                todo.push_front(p.to_vec());
+            }
+            continue;
+        }
+        if !st.is_dir() {
+            return Err(cat!("cannot write in ", next, ": it is no folder"));
+        }
+        cur = next;
+    }
+    Ok((cur, missing))
+}
+
+/// DIR's folder held (OutDir), as walk_folder resolves it (a link in a box's folder refused), the
+/// folders still missing made (MAKE) one at a time in the folder before, none through a link: its
+/// path as held, and the hold.
+pub fn hold_folder(
+    dir: &[u8],
+    make: bool,
+    guarded: &dyn Fn(&[u8]) -> bool,
+) -> Result<(Vec<u8>, OutDir), Vec<u8>> {
+    let (mut path, missing) = walk_folder(dir, guarded)?;
+    if !missing.is_empty() && !make {
+        return Err(cat!(
+            "cannot read in ",
+            dir,
+            ": ",
+            why(&std::io::Error::from_raw_os_error(libc::ENOENT))
+        ));
+    }
+    let mut held =
+        OutDir::open(&path).map_err(|e| cat!("cannot write in ", path, ": ", why(&e)))?;
+    for m in missing {
+        path = if path == b"/" {
+            cat!("/", m)
+        } else {
+            cat!(path, "/", m)
+        };
+        held = held
+            .mkdir_open(&m)
+            .map_err(|e| cat!("cannot make the directory ", dir, ": ", why(&e)))?;
+    }
+    Ok((path, held))
+}
+
 /// shot_path OUT: OUT's directory made, then OUT (resolved) written once and removed as OUT.part, so
 /// a path that cannot be written stops here, saying why (issue #63). OUT resolved, its FILE and the
 /// folder they are in, held (OutDir: where the shot is then made and renamed). OUT and OUT.part are
@@ -348,14 +511,14 @@ pub fn shot_path(ctx: &Ctx, out: &[u8]) -> Res<(Vec<u8>, Vec<u8>, OutDir)> {
     if let Some(m) = overwrite_refusal(out) {
         return Err(ctx.die(cat!("shot: ", m)));
     }
-    let dir = dirname(out);
-    if !mkdir_p(&dir) {
-        return Err(ctx.die(cat!("shot: cannot make the directory ", dir)));
-    }
-    let out = real_or_end(ctx, out)?;
+    let (folder, held) =
+        hold_folder(&dirname(out), true, &box_writable).map_err(|m| ctx.die(cat!("shot: ", m)))?;
+    let out = if folder == b"/" {
+        cat!("/", shell::basename(out))
+    } else {
+        cat!(folder, "/", shell::basename(out))
+    };
     let file = cat!(out, ".part");
-    let held = OutDir::open(&dirname(&out))
-        .map_err(|e| ctx.die(cat!("shot: cannot write ", out, ": ", why(&e))))?;
     let (ob, fb) = (shell::basename(&out), shell::basename(&file));
     if let Some(m) = held.refusal(&ob, &out).or_else(|| held.refusal(&fb, &file)) {
         return Err(ctx.die(cat!("shot: ", m)));
@@ -386,6 +549,15 @@ impl OutFile {
     /// resolved, the folder held, NAME and NAME.part checked again in it, and NAME.part made once
     /// and removed (a path that cannot be written stops here). Err: the words for why.
     pub fn at(out: &[u8], png: bool) -> Result<OutFile, Vec<u8>> {
+        OutFile::at_in(out, png, &box_writable)
+    }
+
+    /// `at`, a folder link refused wherever GUARDED says the box writes (box_writable; a test's own).
+    pub fn at_in(
+        out: &[u8],
+        png: bool,
+        guarded: &dyn Fn(&[u8]) -> bool,
+    ) -> Result<OutFile, Vec<u8>> {
         let named = if png {
             overwrite_refusal(out)
         } else {
@@ -394,23 +566,11 @@ impl OutFile {
         if let Some(m) = named {
             return Err(m);
         }
-        let dir = dirname(out);
-        if !mkdir_p(&dir) {
-            return Err(cat!("cannot make the directory ", dir));
-        }
-        let Some(real) = crate::repo::readlink_f(out) else {
-            return Err(cat!(
-                "cannot resolve ",
-                out,
-                " (a folder on its way is missing or cannot be looked into, or a link loops)"
-            ));
-        };
-        let folder = dirname(&real);
-        let held = OutDir::open(&folder).map_err(|e| cant_write(&real, &e))?;
+        let (folder, held) = hold_folder(&dirname(out), true, guarded)?;
         let f = OutFile {
             dir: held,
             folder,
-            name: shell::basename(&real),
+            name: shell::basename(out),
             png,
         };
         f.check()?;
@@ -1306,6 +1466,60 @@ mod tests {
             .unwrap()
             .remove();
         assert!(intact());
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    /// Finding 755: a folder link a box planted in its HOME is refused on an output's way (never
+    /// followed into a host folder, nothing made there), a link outside a box's folders followed as
+    /// before, missing folders made through no link, and a box's folders known by their place.
+    #[test]
+    fn out_file_follows_no_box_folder_link() {
+        use std::os::unix::fs::symlink;
+        let t = std::env::temp_dir().join(format!("omabox-outlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let (homes, host) = (t.join("homes"), t.join("host"));
+        let home = homes.join("b/home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&host).unwrap();
+        std::fs::write(host.join("take.mp4"), "keep").unwrap();
+        let root = shell::bytes(&homes).to_vec();
+        let guarded = move |p: &[u8]| under_box_part(p, &root, b"home");
+        let p = |r: &str| shell::bytes(&t.join(r)).to_vec();
+        // The box made `out` a link to a host folder: refused, the host file as it was.
+        symlink(&host, home.join("out")).unwrap();
+        let e = OutFile::at_in(&p("homes/b/home/out/take.mp4"), false, &guarded)
+            .err()
+            .unwrap();
+        assert!(crate::exit::contains(&e, b"is a link in a box's folder"));
+        assert!(OutFile::at_in(&p("homes/b/home/out/new/v.mp4"), false, &guarded).is_err());
+        assert!(!host.join("new").exists(), "no host folder made through it");
+        assert_eq!(std::fs::read(host.join("take.mp4")).unwrap(), b"keep");
+        // ...and a link that leads into it from outside, to the same link: refused too.
+        symlink(home.join("out"), t.join("via")).unwrap();
+        assert!(OutFile::at_in(&p("via/take.mp4"), false, &guarded).is_err());
+        // Outside a box's folders, a link is followed as before; missing folders made.
+        symlink(&host, t.join("mine")).unwrap();
+        let f = OutFile::at_in(&p("mine/a/b/v.mp4"), false, &guarded).unwrap();
+        assert_eq!(f.path(), p("host/a/b/v.mp4"));
+        f.put(&mut b"video".as_slice()).unwrap();
+        assert_eq!(std::fs::read(host.join("a/b/v.mp4")).unwrap(), b"video");
+        // In a box HOME, its own folders are fine; `..` taken in place.
+        let f = OutFile::at_in(&p("homes/b/home/x/../y/v.mp4"), false, &guarded).unwrap();
+        assert_eq!(f.path(), p("homes/b/home/y/v.mp4"));
+        // Held to read: nothing made, a missing folder refused.
+        assert!(hold_folder(&p("homes/b/home/none"), false, &guarded).is_err());
+        assert!(!home.join("none").exists());
+        // The places: HOMES/NAME/home and under it, not HOMES/NAME or HOMES.
+        assert!(under_box_part(b"/h/b/home", b"/h", b"home"));
+        assert!(under_box_part(b"/h/b/home/x", b"/h", b"home"));
+        assert!(!under_box_part(b"/h/b", b"/h", b"home"));
+        assert!(!under_box_part(b"/h", b"/h", b"home"));
+        assert!(!under_box_part(b"/hx/b/home", b"/h", b"home"));
+        assert!(under_box_part(
+            b"/r/omabox/b/run/hypr",
+            b"/r/omabox",
+            b"run"
+        ));
         let _ = std::fs::remove_dir_all(&t);
     }
 

@@ -6,7 +6,7 @@
 use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::{BoxPid, box_alive, box_pid, need_box, touch};
 use crate::cat;
-use crate::cmd::log::{Kind, Reading, live, tail_lines};
+use crate::cmd::log::{Kind, LOG_CAP, Reading, live, tail_lines};
 use crate::desk::events_log;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
@@ -170,7 +170,15 @@ impl Show {
             String::from_utf8_lossy(&int).parse().unwrap_or(0)
         };
         let frac = &ts[ts.iter().position(|&c| c == b'.').map_or(0, |i| i + 1)..];
-        cat!(hms(secs), ".", frac, " ", rest, "\n")
+        // (the box's words, said plain: S7, finding 755)
+        cat!(
+            hms(secs),
+            ".",
+            crate::cmd::log::plain_log(frac),
+            " ",
+            crate::cmd::log::plain_log(rest),
+            "\n"
+        )
     }
 
     fn show(&self, data: &[u8]) -> Vec<u8> {
@@ -199,7 +207,7 @@ fn events_size(ctx: &Ctx) -> Option<Vec<u8>> {
         b"--".to_vec(),
         events_log(&ctx.d),
     ];
-    let r = on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Null);
+    let r = on_box(ctx, &argv, false, Out::Capture(Some(64)), ErrTo::Null);
     (r.rc == 0).then(|| shell::subst(&r.out))
 }
 
@@ -484,26 +492,41 @@ fn events_from(ctx: &Ctx, rd: &Reading, from: i64) -> Vec<u8> {
     if from == 0 {
         return rd.cat(ctx, Kind::Box, &events_log(&ctx.d));
     }
-    let part = if rd.live {
+    // (LOG_CAP bytes from the mark at most, the last line they cut in two left out: S7, finding 755)
+    let cap = usize::try_from(LOG_CAP).unwrap_or(usize::MAX);
+    let mut part = if rd.live {
         let argv = vec![
+            b"timeout".to_vec(),
+            b"20".to_vec(),
             b"tail".to_vec(),
             b"-c".to_vec(),
             format!("+{from}").into_bytes(),
             b"--".to_vec(),
             events_log(&ctx.d),
         ];
-        on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Inherit).out
+        on_box(ctx, &argv, false, Out::Capture(Some(cap)), ErrTo::Inherit).out
     } else {
+        use std::io::{Read, Seek, SeekFrom};
         let p = log_dead_path(ctx, &events_log(&ctx.d)).unwrap_or_default();
-        crate::sig::command("tail")
-            .arg("-c")
-            .arg(format!("+{from}"))
-            .arg("--")
-            .arg(shell::path(&p))
-            .output()
-            .map(|o| o.stdout)
-            .unwrap_or_default()
+        let mut v = Vec::new();
+        if let Some(mut f) = crate::shots::open_regular(&p) {
+            // (`tail -c +N`: from byte N, counted from 1)
+            let at = u64::try_from(from - 1).unwrap_or(0);
+            if f.seek(SeekFrom::Start(at)).is_ok() {
+                let _ = f.take(LOG_CAP).read_to_end(&mut v);
+            }
+        }
+        v
     };
+    if part.len() >= cap {
+        let end = part.iter().rposition(|&c| c == b'\n').map_or(0, |i| i + 1);
+        part.truncate(end);
+        say(format!(
+            "events: more than {} MiB since the mark: its first {} MiB read",
+            LOG_CAP >> 20,
+            LOG_CAP >> 20
+        ));
+    }
     // (`tail -n +2`: from the second line)
     match part.iter().position(|&c| c == b'\n') {
         Some(i) => part[i + 1..].to_vec(),
