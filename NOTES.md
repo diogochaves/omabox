@@ -15061,6 +15061,40 @@ from them.
     mount it, so `run -- test -e /run/dbus` pointed an agent at copying the system bus. When
     `refuse_src` refuses the path's folder the note now says only that no box may have it and why;
     under `/run/dbus` it adds that a box has a session bus of its own (`up --polkit` for polkit).
+750. **Omarchy's theme, wallpaper and font commands changed the real desktop under the guard; Codex's
+    guard was less than its docs said** (2026-11-22, review). The README and docs/guard.md said
+    `omarchy-theme-set` fails under the guard. Omarchy 4.5's has no `set -e` and needs no display:
+    only its `hyprctl` and `omarchy-shell` calls failed, and it still rebuilt
+    `~/.local/state/omarchy/current/theme`, repointed the background, signalled kitty and ghostty,
+    rewrote tmux, btop, editor and browser colours, ran gsettings and the theme-set hook.
+    `omarchy-theme-bg-set` repoints `current/background` before its best-effort `omarchy-shell -q`
+    (t_unit_guard_theme_set's control runs Omarchy's own by its path under `guard exec` with a HOME
+    of its own: the link moves), `omarchy-theme-bg-next` runs it, and `omarchy-font-set` rewrites the
+    terminals' configs and fontconfig and signals kitty and ghostty (read, not run: it signals the
+    real terminals whatever HOME says). `share/guard/omarchy-theme-set` now refuses while the display
+    names no socket, with what it would change and `up --theme`, `look theme` or `run --` for a box
+    and `host --` for the desktop, and passes a socket display on to the next one on PATH, as the
+    omarchy-shell stand-in does; `omarchy-theme-bg-set`, `-bg-next` and `omarchy-font-set` are
+    three-line files that run it under their own name (`OMABOX_GUARD_AS`, unset before the real
+    one). One of Omarchy's commands running it by name (`omarchy-theme-refresh`,
+    `omarchy-theme-install`) is named as the caller. Not caught, and said in docs/guard.md:
+    `omarchy theme set` and the rest of the `omarchy` dispatcher (it runs each command by its path),
+    and commands that only write files (`omarchy-theme-install`'s clone, `omarchy-theme-remove`,
+    `omarchy-theme-bg-intro`). Codex's guard sets variables only, so it has none of the stand-ins
+    (141, 741): docs/guard.md now lists what that leaves (`omarchy restart shell` stops the real bar,
+    `hyprctl -i` reaches the real Hyprland, the theme commands, `xdg-open`) and names `omabox guard
+    exec -- codex` for the whole guard, and `guard on codex` says the same. It also makes the guard's
+    file itself (`front::make_guard_mark`, the one `guard_mark` uses; a link in its place is left and
+    said): only Codex's hook made it for Codex, and Codex runs a hook only once trusted, so until then
+    403's hole was open on a Codex-only machine until some omabox command ran. Its trust line says the
+    file is made now and not again after a reboot until an omabox command or the hook runs.
+    Tests: t_unit_guard_theme_set (the control; each stand-in is the guard's, exit 4, the messages,
+    the calling command named, nothing reaches the stubs after them, a socket display passes on with
+    the words whole and `OMABOX_GUARD_AS` gone); t_unit_guard_exec_host (`host` gets none of them);
+    t_unit_guard_settings (`guard on codex` from outside the guard makes the file in a runtime dir of
+    its own, says so and names `guard exec -- codex`; a link there left, nothing made through it). Its
+    `g`, t_unit_guard_codex_merge's and the hook-version check's `guard on` now run with a runtime dir
+    of their own.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

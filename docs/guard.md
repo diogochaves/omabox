@@ -6,9 +6,10 @@ What the guard does, what it sets for each agent, and what it does not stop. Bac
 The skill is advice: an agent that does not think of `./build/tests/tst_x` as GUI work still opens
 its windows on your desktop, because its shell holds your real display. The guard (opt-in; Claude
 Code and Codex, or any agent through `guard exec`) makes that fail instead: agents' shells get a
-display that does not exist, so a stray window, `hyprctl`, `grim` or `omarchy-theme-set` fails with
-an error the skill explains, and a link an agent opens is refused instead of landing in your
-browser. `install.sh` asks (yes by default); it never turns the guard on by itself.
+display that does not exist, so a stray window, `hyprctl` or `grim` fails with an error the skill
+explains, Omarchy's theme, wallpaper and font commands are refused by name, and a link an agent
+opens is refused instead of landing in your browser. `install.sh` asks (yes by default); it never
+turns the guard on by itself.
 
 ```bash
 omabox guard on               # every installed agent (or: on claude | on codex); a backup next to each file
@@ -38,7 +39,14 @@ runtime directory, so the guard's display exists and `omarchy-shell` stays with 
 `hyprctl instances` lists your sessions and `-i`/`--instance SIG` talks to one. The same PATH puts
 `share/guard/hyprctl` first, which refuses `-i`/`--instance` (not `instances`, which only reads) and names `omabox hyprctl` (and `omabox host --
 hyprctl` for your own desktop, when you asked), and after a request that the guard's signature
-cannot reach, says the same.
+cannot reach, says the same. Omarchy's `omarchy-theme-set`, `omarchy-theme-bg-set`,
+`omarchy-theme-bg-next` and `omarchy-font-set` need no display at all: with the display gone only
+their calls to `hyprctl` and `omarchy-shell` fail, and the rest still switches your real theme
+(the files under `~/.local/state/omarchy/current`, the wallpaper link, your terminals, tmux, btop,
+GTK, browser and keyboard colours, the theme-set hook) or rewrites your terminals' fonts and
+fontconfig. The same PATH puts `share/guard` stand-ins for those four first, which refuse and name
+`omabox up --theme NAME`, `omabox look theme NAME` or `omabox run -- CMD` for a box (and `omabox host
+-- CMD` for your desktop, when you asked).
 
 - **Claude Code**: one `SessionStart` hook in `~/.claude/settings.json` (merged with yours). Every
   shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a
@@ -54,8 +62,17 @@ cannot reach, says the same.
   value of your own for one of them, or an inline table, is refused, untouched), and a
   `SessionStart` hook in `~/.codex/hooks.json` that gives the agent the same note. Codex runs that
   hook only after you trust it once (`/hooks` in Codex). No core limit. The block's values are fixed,
-  so they stay if omabox is gone: the hook then tells the agent how to take them out. The variables
-  were checked through `codex sandbox`, the hook only by what Codex's hooks.json takes, not in a
+  so they stay if omabox is gone: the hook then tells the agent how to take them out. Codex's `set`
+  cannot put a folder first on PATH, so Codex gets **none of the stand-ins** above: `omarchy restart
+  shell` from its shell stops your bar (the real `quickshell kill`; its relaunch through `hyprctl` then
+  fails), `hyprctl -i`/`--instance` reaches your Hyprland, `omarchy-theme-set` and the font and
+  wallpaper commands change your real look, and `xdg-open` opens on your desktop (only `BROWSER` and
+  `GH_BROWSER` name the guard's). To give Codex the whole guard, start it with `omabox guard exec --
+  codex` (Codex's own process then loses the display too). The guard's file in your runtime directory
+  (which keeps Omarchy 4.5's `omarchy-shell` off your shell) is made by `guard on codex` and, after
+  that, by the hook at each session start, or by any omabox command run from a guarded shell: until
+  you trust the hook, a reboot leaves Codex's sessions without it until such a command runs. The
+  variables were checked through `codex sandbox`, the hook only by what Codex's hooks.json takes, not in a
   logged-in session.
 - **Anything else**: `omabox guard exec -- AGENT` starts the agent itself under the guard. Its own
   process loses the display too (clipboard, opening a browser to log in; `xdg-open` refuses). It also
@@ -78,6 +95,14 @@ It stops accidents. It does not stop:
   directly reach your session);
 - processes the agent starts itself rather than through its shell (MCP servers: a headed browser
   MCP opens on your desktop);
+- Omarchy's own `omarchy` command (`omarchy theme set`, `omarchy font set`, `omarchy theme bg
+  next`): it runs each command by its path, past the stand-ins, so it changes your real theme, fonts
+  or wallpaper; nor the commands that only write your files without needing a display or the shell
+  (`omarchy-theme-install`, which clones into `~/.config/omarchy/themes` before its theme switch is
+  refused; `omarchy-theme-remove`; `omarchy-theme-bg-intro`);
+- under Codex (the variables only, no PATH entry; see above): the stand-ins, so `omarchy restart
+  shell` stops your bar, `hyprctl -i` reaches your Hyprland, the theme, font and wallpaper commands
+  change your look; `omabox guard exec -- codex` gives it all of them;
 - file writes: your shell watches `~/.config/omarchy/shell.json` and `~/.config/omarchy/plugins/`,
   so an agent editing them (or running `omarchy plugin add` on the host) changes your real bar at
   once; the skill sends those writes to the box's HOME;

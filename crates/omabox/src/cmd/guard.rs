@@ -461,12 +461,32 @@ fn codex_set(g: &Guard, act: &str) -> Result<(), Vec<u8>> {
     }
     let h = hooks_state(&hooks, &g.codex_hook())?;
     hooks_set(&hooks, &g.codex_hook(), act)?;
+    if act != "on" {
+        return Ok(());
+    }
+    // Finding 750: the guard's file, which keeps Omarchy 4.5's omarchy-shell off the user's shell
+    // (403), is made for Codex only by its hook, and Codex runs that once it is trusted. Made here for
+    // this login; a reboot empties the runtime dir.
+    let mark = crate::front::make_guard_mark();
     // Codex runs a new or changed hook only once you trust it; that is yours to do, not ours.
-    if act == "on" && h != b"on" {
+    if h != b"on" {
+        say(cat!(
+            "Codex asks you to trust its new hook once: /hooks in Codex. Until then its agents get the guard's variables but not its note, and ",
+            if mark {
+                "the guard's file in your runtime dir (made now) is not made again after a reboot until an omabox command runs"
+            } else {
+                "nothing makes the guard's file in your runtime dir (it could not be made now) until an omabox command runs"
+            },
+            ": without it Omarchy's omarchy-shell reaches your desktop's shell"
+        ));
+    } else if !mark {
         say(
-            "Codex asks you to trust its new hook once: /hooks in Codex (until then Codex has the guard but not its note)",
+            "could not make the guard's file in your runtime dir ($XDG_RUNTIME_DIR/omabox-guard): until Codex's hook or an omabox command makes it, Omarchy's omarchy-shell reaches your desktop's shell",
         );
     }
+    say(
+        "Codex gets the guard's variables only, none of its commands first on PATH: `omarchy restart shell` still stops your bar and `hyprctl -i` reaches your Hyprland from its shell. For the whole guard, start it as: omabox guard exec -- codex",
+    );
     Ok(())
 }
 

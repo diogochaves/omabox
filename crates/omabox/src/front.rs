@@ -212,18 +212,26 @@ pub fn guard_mark() {
     if crate::shell::env_or_empty("WAYLAND_DISPLAY") != crate::guard::GUARD.as_bytes() {
         return;
     }
+    let _ = make_guard_mark();
+}
+
+/// The guard's file in $XDG_RUNTIME_DIR, made when it is not there (`guard on codex` too, finding
+/// 750: Codex makes it only from its hook, which runs once trusted). Whether it is there now; anything
+/// already at that name, a link included, is left as it is.
+pub fn make_guard_mark() -> bool {
     let rt = crate::shell::env_or_empty("XDG_RUNTIME_DIR");
     if rt.is_empty() {
-        return;
+        return false;
     }
     let f = crate::shell::path(&cat!(rt, "/", crate::guard::GUARD));
-    if std::fs::symlink_metadata(&f).is_ok() || f.exists() {
-        return;
+    if std::fs::symlink_metadata(&f).is_ok() {
+        return f.exists();
     }
-    let _ = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .append(true)
         .create(true)
-        .open(f);
+        .open(f)
+        .is_ok()
 }
 
 /// What the front leaves for the command: its name and its words, and run's exit code for a
