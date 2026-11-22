@@ -1602,6 +1602,9 @@ mod tests {
         let db = shell::bytes(&d.join("b")).to_vec();
         let lk = d.join(".lock-b");
         let edit = |_: &Path| Some(b"{\"v\": 1}\n".to_vec());
+        // (a free lock is still waited for a moment: another test's fork holds a copy of a lock's fd
+        // until its exec, so a zero wait can read a free lock as busy)
+        const FREE: Duration = Duration::from_secs(2);
         // Another thread holds the lock (a save): not waited out.
         std::thread::scope(|s| {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -1627,19 +1630,16 @@ mod tests {
             "...nothing written"
         );
         assert_eq!(
-            edit_box_json_try(&db, &lk, b"", Duration::ZERO, edit),
+            edit_box_json_try(&db, &lk, b"", FREE, edit),
             Edited::Written
         );
         assert_eq!(
-            edit_box_json_try(&db, &lk, b"", Duration::ZERO, |_| None),
+            edit_box_json_try(&db, &lk, b"", FREE, |_| None),
             Edited::NotWritten
         );
         std::fs::remove_dir_all(d.join("b")).unwrap();
         let _ = std::fs::remove_file(&lk);
-        assert_eq!(
-            edit_box_json_try(&db, &lk, b"", Duration::ZERO, edit),
-            Edited::Gone
-        );
+        assert_eq!(edit_box_json_try(&db, &lk, b"", FREE, edit), Edited::Gone);
         let busy = record_note(b"restart-shell: ", b"b", "the X", Edited::Busy).unwrap();
         assert!(
             busy.starts_with(b"restart-shell: note: the X not recorded in box 'b''s box.json: its lock was busy for 3 s"),
