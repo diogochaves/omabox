@@ -236,37 +236,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             u.aq.howto()
         ));
     }
-    let render = u
-        .render
-        .clone()
-        .ok_or_else(|| ctx.die("up: no render node"))?;
-    let mut renders: Vec<RenderNode> = Vec::new();
-    let mut nvidia_devs: Vec<NvidiaDev> = Vec::new();
-    let mut nvidia_cards: Vec<Vec<u8>> = Vec::new();
-    let mut wayland_screen = false;
-    if u.interactive {
-        renders = render::render_nodes();
-        // An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering
-        // on it.
-        for n in &renders {
-            if n.driver() != b"nvidia" {
-                continue;
-            }
-            if let Some(dev) = crate::exit::muted(|| render::nvidia_device(ctx, n, false).ok()) {
-                nvidia_devs.push(dev);
-                nvidia_cards.push(render::nvidia_card(n).unwrap_or_default());
-            }
-        }
-    } else if render.driver() == b"nvidia" {
-        renders.push(render.clone());
-        let dev = render::nvidia_device(ctx, &render, true)
-            .map_err(|_| ctx.die(cat!("cannot use NVIDIA render node ", render.as_bytes())))?;
-        nvidia_devs.push(dev);
-        nvidia_cards.push(render::nvidia_card(&render).unwrap_or_default());
-        wayland_screen = true;
-    } else {
-        renders.push(render.clone());
-    }
+    let devs = pick_devices(ctx, &u)?;
     // The owner's start time with its pid, as for an agent: a pid reused after a SIGKILLed run is
     // not it.
     let owner = (!u.owner.is_empty()).then(|| Owner {
@@ -289,8 +259,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     let bj = box_json(
         ctx,
         &u,
-        &render,
-        wayland_screen,
+        &devs,
         &owner,
         &starter,
         at_term,
@@ -319,18 +288,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     }
     let etc = etc_files(ctx, &u)?;
     let protect = u.protect.clone();
-    let args = bwrap_args(
-        ctx,
-        &u,
-        &render,
-        &renders,
-        &nvidia_devs,
-        &nvidia_cards,
-        wayland_screen,
-        &etc,
-        &desk_fonts,
-        &helpers,
-    )?;
+    let args = bwrap_args(ctx, &u, &devs, &etc, &desk_fonts, &helpers)?;
     let script = launch_script(ctx, &u, &args, &protect)?;
     if !write(&cat!(d, "/launch.sh"), &script) {
         return Err(ctx.die(cat!("up: could not write ", d, "/launch.sh")));
@@ -704,6 +662,61 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     Ok(())
 }
 
+/// The GPU devices a box gets (S1: render nodes and NVIDIA's own nodes, never a card), chosen once
+/// by `pick_devices` and handed to `box_json` (what it records) and `bwrap_args` (what it binds).
+struct Devices {
+    /// The render node the box renders on (box.json's `render`, OMABOX_RENDER_NODE).
+    render: RenderNode,
+    /// Every render node bound into the box: the chosen one, or an interactive box's all.
+    renders: Vec<RenderNode>,
+    /// Each NVIDIA render node's userspace device with its card's name (empty when it has none),
+    /// whose placeholder file stands at /dev/dri/cardN (#204): always found together.
+    nvidia: Vec<(NvidiaDev, Vec<u8>)>,
+    /// A headless box on an NVIDIA node: its screen is reapplied once it is up (box.json's
+    /// `wayland_screen`).
+    wayland_screen: bool,
+}
+
+/// The box's GPU devices: an interactive box gets every render node (with the NVIDIA ones whose
+/// userspace nodes are there), a headless one its own render node, and that node's NVIDIA nodes when
+/// it is NVIDIA's (up ends when they are missing).
+fn pick_devices(ctx: &Ctx, u: &Up) -> Res<Devices> {
+    let render = u
+        .render
+        .clone()
+        .ok_or_else(|| ctx.die("up: no render node"))?;
+    let mut renders: Vec<RenderNode> = Vec::new();
+    let mut nvidia: Vec<(NvidiaDev, Vec<u8>)> = Vec::new();
+    let mut wayland_screen = false;
+    if u.interactive {
+        renders = render::render_nodes();
+        // An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering
+        // on it.
+        for n in &renders {
+            if n.driver() != b"nvidia" {
+                continue;
+            }
+            if let Some(dev) = crate::exit::muted(|| render::nvidia_device(ctx, n, false).ok()) {
+                nvidia.push((dev, render::nvidia_card(n).unwrap_or_default()));
+            }
+        }
+    } else if render.driver() == b"nvidia" {
+        renders.push(render.clone());
+        let dev = render::nvidia_device(ctx, &render, true)
+            .map_err(|_| ctx.die(cat!("cannot use NVIDIA render node ", render.as_bytes())))?;
+        nvidia.push((dev, render::nvidia_card(&render).unwrap_or_default()));
+        wayland_screen = true;
+    } else {
+        renders.push(render.clone());
+    }
+    Ok(Devices {
+        render,
+        renders,
+        nvidia,
+        wayland_screen,
+    })
+}
+
 /// What up launched, for its undo: the headless box's launcher (`bash launch.sh`, which becomes
 /// pasta, or bwrap without it), or that the host Hyprland was asked to run it (interactive).
 #[derive(Default)]
@@ -850,8 +863,7 @@ fn start_reaper(ctx: &Ctx) {
 fn box_json(
     ctx: &Ctx,
     u: &Up,
-    render: &RenderNode,
-    wayland_screen: bool,
+    devs: &Devices,
     owner: &Option<Owner>,
     starter: &[u8],
     at_term: bool,
@@ -938,7 +950,7 @@ fn box_json(
     // runs one tells it replaced on the host since, which the box keeps as it was.
     let binds: Vec<(&str, Vec<u8>)> = helpers.iter().map(|h| (h.name, h.src.clone())).collect();
     o.insert("helpers".into(), crate::helpers::record(&binds));
-    o.insert("wayland_screen".into(), Value::Bool(wayland_screen));
+    o.insert("wayland_screen".into(), Value::Bool(devs.wayland_screen));
     o.insert("xwayland".into(), Value::Bool(u.xwayland));
     o.insert("autoreload".into(), Value::Bool(u.autoreload));
     o.insert("shell".into(), Value::Bool(u.shell));
@@ -983,6 +995,7 @@ fn box_json(
     }
     o.insert("aquamarine".into(), Value::Object(aq));
     if !u.interactive {
+        let render = &devs.render;
         let mut r = Map::new();
         r.insert("node".into(), s(render.as_bytes()));
         r.insert("pci".into(), s(&render.slot()));
@@ -1357,15 +1370,10 @@ pub(crate) fn helper_binds(polkit: bool, desk: bool) -> Vec<HelperBind> {
 
 /// cmd_up's `args`: the bwrap words after `--unshare-user --uid --gid --die-with-parent`, through
 /// Bwrap's checked methods (S1, S3, S4), in bash's order; ends with the session's command.
-#[allow(clippy::too_many_arguments)]
 fn bwrap_args(
     ctx: &Ctx,
     u: &Up,
-    render: &RenderNode,
-    renders: &[RenderNode],
-    nvidia_devs: &[NvidiaDev],
-    nvidia_cards: &[Vec<u8>],
-    wayland_screen: bool,
+    devs: &Devices,
     etc: &Etc,
     desk_fonts: &[(Vec<u8>, Vec<u8>)],
     helpers: &[HelperBind],
@@ -1474,23 +1482,23 @@ fn bwrap_args(
     let dev = |p: &[u8]| {
         DevNode::new(p).ok_or_else(|| ctx.die(cat!(p, " is not a device a box may have")))
     };
-    for n in renders {
+    for n in &devs.renders {
         b.dev(&dev(n.as_bytes())?).map_err(refused)?;
     }
-    if !nvidia_devs.is_empty() {
+    if !devs.nvidia.is_empty() {
         b.dev(&dev(NvidiaDev::ctl().as_bytes())?).map_err(refused)?;
         // CUDA allocates through /dev/nvidia-uvm (#149), there when the driver made it.
         if is_char(b"/dev/nvidia-uvm") {
             b.dev(&dev(NvidiaDev::uvm().as_bytes())?).map_err(refused)?;
         }
     }
-    for n in nvidia_devs {
+    for (n, _) in &devs.nvidia {
         b.dev(&dev(n.as_bytes())?).map_err(refused)?;
     }
     // NVIDIA's Wayland EGL stats the GPU's card node (#204, finding 294): an empty read-only file at
     // that path, never the device.
-    if !nvidia_cards.is_empty() {
-        for c in nvidia_cards {
+    if !devs.nvidia.is_empty() {
+        for (_, c) in &devs.nvidia {
             if c.is_empty() {
                 // (the file is made all the same, as bash's `: >` before the loop)
                 let _ = std::fs::write(shell::path(&cat!(d, "/card-placeholder")), b"");
@@ -1600,9 +1608,9 @@ fn bwrap_args(
         (b"XDG_STATE_HOME", cat!(u.box_home(), "/.local/state")),
         (b"QT_FORCE_STDERR_LOGGING", b"1".to_vec()),
         (b"ATSPI_DBUS_IMPLEMENTATION", b"dbus-daemon".to_vec()),
-        (b"OMABOX_RENDER_NODE", render.as_bytes().to_vec()),
+        (b"OMABOX_RENDER_NODE", devs.render.as_bytes().to_vec()),
         (b"OMABOX_CALLER_PATH", crate::exec::caller_path(true)),
-        (b"OMABOX_WAYLAND_SCREEN", bit(wayland_screen).to_vec()),
+        (b"OMABOX_WAYLAND_SCREEN", bit(devs.wayland_screen).to_vec()),
         (b"OMABOX_SIZE", u.size.clone()),
         (b"OMABOX_SCALE", u.scale.clone()),
         (b"OMABOX_INTERACTIVE", bit(u.interactive).to_vec()),
@@ -2673,11 +2681,22 @@ mod tests {
                 };
                 let render =
                     RenderNode::new(b"/dev/dri/renderD128").ok_or(TestCaseError::fail("node"))?;
-                let devs: Vec<NvidiaDev> = NvidiaDev::new(b"/dev/nvidia0").into_iter().collect();
-                let cards: Vec<Vec<u8>> = cards
-                    .iter()
-                    .map(|n| format!("card{n}").into_bytes())
-                    .collect();
+                // (NVIDIA's node with each card, or with none: the dev's words are always there)
+                let dev = NvidiaDev::new(b"/dev/nvidia0").ok_or(TestCaseError::fail("nvidia"))?;
+                let nvidia: Vec<(NvidiaDev, Vec<u8>)> = if cards.is_empty() {
+                    vec![(dev, Vec::new())]
+                } else {
+                    cards
+                        .iter()
+                        .map(|n| (dev.clone(), format!("card{n}").into_bytes()))
+                        .collect()
+                };
+                let devs = Devices {
+                    render: render.clone(),
+                    renders: vec![render],
+                    nvidia,
+                    wayland_screen: false,
+                };
                 let fonts: Vec<(Vec<u8>, Vec<u8>)> = fonts;
                 let etc = Etc {
                     overlay: etc_overlay,
@@ -2687,11 +2706,7 @@ mod tests {
                     bwrap_args(
                         &ctx,
                         &u,
-                        &render,
-                        std::slice::from_ref(&render),
                         &devs,
-                        &cards,
-                        false,
                         &etc,
                         &fonts,
                         &helper_binds(u.polkit, u.desktop == Desktop::Desk),
