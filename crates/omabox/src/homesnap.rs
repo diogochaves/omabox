@@ -433,7 +433,7 @@ pub const ELSEWHERE: &str = "elsewhere in HOME";
 pub fn area(p: &[u8]) -> &'static str {
     AREAS
         .iter()
-        .find(|(a, _)| p == a.as_bytes() || p.starts_with(&crate::cat!(a, "/")))
+        .find(|(a, _)| crate::paths::at_or_under(p, a.as_bytes()))
         .map_or(ELSEWHERE, |(_, l)| l)
 }
 
@@ -540,13 +540,12 @@ pub fn diff(a: &Snap, b: &Snap, noise: &Noise) -> (Vec<(Vec<u8>, Change)>, usize
             .collect();
         dirs.sort_by_key(|(_, p)| std::cmp::Reverse(p.iter().filter(|&&c| c == b'/').count()));
         for (gone, d) in dirs {
-            let lead = crate::cat!(d, "/");
             let kept = raw
                 .iter()
-                .any(|(p, c)| (c.op == "removed") == gone && p.starts_with(&lead));
+                .any(|(p, c)| (c.op == "removed") == gone && crate::paths::below(p, &d));
             let hushed = quiet
                 .iter()
-                .any(|(g, p)| *g == gone && p.starts_with(&lead));
+                .any(|(g, p)| *g == gone && crate::paths::below(p, &d));
             let hollow = HOLLOW.iter().any(|h| d == h.as_bytes());
             if !kept && (hushed || hollow) {
                 raw.retain(|(p, c)| !(p == &d && (c.op == "removed") == gone));

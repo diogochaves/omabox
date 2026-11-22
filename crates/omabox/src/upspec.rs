@@ -254,11 +254,6 @@ pub fn chosen_text(d: Desktop, how: Chosen) -> Option<&'static str> {
 /// up --idle and $OMABOX_IDLE as whole seconds: `check run` shares bash's idle_duration.
 pub use crate::cmd::check::idle_duration;
 
-/// P is DIR or below it (`[ "$p" = "$d" ] || [[ $p == "$d"/* ]]`).
-fn at_or_under(p: &[u8], d: &[u8]) -> bool {
-    p == d || (p.len() > d.len() && p.starts_with(d) && p[d.len()] == b'/')
-}
-
 /// `${src/#\~/$HOME}`: a leading `~` (only the `~`) as HOME.
 fn tilde(p: &[u8]) -> Vec<u8> {
     match p.strip_prefix(b"~") {
@@ -706,7 +701,7 @@ pub fn own_path_visible(p: &[u8], robinds: &[(Vec<u8>, Vec<u8>)], overlays: &[Ve
 pub fn own_path_among(p: &[u8], specs: &[(Vec<u8>, Vec<u8>)]) -> bool {
     let mut seen = false;
     for (src, dest) in specs {
-        if !at_or_under(p, dest) {
+        if !crate::paths::at_or_under(p, dest) {
             continue;
         }
         if src != dest || (in_jail() && jail_root(src).is_none()) {

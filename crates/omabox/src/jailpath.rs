@@ -4,6 +4,7 @@
 use crate::cat;
 use crate::exit::{Ctx, Exit};
 use crate::json;
+use crate::paths::{at_or_under, below};
 use crate::repo::{coverable, readlink_e};
 use crate::shell::{self, strip_nl};
 use serde_json::Value;
@@ -44,16 +45,6 @@ fn masks(pol: &Value) -> Option<Vec<Vec<u8>>> {
             })
             .unwrap_or_default(),
     )
-}
-
-/// P is R or below it.
-fn at_or_under(p: &[u8], r: &[u8]) -> bool {
-    p == r || under(p, r)
-}
-
-/// P is below R (`startswith($r + "/")`).
-fn under(p: &[u8], r: &[u8]) -> bool {
-    p.len() > r.len() && p.starts_with(r) && p[r.len()] == b'/'
 }
 
 /// `sub("/[^/]*$"; "")`: P without its last component.
@@ -125,7 +116,7 @@ fn deep_in(pol: &Value, p: &[u8]) -> bool {
     let rs = roots(pol);
     let Some(r) = inner(&rs, p) else { return true };
     ms.iter()
-        .any(|m| under(m, r) && inner(&rs, m) == Some(r) && dir_of(m) != r.as_slice())
+        .any(|m| below(m, r) && inner(&rs, m) == Some(r) && dir_of(m) != r.as_slice())
 }
 
 /// jail_readable FILE (#210): FILE (resolved, inside the jail's folders) may be read on the host for
@@ -155,7 +146,7 @@ fn masked_in(pol: &Value, p: &[u8]) -> bool {
     };
     ms.iter()
         .filter(|m| !m.is_empty())
-        .any(|m| at_or_under(p, m) || under(m, p))
+        .any(|m| at_or_under(p, m) || below(m, p))
 }
 
 /// jail_path PATH (#198): where a host path a jailed caller named leads, found without looking at
@@ -195,7 +186,7 @@ fn path_in(pol: &Value, p: &[u8]) -> Option<Vec<u8>> {
         cur = cat!(cur, "/", c);
         if !rs.iter().any(|r| at_or_under(&cur, r)) {
             // (on the way to one of them: taken as the dir it is)
-            if rs.iter().any(|r| under(r, &cur)) {
+            if rs.iter().any(|r| below(r, &cur)) {
                 continue;
             }
             return None;
@@ -324,7 +315,7 @@ fn cover_in(pol: &Value, src: &[u8], dest: &[u8]) -> Option<Covers> {
         return None;
     }
     // (jq's sort of strings: by code point, which is byte order in UTF-8)
-    let mut inside: Vec<Vec<u8>> = ms.into_iter().filter(|m| under(m, src)).collect();
+    let mut inside: Vec<Vec<u8>> = ms.into_iter().filter(|m| below(m, src)).collect();
     inside.sort();
     if inside.is_empty() {
         return Some(Covers::default());
@@ -339,7 +330,7 @@ fn cover_in(pol: &Value, src: &[u8], dest: &[u8]) -> Option<Covers> {
     let mut kept: Vec<Vec<u8>> = Vec::new();
     for m in inside {
         let mp = shell::path(&m);
-        if kept.iter().any(|k| under(&m, k)) || mp.is_symlink() || !mp.exists() {
+        if kept.iter().any(|k| below(&m, k)) || mp.is_symlink() || !mp.exists() {
             continue;
         }
         let kind = if mp.is_dir() {
@@ -451,9 +442,9 @@ mod tests {
 
     #[test]
     fn paths_under() {
-        assert!(under(b"/a/b", b"/a"));
-        assert!(!under(b"/ab", b"/a"));
-        assert!(!under(b"/a", b"/a"));
+        assert!(below(b"/a/b", b"/a"));
+        assert!(!below(b"/ab", b"/a"));
+        assert!(!below(b"/a", b"/a"));
         assert_eq!(dir_of(b"/a/b/c"), b"/a/b");
         assert_eq!(dir_of(b"/a"), b"");
     }

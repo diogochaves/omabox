@@ -910,7 +910,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
             repo_top().is_some_and(|top| {
                 jail_root(&top).is_some()
                     && jailpath::jail_sees(p).is_some()
-                    && p.starts_with(&cat!(top, "/"))
+                    && crate::paths::below(p, &top)
             })
         };
         if !u.hyprland.is_empty() && jail_root(&u.hypr.root).is_none() {

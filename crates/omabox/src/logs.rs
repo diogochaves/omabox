@@ -80,9 +80,10 @@ pub fn log_host_path_in(d: &[u8], home: &[u8], uid: u32, p: &[u8]) -> Vec<u8> {
         return p.to_vec();
     }
     let run = format!("/run/user/{uid}/");
-    if let Some(r) = p.strip_prefix(cat!(home, "/").as_slice()) {
+    let below = |dir: &[u8]| crate::paths::under(p, dir).filter(|r| !r.is_empty());
+    if let Some(r) = below(home) {
         cat!(d, "/home/", r)
-    } else if let Some(r) = p.strip_prefix(run.as_bytes()) {
+    } else if let Some(r) = below(run.as_bytes()) {
         cat!(d, "/run/", r)
     } else {
         Vec::new()
@@ -95,10 +96,9 @@ pub fn log_dead_path(ctx: &Ctx, p: &[u8]) -> Option<Vec<u8>> {
     if !shell::path(&r).is_file() {
         return None;
     }
-    // (`"$(readlink -f DIR)"/*`: a dir that cannot be resolved leaves "/*")
+    // (`"$(readlink -f DIR)"/*`; a dir that cannot be resolved holds nothing, finding 759)
     let inside = |dir: &str| {
-        let d = crate::repo::readlink_f(&cat!(ctx.d, "/", dir)).unwrap_or_default();
-        r.starts_with(&cat!(d, "/"))
+        crate::repo::readlink_f(&cat!(ctx.d, "/", dir)).is_some_and(|d| crate::paths::below(&r, &d))
     };
     (inside("run") || inside("home")).then_some(r)
 }

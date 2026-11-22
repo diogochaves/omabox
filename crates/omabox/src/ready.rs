@@ -405,8 +405,7 @@ fn reaper_line(cmdline: &[u8], root: &[u8], name: &[u8]) -> bool {
 /// rm_box: the box dir and its HOME; only a dir under BOXES, and the HOME only when it is this box's
 /// or no box's (home_taken: never a box's of another runtime dir, finding 584).
 pub fn rm_box(ctx: &Ctx) {
-    let pre = cat!(ctx.boxes, "/");
-    if !(ctx.d.starts_with(&pre) && ctx.d.len() > pre.len()) {
+    if !crate::paths::below(&ctx.d, &ctx.boxes) {
         return;
     }
     let homes = crate::paths::homes();

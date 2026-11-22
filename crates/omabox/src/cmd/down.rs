@@ -299,10 +299,7 @@ fn down_none(ctx: &Ctx) -> bool {
     let home = shell::env_or_empty("HOME");
     let mut has = Vec::new();
     for n in &mine {
-        let mut dir = meta(&cat!(ctx.boxes, "/", n), "dir").0;
-        if dir == home || dir.starts_with(&cat!(home, "/")) {
-            dir = cat!("~", &dir[home.len()..]);
-        }
+        let dir = crate::paths::home_short(&meta(&cat!(ctx.boxes, "/", n), "dir").0, &home);
         if !has.is_empty() {
             has.extend_from_slice(b"; ");
         }

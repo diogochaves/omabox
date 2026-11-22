@@ -95,12 +95,7 @@ pub fn started(d: &[u8]) -> Option<Caller> {
 
 /// DIR with $HOME written ~.
 pub fn tilde(dir: &[u8]) -> Vec<u8> {
-    let home = shell::env_or_empty("HOME");
-    if !home.is_empty() && (dir == home || dir.starts_with(&cat!(home, "/"))) {
-        cat!("~", &dir[home.len()..])
-    } else {
-        dir.to_vec()
-    }
+    crate::paths::home_short(dir, &shell::env_or_empty("HOME"))
 }
 
 /// C as ME reads it: `in ~/a (this agent session)`, `(agent session 0000beef)`, `(no agent session)`.

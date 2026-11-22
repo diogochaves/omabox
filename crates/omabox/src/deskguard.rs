@@ -77,10 +77,7 @@ fn config_refusal(dir: &[u8], home: &[u8]) -> Option<Vec<u8>> {
                 .to_vec(),
         ),
         Config::None => {
-            let shown = match dir.strip_prefix(home) {
-                Some(rest) if home.len() > 1 && rest.starts_with(b"/") => cat!("~", rest),
-                _ => dir.to_vec(),
-            };
+            let shown = crate::paths::home_short(dir, home);
             Some(cat!("up: --desktop desk: no Hyprland config in ", shown))
         }
     }

@@ -2318,16 +2318,7 @@ fn sources(m: &Mount, host: &[Mount]) -> Vec<Vec<u8>> {
         .iter()
         .filter(|h| h.dev == m.dev && h.root.starts_with(b"/"))
     {
-        let rest = if h.root == b"/" {
-            Some(m.root.as_slice())
-        } else if m.root == h.root {
-            Some(b"".as_slice())
-        } else {
-            m.root
-                .strip_prefix(h.root.as_slice())
-                .filter(|r| r.starts_with(b"/"))
-        };
-        if let Some(rest) = rest {
+        if let Some(rest) = crate::paths::under(&m.root, &h.root) {
             out.push(crate::bwrap::lexical(&cat!(h.at, "/", rest)));
         }
     }
@@ -2345,11 +2336,11 @@ fn seat_mounts(boxm: &[u8], host: &[u8], runtime: &[u8], own: &[u8]) -> Option<V
     let own = crate::bwrap::lexical(own);
     for m in mounts(boxm) {
         let at = crate::bwrap::lexical(&m.at);
-        if !runtime.is_empty() && at.starts_with(&cat!(rt, "/")) {
+        if !runtime.is_empty() && crate::paths::below(&at, &rt) {
             return Some(cat!("a mount under the runtime dir's path at ", m.at));
         }
         for src in sources(&m, &host) {
-            if src == own || src.starts_with(&cat!(own, "/")) {
+            if crate::paths::at_or_under(&src, &own) {
                 continue;
             }
             let why = crate::bwrap::seat_path(&src, runtime)

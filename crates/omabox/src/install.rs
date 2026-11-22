@@ -1625,8 +1625,7 @@ pub fn git_link_dirs(co: &[u8], jail: Option<&dyn JailView>) -> Option<(Vec<u8>,
 /// in it covered (jail_root_covered); anything else is nothing, quietly.
 pub fn repo_git_dirs(given: &[u8], jail: Option<&dyn JailView>) -> Vec<Vec<u8>> {
     let top = crate::repo::readlink_e(given).unwrap_or_else(|| given.to_vec());
-    let top = top.strip_suffix(b"/").unwrap_or(&top).to_vec();
-    let in_top = |d: &[u8]| cat!(d, "/").starts_with(&cat!(top, "/"));
+    let in_top = |d: &[u8]| crate::paths::at_or_under(d, &top);
     if let Some(j) = jail {
         let Some((g, d)) = git_link_dirs(given, Some(j)) else {
             return Vec::new();
@@ -1674,7 +1673,7 @@ pub fn repo_git_dirs(given: &[u8], jail: Option<&dyn JailView>) -> Vec<Vec<u8>> 
             continue;
         }
         // (in the common dir: mounted with it)
-        if !prev.is_empty() && cat!(d, "/").starts_with(&cat!(prev, "/")) {
+        if crate::paths::at_or_under(&d, &prev) {
             continue;
         }
         prev = d.clone();

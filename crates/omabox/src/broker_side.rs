@@ -7,6 +7,7 @@
 use crate::cat;
 use crate::exit::{Ctx, Res};
 use crate::json;
+use crate::paths::{at_or_under, below, under};
 use crate::procfs;
 use crate::shell;
 use serde_json::{Map, Value};
@@ -59,10 +60,6 @@ fn words0(v: &[u8]) -> Vec<Vec<u8>> {
 /// `${p%/}`: one trailing slash off.
 fn trim1(p: &[u8]) -> &[u8] {
     p.strip_suffix(b"/").unwrap_or(p)
-}
-
-fn starts_dir(p: &[u8], r: &[u8]) -> bool {
-    p.starts_with(&cat!(r, "/"))
 }
 
 fn text(b: &[u8]) -> Value {
@@ -139,10 +136,9 @@ pub fn policy_of(
         let r = trim1(&dests[k]);
         let (mut masked, mut hidden) = (false, false);
         for d in &dests[k + 1..] {
-            let d = trim1(d);
             // at or above it: the folder is covered; inside it: masked
-            hidden |= cat!(r, "/").starts_with(&cat!(d, "/"));
-            masked |= starts_dir(d, r);
+            hidden |= at_or_under(r, d);
+            masked |= below(d, r);
         }
         if hidden {
             continue;
@@ -162,9 +158,13 @@ pub fn policy_of(
         if binds.contains(&j) {
             continue;
         }
-        let d = trim1(d);
-        if let Some((l, r)) = kept.iter().find(|(l, _)| starts_dir(d, l)) {
-            let m = cat!(r, &d[l.len()..]);
+        let inside = kept.iter().find_map(|(l, r)| {
+            under(d, l)
+                .filter(|rest| !rest.is_empty())
+                .map(|rest| (r, rest))
+        });
+        if let Some((r, rest)) = inside {
+            let m = cat!(r, "/", rest);
             // (bash's printf | jq -R: one per line, none empty)
             for line in m.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
                 masks.push(text(line));
@@ -228,7 +228,7 @@ pub fn with_mounts(pol: &mut Value, mountinfo: &[u8]) {
         };
         let m = unescape(&mp);
         for r in &roots {
-            if !starts_dir(&m, r) {
+            if !below(&m, r) {
                 continue;
             }
             if m.contains(&b'\n') {
@@ -264,9 +264,7 @@ pub fn with_mounts(pol: &mut Value, mountinfo: &[u8]) {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
-            let hit = ms
-                .iter()
-                .any(|m| *m == p || m.starts_with(&format!("{p}/")));
+            let hit = ms.iter().any(|m| at_or_under(m.as_bytes(), p.as_bytes()));
             if let Some(o) = r.as_object_mut() {
                 let was = o.get("masked").and_then(Value::as_bool).unwrap_or(false);
                 o.insert("masked".into(), Value::Bool(was || hit));

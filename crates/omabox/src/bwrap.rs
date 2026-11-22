@@ -15,12 +15,13 @@
 //! The words come out in bash's order (cmd_up's `args`), so launch.sh is the same both ways.
 
 use crate::cat;
+use crate::paths::{at_or_under, below, under};
 
 /// Why P is the seat's (S1), or None: a DRM card node, the input devices, seatd's socket, the
 /// system bus, the user's runtime dir (RUNTIME), at or under them.
 pub fn seat_path(p: &[u8], runtime: &[u8]) -> Option<&'static str> {
     let p = lexical(p);
-    let under = |root: &[u8]| p == root || p.starts_with(&cat!(root, "/"));
+    let under = |root: &[u8]| at_or_under(&p, root);
     if let Some(n) = p.strip_prefix(b"/dev/dri/card".as_slice()) {
         let n = n.split(|&c| c == b'/').next().unwrap_or_default();
         if !n.is_empty() && n.iter().all(u8::is_ascii_digit) {
@@ -45,7 +46,7 @@ pub fn seat_path(p: &[u8], runtime: &[u8]) -> Option<&'static str> {
 /// Why a bind of folder P would bring a seat path in (P holds one), or None.
 pub fn holds_seat(p: &[u8], runtime: &[u8]) -> Option<&'static str> {
     let p = lexical(p);
-    let holds = |x: &[u8]| p.as_slice() == b"/" || x.starts_with(&cat!(p, "/"));
+    let holds = |x: &[u8]| below(x, &p);
     for (x, why) in [
         (b"/dev/dri/card0".as_slice(), "it holds the DRM card nodes"),
         (b"/dev/input", "it holds the input devices"),
@@ -101,7 +102,7 @@ fn box_dir_refused(d: &[u8], runtime: &[u8], home: &[u8]) -> Option<&'static str
         }
         v
     };
-    let at_or_above = |x: &[u8], y: &[u8]| x == b"/" || y == x || y.starts_with(&cat!(x, "/"));
+    let at_or_above = |x: &[u8], y: &[u8]| at_or_under(y, x);
     for own in canon(d) {
         if own == b"/" {
             return Some("it is /");
@@ -251,7 +252,7 @@ impl Bwrap {
     fn link_in_way(&self, dest: &[u8]) -> Option<Vec<u8>> {
         let (host, inside) = self.home.as_ref()?;
         let d = lexical(dest);
-        let rel = d.strip_prefix(cat!(inside, "/").as_slice())?;
+        let rel = under(&d, inside).filter(|r| !r.is_empty())?;
         let mut at = host.clone();
         for part in rel.split(|&c| c == b'/') {
             at = cat!(at, "/", part);
@@ -278,7 +279,7 @@ impl Bwrap {
         };
         self.home_dests
             .iter()
-            .find(|(o, same)| d.starts_with(&cat!(o, "/")) && !(*same && same_ok()))
+            .find(|(o, same)| below(&d, o) && !(*same && same_ok()))
             .map(|(o, _)| o.clone())
     }
 
@@ -288,8 +289,8 @@ impl Bwrap {
             return;
         };
         let (s, d) = (lexical(src), lexical(dest));
-        let own = s == self.own || s.starts_with(&cat!(self.own, "/"));
-        if !own && d.starts_with(&cat!(inside, "/")) {
+        let own = at_or_under(&s, &self.own);
+        if !own && below(&d, inside) {
             self.home_dests.push((d, s == lexical(dest)));
         }
     }
@@ -327,7 +328,7 @@ impl Bwrap {
     /// the runtime dir only in the box's own dir), its destination none of the seat's.
     fn check_bind(&self, src: &[u8], dest: &[u8]) -> Result<(), Refused> {
         let s = lexical(src);
-        let in_own = s == self.own || s.starts_with(&cat!(self.own, "/"));
+        let in_own = at_or_under(&s, &self.own);
         let why = if in_own {
             None
         } else {
@@ -360,7 +361,7 @@ impl Bwrap {
                 ")"
             )));
         }
-        let own = s == self.own || s.starts_with(&cat!(self.own, "/"));
+        let own = at_or_under(&s, &self.own);
         if let Some(outer) = (!own).then(|| self.nested_in_home(src, dest)).flatten() {
             return Err(Refused(cat!(
                 "refusing to mount at ",
@@ -398,7 +399,7 @@ impl Bwrap {
             .own_roots
             .iter()
             .chain(std::iter::once(&self.own))
-            .any(|r| s == *r || s.starts_with(&cat!(r, "/")));
+            .any(|r| at_or_under(&s, r));
         if !ok {
             return Err(Refused(cat!(src, " is not one of omabox's own files")));
         }
@@ -434,7 +435,7 @@ impl Bwrap {
     /// check.
     pub fn checked_ro(&mut self, src: &[u8], dest: &[u8]) -> Result<(), Refused> {
         let s = lexical(src);
-        let own = s == self.own || s.starts_with(&cat!(self.own, "/"));
+        let own = at_or_under(&s, &self.own);
         if !own && let Some(why) = crate::repo::refuse_src(src) {
             return Err(Refused(cat!(
                 "refusing to mount ",
@@ -450,7 +451,7 @@ impl Bwrap {
     /// user's HOME or a folder above it (#321: a desk box's HOME is at that path in the box, its
     /// folder still the box's own), as written or as it resolves.
     pub fn own_rw(&mut self, src: &[u8], dest: &[u8]) -> Result<(), Refused> {
-        let at_or_above = |s: &[u8], h: &[u8]| s == b"/" || h == s || h.starts_with(&cat!(s, "/"));
+        let at_or_above = |s: &[u8], h: &[u8]| at_or_under(h, s);
         let mut srcs = vec![lexical(src)];
         if let Ok(c) = std::fs::canonicalize(crate::shell::path(src)) {
             srcs.push(lexical(crate::shell::bytes(&c)));
@@ -499,7 +500,7 @@ impl Bwrap {
         let ok_card = dest
             .strip_prefix(b"/dev/dri/card".as_slice())
             .is_some_and(|n| !n.is_empty() && n.iter().all(u8::is_ascii_digit));
-        let ok_file = s.starts_with(&cat!(self.own, "/"))
+        let ok_file = below(&s, &self.own)
             && std::fs::symlink_metadata(crate::shell::path(&s))
                 .is_ok_and(|m| m.file_type().is_file() && m.len() == 0);
         if !ok_card || !ok_file {
