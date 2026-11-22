@@ -387,6 +387,32 @@ impl Tmps {
     }
 }
 
+/// What a take left for its marks, captions, overlay and cut, read once by stop_in: each value the
+/// text the awk programs are given (`-v first=...`), never parsed and printed again, so what they
+/// make is what bash's made.
+#[derive(Default)]
+pub(crate) struct Take {
+    /// The input it saw (#176): the path of a file of record_input's lines; empty: none.
+    pub input: Vec<u8>,
+    /// Its marks (record_mark's lines: wall-clock µs, a tab, the text); empty: none.
+    pub marks: Vec<u8>,
+    /// The video's clock: its first frame's wall-clock µs (empty: no marks, input or cut asked).
+    pub first: Vec<u8>,
+    /// record.geo's first line: "X0 Y0 SCALE AX AY AW AH ..." of the recorded output.
+    pub geo: Vec<u8>,
+    /// Its fps (REC_FPS, a start's --fps).
+    pub fps: Vec<u8>,
+    /// The filter putting its sound in the video's clock; empty: no sound.
+    pub afilt: Vec<u8>,
+    /// --show-input, --captions.
+    pub show: bool,
+    pub caps: bool,
+    /// The frames --cut-idle took out ("FROM TO" a line), once cut.
+    pub cuts: Vec<u8>,
+    /// The video's length in ms as ffprobe read it, once made; empty: unknown.
+    pub dur: Vec<u8>,
+}
+
 /// record_stop: the video, its marks beside it, and with SHEET its contact sheet (#176); with the
 /// fds (a jailed caller's, #224) written through them, nothing opened at a path of the caller's.
 pub fn stop(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts) -> Res<()> {
@@ -636,7 +662,19 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             }
         };
     }
-    let input_s = !input.is_empty() && size_of(&shell::path(&input)).is_some_and(|s| s > 0);
+    let mut take = Take {
+        input,
+        marks,
+        first,
+        geo,
+        fps,
+        afilt,
+        show: so.show,
+        caps: so.caps,
+        ..Take::default()
+    };
+    let input_s =
+        !take.input.is_empty() && size_of(&shell::path(&take.input)).is_some_and(|s| s > 0);
     // --show-input, --captions (#176): drawn by the ass filter at the end of the first pass.
     let mut vass = Vec::new();
     if so.show || so.caps {
@@ -645,11 +683,11 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 "record --show-input: nothing to show (no click, scroll, pointer, drag or keys while it recorded)",
             );
         }
-        if so.caps && marks.is_empty() {
+        if so.caps && take.marks.is_empty() {
             say("record --captions: no marks to show (record mark TEXT while it records)");
         }
-        if (so.show && input_s) || (so.caps && !marks.is_empty()) {
-            match record_ass(ctx, rec, &input, &marks, &first, &geo, so.show, so.caps)? {
+        if (so.show && input_s) || (so.caps && !take.marks.is_empty()) {
+            match record_ass(ctx, rec, &take)? {
                 Some(v) => vass = v,
                 None => say(
                     "record: could not draw the input or captions into the video: a video without them",
@@ -660,7 +698,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     let lim = stop_len(ctx, rec, t_stop);
     // Made: 0, or ffmpeg's status (124: killed twice, finding 356).
     let made = if rec.n > 1 {
-        record_compose(ctx, rec, &afilt, &vass, so.cut, &turns, lim.as_deref())?
+        record_compose(ctx, rec, &take.afilt, &vass, so.cut, &turns, lim.as_deref())?
     } else {
         // A steady REC_FPS, the video's clock still wf-recorder's (finding 306).
         let mut a = w(&[
@@ -671,19 +709,19 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             "-i",
             &format!("{}/raw.mkv", rec_dir(&ctx.d)),
         ]);
-        if !afilt.is_empty() {
+        if !take.afilt.is_empty() {
             a.extend(w(&["-i", &format!("{}/audio.mka", rec_dir(&ctx.d))]));
         }
         a.push(b"-vf".to_vec());
         let back = raw1.map_or("", |wh| {
             turn_back(turns.split(|&c| c == b'\n').next().unwrap_or_default(), wh)
         });
-        a.push(cat!(back, "fps=", fps, ",", rec_yuv(), vass));
+        a.push(cat!(back, "fps=", take.fps, ",", rec_yuv(), vass));
         a.extend(rec_enc().video_args(&rec_crf(so.cut, rec.crf)));
         a.extend(w(&REC_TAGS));
-        if !afilt.is_empty() {
+        if !take.afilt.is_empty() {
             a.extend(w(&["-map", "0:v:0", "-map", "1:a:0", "-af"]));
-            a.push(afilt.clone());
+            a.push(take.afilt.clone());
             a.extend(w(&REC_AAC));
             a.push(b"-shortest".to_vec());
         }
@@ -704,8 +742,14 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         && record_copy(ctx, rec, &turns, lim.as_deref())?.is_some_and(|t| {
             say(copy_said(
                 rec.n > 1,
-                &fps,
-                [!afilt.is_empty(), so.show, so.caps, t, so.cut.is_some()],
+                &take.fps,
+                [
+                    !take.afilt.is_empty(),
+                    so.show,
+                    so.caps,
+                    t,
+                    so.cut.is_some(),
+                ],
             ));
             true
         });
@@ -735,15 +779,14 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     }
     // --cut-idle (#176): its still stretches cut short, CUTS the frames taken out (not in a copy:
     // its frames come at no steady fps, and cutting would encode what just got stuck).
-    let mut cuts = Vec::new();
     if let Some(c) = so.cut.filter(|_| !copied) {
-        match record_cut(ctx, rec, c, &first, &input, &marks, so.show, &afilt)? {
-            Some(x) => cuts = x,
+        match record_cut(ctx, rec, c, &take)? {
+            Some(x) => take.cuts = x,
             None => say("record --cut-idle: could not cut it: the video as it was recorded"),
         }
     }
-    if !input.is_empty() {
-        rm(&shell::path(&input));
+    if !take.input.is_empty() {
+        rm(&shell::path(&take.input));
     }
     let (irc, info) = rec_ff_subst(
         ctx,
@@ -790,7 +833,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         }
         dur = Some(shell::dec(&g(1)).unwrap_or(0) * 1000 + shell::dec(&frac).unwrap_or(0));
     }
-    let durb = dur.map(|d| d.to_string().into_bytes()).unwrap_or_default();
+    take.dur = dur.map(|d| d.to_string().into_bytes()).unwrap_or_default();
     let base = rec.file.strip_suffix(b".mp4").unwrap_or(&rec.file).to_vec();
     let max = rec_max();
     let outmp4 = format!("{}/out.mp4", rec_dir(&ctx.d)).into_bytes();
@@ -884,7 +927,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         let mt = crate::shots::OutFile::in_dir(&tmpd, b"v.marks.tsv", false)
             .map_err(|m| ctx.die(cat!("record: ", m)))?;
         let mv = mt.beside(b"v.vtt", false);
-        record_marks(ctx, &marks, &first, &durb, (&mt, &mv), &cuts, &base, &fps)?;
+        record_marks(ctx, &take, (&mt, &mv), &base)?;
         let tsv = cat!(tmpd, "/v.marks.tsv");
         if shell::path(&tsv).is_file() {
             // (`cat -- FILE >&FD`: a foreground child, as bash's)
@@ -910,7 +953,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             v.beside(&cat!(bn, ".marks.tsv"), false),
             v.beside(&cat!(bn, ".vtt"), false),
         );
-        record_marks(ctx, &marks, &first, &durb, (&mt, &mv), &cuts, &base, &fps)?;
+        record_marks(ctx, &take, (&mt, &mv), &base)?;
     }
     let mut sp = Vec::new();
     if so.sheet {
@@ -958,7 +1001,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         format!("{}/overlay.ass", rec_dir(&ctx.d)),
         format!("{}/cut.mp4", rec_dir(&ctx.d)),
     ]);
-    if !afilt.is_empty() {
+    if !take.afilt.is_empty() {
         rmd.extend(w(&[
             format!("{}/audio.mka", rec_dir(&ctx.d)),
             format!("{}/audio.log", rec_dir(&ctx.d)),
@@ -978,10 +1021,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 .map(|(a, b)| info[a..b].to_vec())
                 .unwrap_or_default()
         };
-        let d = if durb.is_empty() {
+        let d = if take.dur.is_empty() {
             b"0".to_vec()
         } else {
-            durb.clone()
+            take.dur.clone()
         };
         say(cat!(
             "record: ",
@@ -991,7 +1034,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             ", ",
             ms_s(&d),
             " at ",
-            fps,
+            take.fps,
             " fps",
             match rec.crf {
                 _ if copied => ", copied as recorded (not re-encoded)".to_string(),
@@ -1001,7 +1044,11 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 Some(c) => format!(", CRF {c}"),
                 None => String::new(),
             },
-            if afilt.is_empty() { "" } else { ", with sound" },
+            if take.afilt.is_empty() {
+                ""
+            } else {
+                ", with sound"
+            },
             if rec_enc() == Enc::OpenH264 {
                 ", by openh264 (this ffmpeg has no libx264)"
             } else {
@@ -1391,20 +1438,17 @@ fn sort(args: &[&str], input: &[u8]) -> Vec<u8> {
     jq::tool("sort", args, Some(input), jq::Err::Inherit).out
 }
 
-/// record_marks MARKS FIRST_US DURATION_MS (TSV, VTT) CUTS SHOWN: the marks in the video's clock as
-/// TSV (BASE.marks.tsv) and VTT (BASE.vtt), each made and renamed in its folder held, never through
-/// a link (finding 749); no marks: no files, an earlier take's gone.
-#[allow(clippy::too_many_arguments)]
+/// record_marks TAKE (TSV, VTT) SHOWN: the take's marks in the video's clock (its first, dur, cuts,
+/// fps) as TSV (BASE.marks.tsv) and VTT (BASE.vtt), each made and renamed in its folder held, never
+/// through a link (finding 749); no marks: no files, an earlier take's gone.
 fn record_marks(
     ctx: &Ctx,
-    marks: &[u8],
-    first: &[u8],
-    dur: &[u8],
+    take: &Take,
     (tsvf, vttf): (&crate::shots::OutFile, &crate::shots::OutFile),
-    cuts: &[u8],
     shown: &[u8],
-    fps: &[u8],
 ) -> Res<()> {
+    let (marks, first, dur, cuts, fps) =
+        (&take.marks, &take.first, &take.dur, &take.cuts, &take.fps);
     let (tsv, vtt) = (tsvf.path(), vttf.path());
     if marks.is_empty() {
         tsvf.remove();
@@ -1482,19 +1526,11 @@ fn record_marks(
     Ok(())
 }
 
-/// record_ass INPUT MARKS FIRST_US GEO SHOW CAPTIONS: the overlay script in the box as
-/// rec_dir/overlay.ass; Some(the filter that draws it), None when it cannot (said by the caller).
-#[allow(clippy::too_many_arguments)]
-fn record_ass(
-    ctx: &mut Ctx,
-    rec: &Rec,
-    input: &[u8],
-    marks: &[u8],
-    first: &[u8],
-    geo: &[u8],
-    show: bool,
-    caps: bool,
-) -> Res<Option<Vec<u8>>> {
+/// record_ass TAKE: the overlay script of its input and marks (its first, geo, show, caps) in the
+/// box as rec_dir/overlay.ass; Some(the filter that draws it), None when it cannot (said by the
+/// caller).
+fn record_ass(ctx: &mut Ctx, rec: &Rec, take: &Take) -> Res<Option<Vec<u8>>> {
+    let (first, geo) = (&take.first, &take.geo);
     // (the script's path goes into ffmpeg's filter graph as written: a desk box's HOME (#321) with a
     // character the graph reads as its own syntax draws nothing rather than something else)
     if !rec_dir(&ctx.d)
@@ -1563,20 +1599,16 @@ fn record_ass(
     } else {
         cat!("0 0 ", vw, " ", vh)
     };
-    let mut ok = match record_overlay(
-        input,
-        marks,
-        first,
-        &g[0],
-        &g[1],
-        &g[2],
-        &vw,
-        &vh,
-        b"359999990",
-        show,
-        caps,
-        &area,
-    ) {
+    let at = OverlayAt {
+        x0: &g[0],
+        y0: &g[1],
+        k: &g[2],
+        w: &vw,
+        h: &vh,
+        dur: b"359999990",
+        area: &area,
+    };
+    let mut ok = match record_overlay(take, &at) {
         Some(s) => std::fs::write(shell::path(&tmp), s).is_ok(),
         None => false,
     };
@@ -1626,23 +1658,39 @@ pub(super) fn write_in_box(
     )
 }
 
+/// Where record_overlay draws, as the text its awk is given: the output's place (X0, Y0) and scale
+/// (K) in the layout, the video's size (W x H), how long the script's last event lasts (DUR, ms) and
+/// the area recorded ("X Y W H").
+pub struct OverlayAt<'a> {
+    pub x0: &'a [u8],
+    pub y0: &'a [u8],
+    pub k: &'a [u8],
+    pub w: &'a [u8],
+    pub h: &'a [u8],
+    pub dur: &'a [u8],
+    pub area: &'a [u8],
+}
+
 /// record_overlay: the ASS script drawing peek's marks at the times the input happened (bin/omabox's
-/// awk, verbatim, in C.UTF-8). None when awk fails.
-#[allow(clippy::too_many_arguments)]
-pub fn record_overlay(
-    input: &[u8],
-    marks: &[u8],
-    first: &[u8],
-    x0: &[u8],
-    y0: &[u8],
-    k: &[u8],
-    vw: &[u8],
-    vh: &[u8],
-    dur: &[u8],
-    show: bool,
-    caps: bool,
-    area: &[u8],
-) -> Option<Vec<u8>> {
+/// awk, verbatim, in C.UTF-8), of TAKE's input (with show) and marks (with caps) from its first, AT
+/// where. None when awk fails.
+pub(crate) fn record_overlay(take: &Take, at: &OverlayAt) -> Option<Vec<u8>> {
+    let (input, marks, first, show, caps) = (
+        &take.input[..],
+        &take.marks[..],
+        &take.first[..],
+        take.show,
+        take.caps,
+    );
+    let OverlayAt {
+        x0,
+        y0,
+        k,
+        w: vw,
+        h: vh,
+        dur,
+        area,
+    } = *at;
     let mut feed = Vec::new();
     if !input.is_empty() && shell::path(input).is_file() && show {
         let mut c = crate::sig::command("sort");
@@ -1713,19 +1761,17 @@ impl FromBytes for std::ffi::OsStr {
     }
 }
 
-/// record_cut CUT_MS FIRST_US INPUT MARKS SHOW (finding 319): every still stretch longer than CUT_MS
-/// cut to it. Some(the cuts, "FROM TO" frames a line), None when it could not.
-#[allow(clippy::too_many_arguments)]
-fn record_cut(
-    ctx: &mut Ctx,
-    rec: &Rec,
-    cut: i64,
-    first: &[u8],
-    input: &[u8],
-    marks: &[u8],
-    show: bool,
-    afilt: &[u8],
-) -> Res<Option<Vec<u8>>> {
+/// record_cut CUT_MS TAKE (finding 319): every still stretch longer than CUT_MS cut to it, the
+/// take's input (its first, show) and marks kept, its sound cut with it. Some(the cuts, "FROM TO"
+/// frames a line), None when it could not.
+fn record_cut(ctx: &mut Ctx, rec: &Rec, cut: i64, take: &Take) -> Res<Option<Vec<u8>>> {
+    let (first, input, marks, show, afilt) = (
+        &take.first,
+        &take.input,
+        &take.marks,
+        take.show,
+        &take.afilt,
+    );
     let outmp4 = format!("{}/out.mp4", rec_dir(&ctx.d));
     let nb = ff_line(
         ctx,
@@ -2089,16 +2135,14 @@ mod tests {
         ctx.parsed();
         let marks = |m: &str, first: &str, dur: &str, cuts: &str| {
             let (r, _) = crate::exit::heard(|| {
-                record_marks(
-                    &ctx,
-                    m.as_bytes(),
-                    first.as_bytes(),
-                    dur.as_bytes(),
-                    (&mt, &mv),
-                    cuts.as_bytes(),
-                    &rb,
-                    b"",
-                )
+                let take = Take {
+                    marks: m.into(),
+                    first: first.into(),
+                    dur: dur.into(),
+                    cuts: cuts.into(),
+                    ..Take::default()
+                };
+                record_marks(&ctx, &take, (&mt, &mv), &rb)
             });
             assert!(r.is_ok());
         };
@@ -2157,16 +2201,13 @@ mod tests {
             let _ = std::fs::remove_file(d.join(n));
             std::os::unix::fs::symlink(&secret, d.join(n)).unwrap();
             let (r, _) = crate::exit::heard(|| {
-                record_marks(
-                    &ctx,
-                    b"1000000500000\tx",
-                    b"1000000000000",
-                    b"4000",
-                    (&mt, &mv),
-                    b"",
-                    &rb,
-                    b"",
-                )
+                let take = Take {
+                    marks: b"1000000500000\tx".to_vec(),
+                    first: b"1000000000000".to_vec(),
+                    dur: b"4000".to_vec(),
+                    ..Take::default()
+                };
+                record_marks(&ctx, &take, (&mt, &mv), &rb)
             });
             assert!(r.is_err(), "{n}: refused");
             assert_eq!(std::fs::read_to_string(&secret).unwrap(), "keep", "{n}");
