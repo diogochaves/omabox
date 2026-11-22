@@ -15329,48 +15329,6 @@ from them.
     file, to `/dev/zero`, a FIFO and a file behind a folder link: refused, nothing copied; `shot -o`
     through a box's folder link: refused, nothing in the host folder); `t_record_links` (`record
     start -o` through a folder link planted before the start: refused).
-
-757. **The guard's theme stand-ins no longer pass on a socket display; four of the review's fixes
-    made gentler** (2026-11-22, the review's second round). **The display decided:** 750's
-    `share/guard/omarchy-theme-set` (and `-bg-set`, `-bg-next`, `omarchy-font-set` through it)
-    passed on to Omarchy's whenever `WAYLAND_DISPLAY` was a socket, "named on purpose". That holds
-    for `omarchy-shell`, whose effect follows the display, not here: these write the HOME. A guarded
-    agent that ran `eval "$(omabox env)"` (an absolute socket, the box's hard link) to draw in a box
-    and then `omarchy-theme-set X` for that box switched the user's real theme. They now refuse
-    whatever the display (in a box and for `omabox host` the guard's folder is off PATH, so they are
-    never reached there; `omabox run -- omarchy-theme-set` is the box's way). **Omarchy's update:**
-    under the guard, `omarchy update` stopped at the first of 4.5's three migrations that re-stage
-    the theme (`omarchy-migrate` is `set -e`; its marker unwritten, the later migrations pending,
-    packages already upgraded). The stand-in now walks its callers up to init (`/proc/PID/status`'s
-    PPid, 64 at most) and hands over when one's command line has a word whose last part is
-    `omarchy-update` or `omarchy-migrate` (exactly: not `omarchy-migrate-notify`): an agent running
-    the update acts on the real system anyway, and a half-migrated one is worse (docs/guard.md).
-    doctor's theme fix and up's refusal advised `omarchy-theme-set "Tokyo Night"`, which a guarded
-    shell gets exit 4 for: from a PATH with a guard folder they name `omabox host -- ...` (only when
-    the user asked; `guard::theme_set_here`). **restart-shell's record:** 753 made its version write
-    (and plugin_check's states) take the box lock, waiting up to 60 s and exiting 1 though the shell
-    had restarted, and a box gone meanwhile was exit 1 with no line. Both records now wait
-    `boxes::RECORD_WAIT` (3 s) through `edit_box_json_wait`, which tells `Busy` and `Gone` from a
-    failed write; the first two say a note (`record_note`) and exit 0, a failed write is still said
-    and exit 1. **The gone line:** 754's "start it with: omabox up N" named `run`'s and `look`'s
-    throwaways (`N-run<pid>`, `look-<pid>`, or box.json's `owner`), which no `up` brings back: they
-    now say it was a throwaway; an interactive or desk box's line adds `--interactive` and
-    `--desktop` from box.json and says its other options are as given. **Teardown:** 754 had the
-    signal thread set `STOPPING` before its down; main's own down (`finish`) took the `done` lock and
-    then made the `omabox down` command, which parks main while `STOPPING` is set, so a TERM in
-    between left main parked and the thread waiting for the lock, for good. The command is made
-    before the lock now (`down_with`). Tests: cargo `teardown_under_its_lock_never_parks` (hangs,
-    15 s timeout, with the command made under the lock), `box_json_record_busy_and_gone`,
-    `gone_hint_by_kind`, `theme_advice_under_the_guard`; t_unit_guard_theme_set (a socket display,
-    by name and by path, refused; under stand-in `omarchy-migrate` and `omarchy-update` scripts, never
-    Omarchy's, the real stub runs and the migration goes on; not under `omarchy-migrate-notify` or a
-    word that only holds the name; `OMABOX_GUARD_AS` gone on the hand-off); t_guard (`omabox env`
-    of a real box, then `omarchy-theme-set`: exit 4, nothing reached); t_unit_doctor (the fix as
-    the PATH has it, and through `omabox host` under the guard's); t_shell_restart_race and
-    t_omarchy_tree (the box lock held by `flock`: restart-shell exit 0, restarted, the record said
-    not written, well under 60 s); t_throwaway_term (a TERM while run's own down runs: run ends, its
-    box gone).
-
 756. **The box HOME's link pass took harmless links out of `--seed` folders and called them links
     into your HOME; `path --home` judged by another rule; the secret check missed common key forms**
     (2026-11-22, review of 752 and 748). Since 752 every `--seed` folder and every restore went through
@@ -15419,6 +15377,46 @@ from them.
     not); `t_theme_links` (`--seed` of such a folder: kept, unsaid, `path --home` silent, a file you
     can write a copy; a link planted through `/proc` named) and `t_desk_copy` (a desk box's `--seed`
     folder, the same two links kept, unsaid), `t_plugin_link` (passes again).
+757. **The guard's theme stand-ins no longer pass on a socket display; four of the review's fixes
+    made gentler** (2026-11-22, the review's second round). **The display decided:** 750's
+    `share/guard/omarchy-theme-set` (and `-bg-set`, `-bg-next`, `omarchy-font-set` through it)
+    passed on to Omarchy's whenever `WAYLAND_DISPLAY` was a socket, "named on purpose". That holds
+    for `omarchy-shell`, whose effect follows the display, not here: these write the HOME. A guarded
+    agent that ran `eval "$(omabox env)"` (an absolute socket, the box's hard link) to draw in a box
+    and then `omarchy-theme-set X` for that box switched the user's real theme. They now refuse
+    whatever the display (in a box and for `omabox host` the guard's folder is off PATH, so they are
+    never reached there; `omabox run -- omarchy-theme-set` is the box's way). **Omarchy's update:**
+    under the guard, `omarchy update` stopped at the first of 4.5's three migrations that re-stage
+    the theme (`omarchy-migrate` is `set -e`; its marker unwritten, the later migrations pending,
+    packages already upgraded). The stand-in now walks its callers up to init (`/proc/PID/status`'s
+    PPid, 64 at most) and hands over when one's command line has a word whose last part is
+    `omarchy-update` or `omarchy-migrate` (exactly: not `omarchy-migrate-notify`): an agent running
+    the update acts on the real system anyway, and a half-migrated one is worse (docs/guard.md).
+    doctor's theme fix and up's refusal advised `omarchy-theme-set "Tokyo Night"`, which a guarded
+    shell gets exit 4 for: from a PATH with a guard folder they name `omabox host -- ...` (only when
+    the user asked; `guard::theme_set_here`). **restart-shell's record:** 753 made its version write
+    (and plugin_check's states) take the box lock, waiting up to 60 s and exiting 1 though the shell
+    had restarted, and a box gone meanwhile was exit 1 with no line. Both records now wait
+    `boxes::RECORD_WAIT` (3 s) through `edit_box_json_wait`, which tells `Busy` and `Gone` from a
+    failed write; the first two say a note (`record_note`) and exit 0, a failed write is still said
+    and exit 1. **The gone line:** 754's "start it with: omabox up N" named `run`'s and `look`'s
+    throwaways (`N-run<pid>`, `look-<pid>`, or box.json's `owner`), which no `up` brings back: they
+    now say it was a throwaway; an interactive or desk box's line adds `--interactive` and
+    `--desktop` from box.json and says its other options are as given. **Teardown:** 754 had the
+    signal thread set `STOPPING` before its down; main's own down (`finish`) took the `done` lock and
+    then made the `omabox down` command, which parks main while `STOPPING` is set, so a TERM in
+    between left main parked and the thread waiting for the lock, for good. The command is made
+    before the lock now (`down_with`). Tests: cargo `teardown_under_its_lock_never_parks` (hangs,
+    15 s timeout, with the command made under the lock), `box_json_record_busy_and_gone`,
+    `gone_hint_by_kind`, `theme_advice_under_the_guard`; t_unit_guard_theme_set (a socket display,
+    by name and by path, refused; under stand-in `omarchy-migrate` and `omarchy-update` scripts, never
+    Omarchy's, the real stub runs and the migration goes on; not under `omarchy-migrate-notify` or a
+    word that only holds the name; `OMABOX_GUARD_AS` gone on the hand-off); t_guard (`omabox env`
+    of a real box, then `omarchy-theme-set`: exit 4, nothing reached); t_unit_doctor (the fix as
+    the PATH has it, and through `omabox host` under the guard's); t_shell_restart_race and
+    t_omarchy_tree (the box lock held by `flock`: restart-shell exit 0, restarted, the record said
+    not written, well under 60 s); t_throwaway_term (a TERM while run's own down runs: run ends, its
+    box gone).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
