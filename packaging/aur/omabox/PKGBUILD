@@ -10,7 +10,7 @@
 # anyone's HOME.
 
 pkgname=omabox
-pkgver=1.5.1
+pkgver=1.5.2
 pkgrel=1
 pkgdesc='Contained, invisible Hyprland desktops where agents run, drive and screenshot apps'
 arch=('x86_64')
@@ -43,7 +43,7 @@ optdepends=("quickshell: a shell in a box (Omarchy's bar in Omarchy boxes; plain
             'nftables: protect-ports (host ports no connected box reaches)')
 install=omabox.install
 source=("$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
-sha256sums=('d41cf1c7375a891428133b753ddfc40ea2f4ee0781f29683eeee27d79ebce9d2')
+sha256sums=('b41db1164e7ad535c3610452146344696505e8237353ce41b44b1ab65f56b345')
 
 _tools=(pointer keyboard wlfd peek still relay events burst tree notices polkit fixture idlehold qtext)
 
