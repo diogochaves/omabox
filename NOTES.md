@@ -15222,7 +15222,6 @@ from them.
     edit kept, one JSON value, no temporary file left; with the old way the threads read torn JSON
     and lost edits), `box_json_edit_held_and_gone` (a holder edits at once, another thread cannot
     have the lock meanwhile, a box gone makes no lock file and no dir).
-
 754. **Error lines said one way, `run`'s and `look`'s up stopped with them, check run --json's
     summary whole** (2026-11-22, the 2026-11-22 review's small correctness items). **A box gone
     after need_box**: `on_box`'s and `box_exec`'s refusals said `box 'N' is not up`, for a box this
