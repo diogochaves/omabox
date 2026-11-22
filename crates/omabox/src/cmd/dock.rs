@@ -6,7 +6,7 @@
 //! gone; on: back. The box's own shell only, never the host's.
 
 use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
-use crate::boxes::{box_home_file, need_box};
+use crate::boxes::{box_home_read, need_box};
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::hypr_json;
@@ -131,8 +131,7 @@ fn state(ctx: &Ctx) -> Res<Vec<u8>> {
             crate::json::quote(&String::from_utf8_lossy(&mode))
         ));
     }
-    let cfg = box_home_file(&ctx.d, ".config/omarchy/shell.json")
-        .and_then(|p| std::fs::read(p).ok())
+    let cfg = box_home_read(&ctx.d, ".config/omarchy/shell.json", crate::boxes::READ_CAP)
         .map(|t| jq::jq(&["-c", ".dock // {} | objects"], Some(&t), jq::Err::Null).text())
         .map(|t| strip_nl(&t))
         .filter(|t| !t.is_empty())

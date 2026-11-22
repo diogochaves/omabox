@@ -352,28 +352,114 @@ pub fn box_env(d: &[u8], key: &str) -> Option<Vec<u8>> {
     shell::re_match("^[A-Za-z0-9_.-]+$", &v).then_some(v)
 }
 
-/// File PATH of the box's HOME, for the host to read: resolved when it is a regular file, not a
-/// link, and inside the HOME once its dirs are resolved. The box writes its HOME freely: a FIFO
-/// there hangs the host's read, a link reads a host file (finding 159).
-pub fn box_home_file(d: &[u8], file: &str) -> Option<PathBuf> {
-    let f = at(d, &format!("home/{file}"));
-    if !f.is_file() || f.is_symlink() {
-        return None;
-    }
-    let home = std::fs::canonicalize(at(d, "home")).ok()?;
-    let p = std::fs::canonicalize(&f).ok()?;
-    p.strip_prefix(&home)
-        .is_ok_and(|r| !r.as_os_str().is_empty())
-        .then_some(p)
+/// File FILE of the box's HOME (a relative path under it), opened for the host to read: walked from
+/// the HOME's own fd with no link followed on the way or at the end (openat2's
+/// RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS, else an O_NOFOLLOW walk a folder at a time), never waiting on
+/// a FIFO (O_NONBLOCK), and only a regular file by the fd's own fstat. The box writes its HOME
+/// freely: a FIFO there would hang the host's read, a link (at the file or at a folder on its way)
+/// would read a host file, and a look at the path then an open by name lets the box swap it between
+/// the two (findings 159, 747). The HOME is the box folder's (`<box dir>/home`), a desk box's too,
+/// never the path the box sees, which for a desk box is your real HOME.
+pub fn box_home_file(d: &[u8], file: &str) -> Option<File> {
+    open_beneath(&at(d, "home"), file)
 }
 
-/// The last N bytes of a file of the box's (its HOME's logs), opened as open_box_file opens one:
-/// nothing for a link, a FIFO or anything but a regular file (finding 710).
-pub fn tail(p: &Path, n: u64) -> Vec<u8> {
-    use std::io::{Seek, SeekFrom};
-    let Some(mut f) = open_box_file(p) else {
-        return Vec::new();
+/// box_home_file's content, its first CAP bytes.
+pub fn box_home_read(d: &[u8], file: &str, cap: u64) -> Option<Vec<u8>> {
+    let mut v = Vec::new();
+    box_home_file(d, file)?.take(cap).read_to_end(&mut v).ok()?;
+    Some(v)
+}
+
+/// What a host read of one box log or config takes at most (S7: bounded on the host's side).
+pub const READ_CAP: u64 = 8 << 20;
+
+/// REL, a relative path of plain names, opened under DIR as box_home_file opens one: None for an
+/// absolute path, an empty one, a `.` or `..` part, a link anywhere on the way, a FIFO, a folder or
+/// anything else but a regular file.
+pub fn open_beneath(dir: &Path, rel: &str) -> Option<File> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let parts: Vec<&str> = rel.split('/').collect();
+    if rel.is_empty()
+        || rel.contains('\0')
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || *p == "." || *p == "..")
+    {
+        return None;
+    }
+    // (DIR itself is the host's: the box dir's `home` is a link of up's to the HOME folder, and no
+    // box writes the box dir)
+    let base = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(dir)
+        .ok()?;
+    let flags =
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
+    let c = std::ffi::CString::new(rel).ok()?;
+    // SAFETY: open_how is plain data; zeroed, then the fields set.
+    let mut how: libc::open_how = unsafe { std::mem::zeroed() };
+    how.flags = flags as u64;
+    how.resolve = libc::RESOLVE_BENEATH | libc::RESOLVE_NO_SYMLINKS | libc::RESOLVE_NO_MAGICLINKS;
+    // SAFETY: openat2 reads the path and how (its size given) and returns a new fd of ours, or -1.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            base.as_raw_fd(),
+            c.as_ptr(),
+            &how,
+            std::mem::size_of::<libc::open_how>(),
+        )
     };
+    let f = if fd >= 0 {
+        // SAFETY: just opened, ours alone.
+        File::from(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+    } else {
+        let e = std::io::Error::last_os_error().raw_os_error();
+        // (a kernel or a seccomp filter without openat2: a folder at a time)
+        if !matches!(e, Some(libc::ENOSYS | libc::EPERM)) {
+            return None;
+        }
+        walk_beneath(base, &parts, flags)?
+    };
+    f.metadata().ok()?.is_file().then_some(f)
+}
+
+/// open_beneath's way without openat2: each folder opened from its parent's fd, O_NOFOLLOW (a link
+/// is ELOOP, never followed), checked a folder by its fstat, then the file with FLAGS.
+fn walk_beneath(base: File, parts: &[&str], flags: libc::c_int) -> Option<File> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let mut cur = base;
+    let (last, dirs) = parts.split_last()?;
+    let open = |at: &File, name: &str, fl: libc::c_int| -> Option<File> {
+        let c = std::ffi::CString::new(name).ok()?;
+        // SAFETY: openat on an fd of ours and a NUL-terminated name; a new fd of ours, or -1.
+        let fd = unsafe { libc::openat(at.as_raw_fd(), c.as_ptr(), fl) };
+        // SAFETY: just opened, ours alone.
+        (fd >= 0).then(|| File::from(unsafe { OwnedFd::from_raw_fd(fd) }))
+    };
+    for p in dirs {
+        let next = open(
+            &cur,
+            p,
+            libc::O_RDONLY
+                | libc::O_DIRECTORY
+                | libc::O_NOFOLLOW
+                | libc::O_NONBLOCK
+                | libc::O_CLOEXEC,
+        )?;
+        if !next.metadata().ok()?.is_dir() {
+            return None;
+        }
+        cur = next;
+    }
+    open(&cur, last, flags)
+}
+
+/// The last N bytes of F, a file open_box_file or box_home_file opened.
+pub fn tail_file(mut f: File, n: u64) -> Vec<u8> {
+    use std::io::{Seek, SeekFrom};
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let _ = f.seek(SeekFrom::Start(len.saturating_sub(n)));
     let mut v = Vec::new();
@@ -438,11 +524,12 @@ fn last_session_line(text: &[u8]) -> Option<Vec<u8>> {
 /// How the box's Hyprland ended, from labwc's line (headless boxes: labwc's -S child is Hyprland):
 /// crashed (SIGSEGV), exited (status N), or None. The box writes its log: only that line read.
 pub fn hypr_end(d: &[u8]) -> Option<String> {
-    let mut line = box_home_file(d, "labwc.log").and_then(|f| last_spawned(&tail(&f, 65536)));
+    let mut line = box_home_file(d, "labwc.log").and_then(|f| last_spawned(&tail_file(f, 65536)));
     // An interactive box has no labwc: session.sh writes its own line at the end of hyprland.log
     // (finding 350).
     if line.is_none() {
-        line = box_home_file(d, "hyprland.log").and_then(|f| last_session_line(&tail(&f, 4096)));
+        line =
+            box_home_file(d, "hyprland.log").and_then(|f| last_session_line(&tail_file(f, 4096)));
     }
     let line = line?;
     if let Some(n) = shell::re_group(r"signal ([0-9]+)$", &line, 1) {
@@ -853,6 +940,103 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// box_home_file (finding 747): a file of the box HOME is opened from the HOME's fd, a folder at a
+    /// time with no link followed (at the file or on its way), a FIFO never waited on, only a regular
+    /// file kept; `..`, `.`, an absolute path and an empty one are refused. Both ways: openat2's, and
+    /// the O_NOFOLLOW walk a kernel without it takes.
+    #[test]
+    fn box_home_file_no_link_no_fifo_no_escape() {
+        let d = std::env::temp_dir().join(format!("omabox-homefile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let real = d.join("homes/b1");
+        std::fs::create_dir_all(real.join(".config/omarchy")).unwrap();
+        std::fs::create_dir_all(d.join("box")).unwrap();
+        // (the box dir's `home` is a link of up's to the HOME folder: followed, it is the host's)
+        std::os::unix::fs::symlink(&real, d.join("box/home")).unwrap();
+        std::fs::create_dir_all(d.join("host/.config/omarchy")).unwrap();
+        std::fs::write(d.join("host/secret"), "host secret\n").unwrap();
+        std::fs::write(d.join("host/.config/omarchy/shell.json"), "host\n").unwrap();
+        std::fs::write(real.join(".config/omarchy/shell.json"), "{}\n").unwrap();
+        std::fs::write(real.join("run-1.log"), "box's\n").unwrap();
+        std::os::unix::fs::symlink(d.join("host/secret"), real.join("run-2.log")).unwrap();
+        std::os::unix::fs::symlink("run-1.log", real.join("run-3.log")).unwrap();
+        std::os::unix::fs::symlink(d.join("host/.config"), real.join(".cfg")).unwrap();
+        std::fs::create_dir_all(real.join(".local/state/x")).unwrap();
+        std::os::unix::fs::symlink(d.join("host"), real.join(".local/state/x/up")).unwrap();
+        let c =
+            std::ffi::CString::new(real.join("shell.log").as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a path of ours, NUL-terminated.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let db = shell::bytes(&d.join("box")).to_vec();
+        let home = d.join("box/home");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let read = |f: Option<File>| {
+                f.map(|mut f| {
+                    let mut v = Vec::new();
+                    f.read_to_end(&mut v).unwrap();
+                    String::from_utf8(v).unwrap()
+                })
+            };
+            let names = [
+                "run-1.log",
+                ".config/omarchy/shell.json",
+                "run-2.log",
+                "run-3.log",
+                "shell.log",
+                ".cfg/omarchy/shell.json",
+                ".local/state/x/up/secret",
+                "../../host/secret",
+                ".config/../run-1.log",
+                "./run-1.log",
+                ".config",
+                "",
+                "/etc/passwd",
+                ".config//omarchy/shell.json",
+            ];
+            let mut r = Vec::new();
+            for n in names {
+                r.push((n, read(box_home_file(&db, n))));
+            }
+            // The walk without openat2, on the same names.
+            for n in names {
+                let parts: Vec<&str> = n.split('/').collect();
+                let w = if parts
+                    .iter()
+                    .any(|p| p.is_empty() || *p == "." || *p == "..")
+                {
+                    None
+                } else {
+                    let base = File::open(&home).unwrap();
+                    walk_beneath(
+                        base,
+                        &parts,
+                        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+                    )
+                    .filter(|f| f.metadata().is_ok_and(|m| m.is_file()))
+                };
+                r.push((n, read(w)));
+            }
+            let _ = tx.send(r);
+        });
+        let r = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("an open waited on a FIFO");
+        for half in r.chunks(14) {
+            let got: Vec<(&str, Option<&str>)> =
+                half.iter().map(|(n, v)| (*n, v.as_deref())).collect();
+            assert_eq!(got[0], ("run-1.log", Some("box's\n")));
+            assert_eq!(got[1], (".config/omarchy/shell.json", Some("{}\n")));
+            for (n, v) in &got[2..] {
+                assert_eq!(
+                    *v, None,
+                    "{n}: refused (a link, a FIFO, a way out, a folder)"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// open_box_file (finding 710): what run_read and tail read of a box's files. A FIFO is not
     /// waited on, a link to a host file not read (at run/, in the HOME), a regular file read.
     #[test]
@@ -870,6 +1054,11 @@ mod tests {
         std::os::unix::fs::symlink(d.join("run/fifo"), d.join("home/gdb.log")).unwrap();
         std::fs::write(d.join("run/ok"), "fine\n").unwrap();
         let db = shell::bytes(&d).to_vec();
+        let tail = |p: &Path, n| {
+            open_box_file(p)
+                .map(|f| tail_file(f, n))
+                .unwrap_or_default()
+        };
         // (each in a thread: an open that waited on the FIFO would hang; 5 s says so)
         let (tx, rx) = std::sync::mpsc::channel();
         let d2 = d.clone();

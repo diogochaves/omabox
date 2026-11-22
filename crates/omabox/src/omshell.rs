@@ -9,7 +9,7 @@
 //! `~/.local/state/omarchy/workspace-layouts/N.lua` (`mode = "floating"`), a default for the rest in
 //! `default.lua`, as `omarchy-hyprland-workspace-layout-current` reads them.
 
-use crate::boxes::{box_home_file, meta};
+use crate::boxes::{box_home_read, meta};
 use crate::cat;
 use crate::exec::{ExecOpts, Redir, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Res};
@@ -244,13 +244,14 @@ pub fn dock_set(ctx: &mut Ctx, cmd: &str, on: bool) -> Res<()> {
 /// Whether the dock's service is enabled in the box, as its shell.json says (a disabled one is in
 /// disabledPlugins; the shell enables a first-party service by default).
 pub fn dock_enabled(ctx: &Ctx) -> bool {
-    let Some(p) = box_home_file(&ctx.d, ".config/omarchy/shell.json") else {
+    let Some(t) = box_home_read(&ctx.d, ".config/omarchy/shell.json", crate::boxes::READ_CAP)
+    else {
         return true;
     };
     let r = Args::new(&["-e"])
         .kv("--arg", "id", DOCK_ID)
         .arg(r#"(.disabledPlugins // []) | index([$id]) | not"#)
-        .run(Some(&std::fs::read(p).unwrap_or_default()), jq::Err::Null);
+        .run(Some(&t), jq::Err::Null);
     r.rc != 1
 }
 
@@ -258,13 +259,13 @@ pub fn dock_enabled(ctx: &Ctx) -> bool {
 /// nothing when it keeps none (the workspace follows Hyprland's layout, never floating).
 pub fn ws_mode(ctx: &Ctx, id: i64) -> Vec<u8> {
     let read = |f: &str, key: &str| -> Vec<u8> {
-        let Some(p) = box_home_file(
+        let Some(text) = box_home_read(
             &ctx.d,
             &format!(".local/state/omarchy/workspace-layouts/{f}"),
+            crate::boxes::READ_CAP,
         ) else {
             return Vec::new();
         };
-        let text = std::fs::read(p).unwrap_or_default();
         let lead = format!("{key} = \"");
         for l in text.split(|&c| c == b'\n') {
             if let Some(i) = l.windows(lead.len()).position(|w| w == lead.as_bytes()) {

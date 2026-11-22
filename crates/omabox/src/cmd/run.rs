@@ -834,9 +834,13 @@ fn replace_all(v: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     out
 }
 
+/// What keep_run_logs copies of one log at most.
+const KEEP_CAP: u64 = 64 << 20;
+
 /// keep_run_logs: a throwaway whose `up` failed: its logs, copied out of the box dir its `down`
 /// removes (finding 167), into <state>/omabox/failed-runs/<name>-<date>; None when there was none to
-/// copy. Only regular files, not links, inside the box's own dirs. The 10 newest such dirs kept.
+/// copy. Only regular files inside the box's own dirs, opened with no link on their way (S7), each
+/// cut at KEEP_CAP. The 10 newest such dirs kept.
 fn keep_run_logs(ctx: &Ctx) -> Option<Vec<u8>> {
     let state = shell::env("XDG_STATE_HOME")
         .filter(|v| !v.is_empty())
@@ -849,10 +853,26 @@ fn keep_run_logs(ctx: &Ctx) -> Option<Vec<u8>> {
     let keep = cat!(base, "/", ctx.name, "-", date);
     std::fs::create_dir_all(shell::path(&base)).ok()?;
     std::fs::create_dir(shell::path(&keep)).ok()?;
-    let copy = |from: &std::path::Path, to: &[u8]| std::fs::copy(from, shell::path(to)).is_ok();
+    // (each copy written from the fd the box's file was opened by, no link followed on its way and
+    // no FIFO waited on, bounded: never a look at its path, then a copy by name, S7)
+    let copy = |from: Option<std::fs::File>, to: &[u8]| {
+        let Some(from) = from else { return false };
+        use std::os::unix::fs::OpenOptionsExt;
+        let Ok(mut out) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(shell::path(to))
+        else {
+            return false;
+        };
+        std::io::copy(&mut std::io::Read::take(from, KEEP_CAP), &mut out).is_ok()
+    };
     let mut n = 0;
-    let bl = ctx.at("box.log");
-    if bl.is_file() && !bl.is_symlink() && copy(&bl, &cat!(keep, "/box.log")) {
+    if copy(
+        crate::boxes::open_box_file(&ctx.at("box.log")),
+        &cat!(keep, "/box.log"),
+    ) {
         n += 1;
     }
     for f in shell::glob(&ctx.at("home"), false) {
@@ -860,30 +880,17 @@ fn keep_run_logs(ctx: &Ctx) -> Option<Vec<u8>> {
             continue;
         }
         let name = String::from_utf8_lossy(&f).into_owned();
-        if let Some(p) = crate::boxes::box_home_file(&ctx.d, &name) {
-            if copy(&p, &cat!(keep, "/", f)) {
-                n += 1;
-            }
+        if copy(
+            crate::boxes::box_home_file(&ctx.d, &name),
+            &cat!(keep, "/", f),
+        ) {
+            n += 1;
         }
     }
-    let run = crate::repo::readlink_e(&cat!(ctx.d, "/run"));
     for s in shell::glob(&ctx.at("run/hypr"), true) {
-        let f = ctx
-            .at("run/hypr")
-            .join(shell::path(&s))
-            .join("hyprland.log");
-        let dest = cat!(keep, "/hyprland.log");
-        let Some(run) = &run else { continue };
-        if !f.is_file() || f.is_symlink() || shell::path(&dest).exists() {
-            continue;
-        }
-        let Some(p) = crate::repo::readlink_e(shell::bytes(&f)) else {
-            continue;
-        };
-        if !p.starts_with(&cat!(run, "/hypr/")) {
-            continue;
-        }
-        if copy(&shell::path(&p), &dest) {
+        let rel = cat!("hypr/", s, "/hyprland.log");
+        let f = crate::boxes::open_beneath(&ctx.at("run"), &String::from_utf8_lossy(&rel));
+        if copy(f, &cat!(keep, "/hyprland.log")) {
             n += 1;
         }
     }

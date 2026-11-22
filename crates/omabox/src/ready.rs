@@ -4,7 +4,9 @@
 //! kill_box, kill_reapers, rm_box), sweep_homes, box_held, more_screens, client_render_check and
 //! box_json.
 
-use crate::boxes::{BoxPid, BoxSys, RealBox, box_home_file, box_state, meta, run_read};
+use crate::boxes::{
+    BoxPid, BoxSys, RealBox, box_home_file, box_home_read, box_state, meta, run_read,
+};
 use crate::cat;
 use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, muted, say};
@@ -794,14 +796,9 @@ pub(crate) const VIRGL_HINT: &[u8] = b"in a VM, virtio-gpu with virgl (QEMU's vi
 /// initialize EGL", from its GLES2 renderer); either way labwc goes on with pixman, which offers no
 /// dmabuf, and the box's Hyprland aborts (CBackend::create() failed!), its line only in labwc.log.
 fn render_why(ctx: &Ctx) -> Vec<u8> {
-    let Some(f) = box_home_file(&ctx.d, "labwc.log") else {
+    let Some(log) = box_home_read(&ctx.d, "labwc.log", 256 * 1024) else {
         return Vec::new();
     };
-    let mut log = Vec::new();
-    if let Ok(fh) = std::fs::File::open(f) {
-        use std::io::Read;
-        let _ = fh.take(256 * 1024).read_to_end(&mut log);
-    }
     let bj: serde_json::Value = std::fs::read(ctx.at("box.json"))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -890,7 +887,7 @@ pub fn died_starting(ctx: &Ctx, covers: bool) -> Exit {
     let mut why = Vec::new();
     let render = render_why(ctx);
     let last = box_home_file(&ctx.d, "hyprland.log")
-        .and_then(|f| std::fs::read(f).ok())
+        .map(|f| crate::boxes::tail_file(f, crate::boxes::READ_CAP))
         .map(|t| last_line(&t))
         .unwrap_or_default();
     let boxlog = std::fs::read(ctx.at("box.log")).unwrap_or_default();
@@ -1206,12 +1203,12 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
         return Ok(());
     }
     // The bar on screen; only wait for the tray watcher when the user's layout has a tray.
-    let tray_expected = box_home_file(&ctx.d, ".config/omarchy/shell.json").is_some_and(|f| {
-        Args::new(&["-e", TRAY_JQ])
-            .arg(shell::bytes(&f))
-            .run_file(jq::Err::Null)
-            .ok()
-    });
+    let tray_expected = box_home_read(&ctx.d, ".config/omarchy/shell.json", crate::boxes::READ_CAP)
+        .is_some_and(|t| {
+            Args::new(&["-e", TRAY_JQ])
+                .run(Some(&t), jq::Err::Null)
+                .ok()
+        });
     loop {
         let bar = layer_at(&layers(ctx, ErrTo::Null).out, "omarchy-bar", jq::Err::Null).text();
         if !bar.is_empty()
@@ -1433,15 +1430,13 @@ pub fn shell_crash_report(ctx: &Ctx, before: &[u8]) -> Option<Vec<u8>> {
     for rep in new_lines(before, &shell_crash_dirs(ctx)) {
         if mark > 0
             && plain(&rep)
-            && let Some(f) = box_home_file(
+            && let Some(t) = box_home_read(
                 &ctx.d,
                 &String::from_utf8_lossy(&cat!(".cache/quickshell/crashes/", rep, "/report.txt")),
+                crate::boxes::READ_CAP,
             )
         {
-            let c = std::fs::read(f)
-                .ok()
-                .and_then(|t| crashed_pid(&t))
-                .unwrap_or_default();
+            let c = crashed_pid(&t).unwrap_or_default();
             if !c.is_empty() && shell::dec(&c).is_some_and(|c| c <= mark) {
                 continue;
             }
@@ -1504,7 +1499,7 @@ fn crashed_pid(t: &[u8]) -> Option<Vec<u8>> {
 /// shell_crash_logged: shell.log says "Quickshell has crashed".
 pub fn shell_crash_logged(ctx: &Ctx) -> bool {
     box_home_file(&ctx.d, "shell.log")
-        .and_then(|f| std::fs::read(f).ok())
+        .map(|f| crate::boxes::tail_file(f, crate::boxes::READ_CAP))
         .is_some_and(|t| crate::exit::contains(&t, b"Quickshell has crashed"))
 }
 
@@ -1562,7 +1557,7 @@ fn shell_adopt_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Vec<u8>> {
     if crate::boxes::slot_shell(&ctx.d) {
         return None;
     }
-    let t = std::fs::read(box_home_file(&ctx.d, "shell.log")?).ok()?;
+    let t = crate::boxes::tail_file(box_home_file(&ctx.d, "shell.log")?, crate::boxes::READ_CAP);
     if !crate::exit::contains(&t, b"An instance of this configuration is already running") {
         return None;
     }
@@ -1791,8 +1786,7 @@ pub fn soft_note(rec: &[u8], driver: &[u8], other: Option<&[u8]>) -> Vec<u8> {
 /// box_theme: the box's theme name (its theme.name's first line), empty when the file is not one to
 /// read or the name not a plain one (finding 159).
 pub fn box_theme(ctx: &Ctx) -> Vec<u8> {
-    box_home_file(&ctx.d, ".local/state/omarchy/current/theme.name")
-        .and_then(|f| std::fs::read(f).ok())
+    box_home_read(&ctx.d, ".local/state/omarchy/current/theme.name", 4096)
         .map(|t| theme_line(&t))
         .unwrap_or_default()
 }

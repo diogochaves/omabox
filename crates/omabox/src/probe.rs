@@ -680,7 +680,9 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             &owned(dirs),
             &crate::jailpath::jail_path,
         )?),
-        (b"shell_warnings", [f]) => out(crate::plugins::shell_warnings(&crate::shell::path(f))),
+        (b"shell_warnings", [f]) => out(crate::plugins::shell_warnings_of(
+            &std::fs::read(crate::shell::path(f)).unwrap_or_default(),
+        )),
         (b"theme_check", [d, rest @ ..]) => {
             let (w, h) = rest
                 .first()
