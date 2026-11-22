@@ -60,8 +60,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // every box's since #448, whose seeding leaves none: one there is a save's from before, or
         // planted)
         let user = shell::env_or_empty("HOME");
-        let found = real_home_links(&cat!(ctx.d, "/home"), &user);
-        if let Some((first, to)) = &found.first {
+        let mounts = std::fs::read(ctx.at("box.json"))
+            .ok()
+            .and_then(|t| serde_json::from_slice::<Value>(&t).ok())
+            .map(|bj| crate::cmd::plugin::box_mounts(&bj))
+            .unwrap_or_default();
+        let found = real_home_links(&cat!(ctx.d, "/home"), &user, mounts);
+        if let Some((first, to, what)) = &found.first {
             let n = found.n;
             say(cat!(
                 "path: box '",
@@ -69,11 +74,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "''s HOME holds ",
                 n.to_string(),
                 if n == 1 { " link" } else { " links" },
-                " into your real HOME (",
+                " out of it, as up's check judges them (",
                 first,
                 " -> ",
                 to,
-                "): on the host, following one reaches your own files, not the box's. Edit the box's files by their paths in this folder or through `omabox run`, never through a link"
+                ": ",
+                what,
+                "): on the host, following one writes there, not in the box. Edit the box's files by their paths in this folder or through `omabox run`, never through a link"
             ));
         }
         // (finding 752: a look cut short is said, not taken for none)
@@ -81,7 +88,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             say(cat!(
                 "path: note: box '",
                 ctx.name,
-                "''s HOME was checked for links into your real HOME only up to ~/",
+                "''s HOME was checked for links out of it only up to ~/",
                 c.rel,
                 " (",
                 c.why,
@@ -124,39 +131,46 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     out(text)
 }
 
-/// What real_home_links found: how many links lead into your HOME, the first one's path in the box
-/// HOME and target as written, and where the look stopped short, if it did.
+/// What real_home_links found: how many links lead out, the first one's path in the box HOME, target
+/// as written and what is true of it (homelinks::Out::what), and where the look stopped short, if it
+/// did.
 #[derive(Debug, Default)]
 struct Found {
     n: u64,
-    first: Option<(Vec<u8>, Vec<u8>)>,
+    first: Option<(Vec<u8>, Vec<u8>, Vec<u8>)>,
     cut: Option<crate::homelinks::Cut>,
 }
 
-/// The links in a box HOME's folder (DIR, as the host sees it) that lead into the user's real HOME
-/// (USER), by up's own rule (homelinks, finding 752: where the host resolves each, into your HOME or
-/// a folder that holds it; not into the box's own folder). Within homelinks' caps; where it stopped
-/// is said. A theme's own folder as a link (.config/omarchy/themes/NAME) is up --theme-dir's: live,
+/// The links in a box HOME's folder (DIR, as the host sees it) that lead out of it, USER being your
+/// HOME: up's own rule, the same helper (homelinks::View::judge, finding 752, 756: where the host
+/// resolves each; into your HOME or a folder that holds it, to a file you can write, to your
+/// session's live sockets or secrets, or through /proc). Within homelinks' caps; where it stopped is
+/// said. A theme's own folder as a link (.config/omarchy/themes/NAME) is up --theme-dir's: live,
 /// as asked.
-fn real_home_links(dir: &[u8], user: &[u8]) -> Found {
+fn real_home_links(dir: &[u8], user: &[u8], mounts: Vec<(Vec<u8>, Vec<u8>)>) -> Found {
     let Some(view) = crate::homelinks::View::new(dir, user) else {
         return Found::default();
     };
+    let view = view.with_mounts(mounts);
     let mut f = Found::default();
-    let cut = crate::homelinks::walk_links::<()>(&view.own, b"", |r, _| {
-        let theme_dir = r.starts_with(b".config/omarchy/themes/")
-            && !r[b".config/omarchy/themes/".len()..].contains(&b'/');
-        if theme_dir || view.link_into_home(r).is_none() {
-            return Ok(());
-        }
-        f.n += 1;
-        if f.first.is_none() {
-            let raw = std::fs::read_link(shell::path(&cat!(view.own, "/", r)))
-                .map_or_else(|_| Vec::new(), |t| shell::bytes(&t).to_vec());
-            f.first = Some((r.to_vec(), raw));
-        }
-        Ok(())
-    });
+    let cut =
+        crate::homelinks::walk_links::<()>(&view.own, b"", crate::homelinks::PATH_CAPS, |r, _| {
+            let theme_dir = r.starts_with(b".config/omarchy/themes/")
+                && !r[b".config/omarchy/themes/".len()..].contains(&b'/');
+            if theme_dir {
+                return Ok(());
+            }
+            let Some(o) = view.judge(r) else {
+                return Ok(());
+            };
+            f.n += 1;
+            if f.first.is_none() {
+                let raw = std::fs::read_link(shell::path(&cat!(view.own, "/", r)))
+                    .map_or_else(|_| Vec::new(), |t| shell::bytes(&t).to_vec());
+                f.first = Some((r.to_vec(), raw, o.what()));
+            }
+            Ok(())
+        });
     f.cut = cut.unwrap_or(None);
     f
 }
@@ -165,9 +179,10 @@ fn real_home_links(dir: &[u8], user: &[u8]) -> Found {
 mod tests {
     use super::*;
 
-    /// path --home's note (finding 710, 752): links into the real HOME, absolute or climbing out,
-    /// at any depth, or to a folder that holds it, counted; one into the box's folder (a relative one
-    /// omabox makes) or into /usr, not.
+    /// path --home's note (finding 710, 752, 756): links into the real HOME, absolute or climbing out,
+    /// at any depth, or to a folder that holds it, a writable file, through /proc, counted; one into
+    /// the box's folder (a relative one omabox makes), into /usr, to /dev/null or a folder
+    /// elsewhere, not.
     #[test]
     fn real_home_links_found() {
         let d = std::env::temp_dir().join(format!("omabox-pathlinks-{}", std::process::id()));
@@ -182,7 +197,7 @@ mod tests {
         let db = shell::bytes(&bx).to_vec();
         ln("../../../../Pictures/w.png", &cur.join("background"));
         ln("/usr/share/x", &bx.join("share"));
-        let f = real_home_links(&db, &ub);
+        let f = real_home_links(&db, &ub, Vec::new());
         assert!(
             f.first.is_none() && f.cut.is_none(),
             "relative into the box, /usr: none"
@@ -200,18 +215,36 @@ mod tests {
             &format!("{}/dev/live", user.display()),
             &themes.join("live"),
         );
-        let f = real_home_links(&db, &ub);
-        let (first, _) = f.first.unwrap();
+        let f = real_home_links(&db, &ub, Vec::new());
+        let (first, _, _) = f.first.unwrap();
         assert_eq!(f.n, 3, "{}", String::from_utf8_lossy(&first));
         assert!(first.starts_with(b".local/state/omarchy/current/"));
         ln(&real, &themes.join("t/backgrounds/1.png"));
-        assert_eq!(real_home_links(&db, &ub).n, 4);
+        assert_eq!(real_home_links(&db, &ub, Vec::new()).n, 4);
         // (a link to /, and one through it whose text stays in the box HOME)
         ln("/", &bx.join("r"));
         ln(&format!("r{}/.bashrc", user.display()), &bx.join("via"));
-        let f = real_home_links(&db, &ub);
+        let f = real_home_links(&db, &ub, Vec::new());
         assert_eq!(f.n, 6);
         assert!(f.cut.is_none());
+        // (finding 756: up's rule, so a file you can write outside your HOME and a link through
+        // /proc count; /dev/null and a folder you can write elsewhere do not)
+        std::fs::create_dir_all(d.join("data")).unwrap();
+        std::fs::write(d.join("data/f"), "x").unwrap();
+        ln("/dev/null", &bx.join("null"));
+        ln(&format!("{}/data", d.display()), &bx.join("data"));
+        assert_eq!(
+            real_home_links(&db, &ub, Vec::new()).n,
+            6,
+            "a device, a folder elsewhere"
+        );
+        ln(&format!("{}/data/f", d.display()), &bx.join("f"));
+        ln("/proc/self/cwd/x", &bx.join("cwd"));
+        assert_eq!(
+            real_home_links(&db, &ub, Vec::new()).n,
+            8,
+            "a writable file, through /proc"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 }

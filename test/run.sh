@@ -13498,7 +13498,7 @@ t_desk_wallpaper() {
   check_eq "...on the host: the box's copy" "$(readlink -f "$bg/b.png")" "$(readlink -f "$H/.local/state/omarchy/current/background")"
   check_eq "...path --home: no warning (no link of the box HOME's leads into HOME)" "" "$(dw path -b "$B" --home 2>&1 >/dev/null)"
   ln -s "$fh/walls/a.png" "$H/planted.png"
-  check_match "...one planted that does: path --home warns, on stderr" "^omabox: path: box '$B''s HOME holds 1 link into your real HOME \(planted\.png -> " \
+  check_match "...one planted that does: path --home warns, on stderr" "^omabox: path: box '$B''s HOME holds 1 link out of it, as up.s check judges them \(planted\.png -> " \
     "$(dw path -b "$B" --home 2>&1 >/dev/null)"
   rm -f "$H/planted.png"
   check "the box shows it" until_ok 15 px_pink
@@ -20912,6 +20912,10 @@ t_desk_copy() {
   echo '{}' > "$fh/.config/DankMaterialShell/settings.json"
   ln -s /usr/lib/systemd/user/dms.service "$fh/.config/systemd/user/graphical-session.target.wants/dms.service"
   echo '-- seeded' > "$base/seed/binds.lua"
+  # (finding 756: a --seed folder's links to /dev/null and to a folder you can write outside your
+  # HOME come in as they are, unsaid)
+  rm -rf "$base/proj" "$base/datasets"; mkdir -p "$base/proj/logs" "$base/datasets"
+  echo fine > "$base/proj/ok"; ln -s /dev/null "$base/proj/logs/debug.log"; ln -s "$base/datasets" "$base/proj/data"
   standin() { (cd "$fh" && command find . -printf '%p %y %s %T@\n' | LC_ALL=C sort); }
   before=$(standin)
   # (the box starts the shell it guesses, dms, only where DankMaterialShell is installed; elsewhere
@@ -20923,7 +20927,7 @@ t_desk_copy() {
     ns=(--no-shell); sed -i 's/^start dms run$/start true dms run/' "$pd/dms"
   fi
   dc() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data OMABOX_DESK_SHELL_DIR=$pd "$CLI" "$@"; }
-  out=$(cd "$base" && dc up "$B" --desktop desk --net isolated "${ns[@]}" --seed "$base/seed/binds.lua:.config/hypr/binds.lua" 2>&1) ||
+  out=$(cd "$base" && dc up "$B" --desktop desk --net isolated "${ns[@]}" --seed "$base/seed/binds.lua:.config/hypr/binds.lua" --seed "$base/proj:proj" 2>&1) ||
     { no "up --desktop desk with a desktop to copy" "$out"; dc down "$B" >/dev/null 2>&1; return; }
   ok "up --desktop desk with a desktop to copy"
   check_match "...says what it copied" "omabox: up: your desktop, copied into the box's HOME: 5 files \(2 of ~/\.config/hypr, 2 of the dms shell, 1 of the images they name\); its shell, first guessed: dms \(from unit\)" "$out"
@@ -20948,6 +20952,9 @@ t_desk_copy() {
     "$(jq -r '.desk_copy.skipped[] | select(.path == ".config/hypr/env.lua") | .why' "$D/box.json")"
   check_fails "...nor the systemd links" dc run -b "$B" -- test -e "$fh/.config/systemd"
   check_eq "--seed over a copied file: --seed's" "-- seeded" "$(dc run -b "$B" -- cat "$fh/.config/hypr/binds.lua" 2>/dev/null)"
+  check_eq "--seed of a folder: its links to /dev/null and to a folder you can write outside HOME kept (finding 756)" \
+    "/dev/null|$base/datasets" "$(readlink "$D/home/proj/logs/debug.log")|$(readlink "$D/home/proj/data")"
+  check_fails "...and nothing said of them" grep -q "is a link out of the box HOME" <<<"$out"
   dc run -b "$B" -- sh -c 'echo "-- the box wrote" >> ~/.config/hypr/hyprland.lua' >/dev/null 2>&1
   check_eq "a write in the box's copy: there" "-- the box wrote" "$(dc run -b "$B" -- tail -n 1 "$fh/.config/hypr/hyprland.lua" 2>/dev/null)"
   check_eq "...the host's file as it was" "$lua" "$(cat "$hy/hyprland.lua")"
@@ -21031,7 +21038,7 @@ t_desk_idle_links() {
   local dh; dh=$(dl path -b "$B" --home 2>/dev/null)
   check_fails "...a desk box restoring a save: its link to / gone (finding 752)" test -e "$dh/r" -o -L "$dh/r"
   check "...the one through it (to the stand-in's .bashrc) a copy, no link" bash -c "[ -f '$dh/via' ] && [ ! -L '$dh/via' ]"
-  check_match "...said by up" "up: note: ~/r is a link out of the box HOME and is left out: it leads to /, not a file" "$out"
+  check_match "...said by up" "up: note: ~/r is a link out of the box HOME and is left out: it leads to / \(a folder that holds your HOME\): not a file" "$out"
   check_eq "...path --home silent" "" "$(dl path -b "$B" --home 2>&1 >/dev/null)"
   check_eq "...the box's shell.json edited, a file of its own" "[] false" \
     "$(dl run -b "$B" -- sh -c 'jq -c .general.idle.timeouts "$1"; test -L "$1" && echo true || echo false' sh "$fh/.config/caelestia/shell.json" 2>/dev/null | paste -sd ' ')"
@@ -21209,12 +21216,12 @@ t_theme_links() {
   check_eq "...said once, by up" 1 "$(grep -c 'themes/mine/creds.txt is a link out of the box HOME and is left out' <<<"$UP_OUT")"
   check_eq "path --home: silent (no link into HOME)" "" "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
   ln -s "$fh/pics/w.png" "$H/planted.png"
-  check_match "...one planted: named" "^omabox: path: box '$B''s HOME holds 1 link into your real HOME \(planted\.png -> " \
+  check_match "...one planted: named" "^omabox: path: box '$B''s HOME holds 1 link out of it, as up.s check judges them \(planted\.png -> " \
     "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
   # finding 752: judged by where it resolves: a link to / (a folder holding HOME) and one through it
   # whose text reads as inside the box HOME.
   ln -s / "$H/r"; ln -s "r$fh/pics/creds.txt" "$H/via"
-  check_match "...a link to / and one through it: named too" "^omabox: path: box '$B''s HOME holds 3 links into your real HOME " \
+  check_match "...a link to / and one through it: named too" "^omabox: path: box '$B''s HOME holds 3 links out of it, as up.s check judges them " \
     "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
   # A save holding such links (made before the fix, or planted): up --from it gets the copy.
   local S=$P-tls
@@ -21242,6 +21249,26 @@ t_theme_links() {
   check_match "...said by up" "up: note: ~/proj/(conf/creds|root) is a link out of the box HOME and is left out" "$UP_OUT"
   check_eq "...path --home silent" "" "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
   HOME=$fh ob down "$B" >/dev/null 2>&1
+  # Finding 756: --seed of a folder whose links lead to /dev/null and to a folder you can write
+  # outside your HOME: both kept, nothing said, path --home silent; one to a file you can write
+  # outside your HOME a copy, said of nothing.
+  local sd2=$TMP/$P-tl-seed2 data=$TMP/$P-tl-data
+  rm -rf "$sd2" "$data"; mkdir -p "$sd2/logs" "$data/sets"; echo plain > "$data/notes.txt"
+  ln -s /dev/null "$sd2/logs/debug.log"; ln -s "$data/sets" "$sd2/data"; ln -s "$data/notes.txt" "$sd2/notes"
+  UP_OUT=$(HOME=$fh ob up "$B" --seed "$sd2:ml" --no-shell --net isolated --theme tokyo-night 2>&1) || { no "up --seed a folder with links out of HOME" "$UP_OUT"; HOME=$fh ob down "$B" >/dev/null 2>&1; return; }
+  H=$(HOME=$fh ob path -b "$B" --home 2>/dev/null)
+  check_eq "up --seed: its links to /dev/null and to a folder you can write outside HOME kept" \
+    "/dev/null|$data/sets" "$(readlink "$H/ml/logs/debug.log")|$(readlink "$H/ml/data")"
+  check "...one to a file you can write outside HOME: a copy" bash -c "[ -f '$H/ml/notes' ] && [ ! -L '$H/ml/notes' ]"
+  # (the stand-in's theme still has its link to creds.txt, said on every up: only ~/ml's count)
+  check_fails "...nothing said of them" grep -q "[~]/ml/.* is a link out of the box HOME" <<<"$UP_OUT"
+  check_eq "...path --home silent" "" "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
+  # (sec: path --home judges by up's rule: a link planted through /proc is named)
+  ln -s /proc/self/cwd/x "$H/cwd"
+  check_match "...one planted through /proc: named" "^omabox: path: box '$B''s HOME holds 1 link out of it, as up.s check judges them \(cwd -> /proc/self/cwd/x: it leads through /proc" \
+    "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
+  HOME=$fh ob down "$B" >/dev/null 2>&1
+  rm -rf "$sd2" "$data"
 }
 
 # up --theme NAME (finding 245): the box on that theme, not the desk's current one (a theme the desk is

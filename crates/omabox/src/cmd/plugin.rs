@@ -168,10 +168,16 @@ fn box_plugins(bj: &serde_json::Value) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
 /// same-path mounts box.json lists, each whose source is still the folder up bound (one deleted and
 /// made again on the host is the old one in the box: #391).
 fn seen_at_own_path(bj: &serde_json::Value, dir: &[u8]) -> bool {
-    use std::os::unix::fs::MetadataExt;
     let Some(p) = crate::repo::readlink_e(dir) else {
         return false;
     };
+    crate::upspec::own_path_among(&p, &box_mounts(bj))
+}
+
+/// box.json's mounts, (source, destination) each, a source no longer the folder up bound (#391) as
+/// an empty one: seen_at_own_path's, and path --home's (finding 756).
+pub fn box_mounts(bj: &serde_json::Value) -> Vec<(Vec<u8>, Vec<u8>)> {
+    use std::os::unix::fs::MetadataExt;
     let mut specs = Vec::new();
     for m in bj
         .get("mounts")
@@ -194,7 +200,7 @@ fn seen_at_own_path(bj: &serde_json::Value, dir: &[u8]) -> bool {
         let src = if now == Some(was) { src } else { Vec::new() };
         specs.push((src, dest));
     }
-    crate::upspec::own_path_among(&p, &specs)
+    specs
 }
 
 /// The box's lock, as up and down take it (mode's, finding 93), and the box still up under it.

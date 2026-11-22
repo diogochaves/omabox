@@ -796,6 +796,12 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
             .map(|p| (p.id.clone(), p.dir.clone()))
             .collect(),
         linked: u.linked.clone(),
+        mounts: u
+            .ro_args
+            .iter()
+            .cloned()
+            .chain(u.overlays.iter().map(|p| (p.clone(), p.clone())))
+            .collect(),
         theme: u.theme.clone(),
         theme_dirs: u.theme_dirs.clone(),
         no_seed: u.no_seed.clone(),

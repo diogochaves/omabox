@@ -262,7 +262,11 @@ LD_PRELOAD, OMABOX_BOX...), by any of them.
 --seed SRC:DEST: a file or folder of yours copied into the box HOME at DEST (.config/x or ~/.config/x)
 before its session starts, for a plugin that reads its config once at start; the same refusals as
 --ro-bind (no secret stores; nothing in ~/.config/omarchy but plugins/ and themes/). A copy: the
-box's changes stay in the box; a link already in DEST is replaced, never written through. Never
+box's changes stay in the box; a link already in DEST is replaced, never written through. A link
+in it that leads into your HOME (or to `/`, `/home`), to a file you can write, to your session's
+live sockets (the runtime dir, /run, /dev/shm, /tmp's socket folders) or through /proc becomes a
+copy of its file when it may be copied, else it is left out (said); one to /dev/null or a folder
+you can write elsewhere stays. Never
 into a --plugin's or --theme-dir's folder there (refused: it would replace the plugin or theme):
 write the file in that folder instead.
 @ up run
