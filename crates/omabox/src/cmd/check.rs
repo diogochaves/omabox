@@ -39,16 +39,10 @@ pub const CHK_JQ: &str = r#"def regions: split("\n") | map(select(. != "") | cap
 pub const CHK_DIFF_JQ: &str = r#"
     {result: $res, size: ($size | size), regions: ($regs | regions), specks: ($sp | specks), marked: ($marked | path),
      report: ($rep | path), report_scaled: ($rs | path)}"#;
-/// check run --json's object.
+/// check run --json's object: its result, $sum (RunSum::json, carried whole: finding 754) and its
+/// checkpoints.
 pub const CHK_RUN_JQ: &str = r#"
-    ($sum | split("\t")) as $s
-    | {result: (if $rc == 0 then "same" else "changed" end), base: $s[0], shots: $s[1], report: ($s[2] | path),
-       setup: ($s[3] | path), report_scaled: ($s[12] | path),
-       only: (if $s[13] == "" then null else $s[13] | split(",") end),
-       counts: {checkpoints: ($s[4] | tonumber), same: ($s[5] | tonumber), changed: ($s[6] | tonumber), as_another: ($s[7] | tonumber),
-         holes: ($s[8] | tonumber), new: ($s[9] | tonumber), missing: ($s[10] | tonumber), skipped: ($s[11] | tonumber),
-         proof_failed: ($s[14] | tonumber)},
-       checkpoints: .}"#;
+    {result: (if $rc == 0 then "same" else "changed" end)} + $sum + {checkpoints: .}"#;
 /// One checkpoint of check run --json.
 pub const CHK_POINT_JQ: &str = r#"
     {id: $id, result: $res, as: ($as | path), size: ($size | size), regions: ($regs | regions),
@@ -2936,14 +2930,11 @@ fn check_compare_json(
         let _o = (!crate::exit::hearing_out()).then(|| crate::exec::Redir::null(1));
         #[cfg(not(test))]
         let _o = crate::exec::Redir::null(1);
-        match check_compare(ctx, outd, base, speck, Some(&jsonl), opts) {
-            Ok(s) => (0, s),
-            Err(Exit(1)) => (1, LAST_SUM.with(|s| s.borrow().clone())),
-            Err(e) => return Err(e),
-        }
+        let (same, sum) = compare(ctx, outd, base, speck, Some(&jsonl), opts)?;
+        (i32::from(!same), sum)
     };
     let o = Args::new(&["-sc"])
-        .kv("--arg", "sum", &sum)
+        .kv("--argjson", "sum", sum.json().to_string())
         .kv("--argjson", "rc", crc.to_string())
         .arg(format!("{CHK_JQ}{CHK_RUN_JQ}"))
         .arg(&jsonl)
@@ -2954,9 +2945,62 @@ fn check_compare_json(
     if crc == 0 { Ok(()) } else { Err(Exit(1)) }
 }
 
-thread_local! {
-    /// CHK_SUM of the last check_compare, for check run --json when it ends "changed".
-    static LAST_SUM: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+/// A check run's summary, for check run --json (finding 754: it was 15 tab-joined fields read back by
+/// position, which a tab in --base or -o shifted, and --json then printed nothing).
+#[derive(Debug, Default, PartialEq)]
+struct RunSum {
+    base: Vec<u8>,
+    shots: Vec<u8>,
+    report: Vec<u8>,
+    setup: Vec<u8>,
+    report_scaled: Vec<u8>,
+    only: Vec<Vec<u8>>,
+    checkpoints: usize,
+    same: usize,
+    changed: usize,
+    as_another: usize,
+    holes: usize,
+    new: usize,
+    missing: usize,
+    skipped: usize,
+    proof_failed: usize,
+}
+
+impl RunSum {
+    /// Its part of check run --json's object, in the object's order (an empty path null).
+    fn json(&self) -> serde_json::Value {
+        let s = |v: &[u8]| serde_json::Value::String(String::from_utf8_lossy(v).into_owned());
+        let path = |v: &[u8]| {
+            if v.is_empty() {
+                serde_json::Value::Null
+            } else {
+                s(v)
+            }
+        };
+        serde_json::json!({
+            "base": s(&self.base),
+            "shots": s(&self.shots),
+            "report": path(&self.report),
+            "setup": path(&self.setup),
+            "report_scaled": path(&self.report_scaled),
+            "only": if self.only.is_empty() {
+                serde_json::Value::Null
+            } else {
+                self.only.iter().map(|o| s(o)).collect()
+            },
+            "counts": {
+                "checkpoints": self.checkpoints,
+                "same": self.same,
+                "changed": self.changed,
+                "as_another": self.as_another,
+                "holes": self.holes,
+                "new": self.new,
+                "missing": self.missing,
+                "skipped": self.skipped,
+                "proof_failed": self.proof_failed,
+            },
+        })
+    }
 }
 
 /// A checkpoint's speck: SPECK when given, else its baseline .point's (32 for one from before).
@@ -2973,8 +3017,8 @@ fn point_speck(base: &[u8], id: &[u8], speck: Option<i64>) -> i64 {
 }
 
 /// check_compare OUT BASE SPECK: a run against the baseline: same, changed (regions, tree), new,
-/// missing; Err(1) unless all same. Its CHK_SUM is the Ok's (and LAST_SUM's). With --only, the
-/// baseline's checkpoints it does not name are skipped (counted, not missing: #376).
+/// missing; Err(1) unless all same. With --only, the baseline's checkpoints it does not name are
+/// skipped (counted, not missing: #376).
 fn check_compare(
     ctx: &Ctx,
     outd: &[u8],
@@ -2982,7 +3026,20 @@ fn check_compare(
     speck: Option<i64>,
     jsonl: Option<&[u8]>,
     opts: &Opts,
-) -> Res<Vec<u8>> {
+) -> Res<RunSum> {
+    let (same, sum) = compare(ctx, outd, base, speck, jsonl, opts)?;
+    if same { Ok(sum) } else { Err(Exit(1)) }
+}
+
+/// check_compare's run: whether all were the same, and its summary either way.
+fn compare(
+    ctx: &Ctx,
+    outd: &[u8],
+    base: &[u8],
+    speck: Option<i64>,
+    jsonl: Option<&[u8]>,
+    opts: &Opts,
+) -> Res<(bool, RunSum)> {
     let run1 = cat!(outd, "/run1");
     let plan = cat!(outd, "/report.plan");
     let body = cat!(plan, ".body");
@@ -3450,29 +3507,24 @@ fn check_compare(
         run1,
         "\n"
     ))?;
-    let mut sum = Vec::new();
-    for v in [
-        base.to_vec(),
-        run1.clone(),
-        rep,
+    let sum = RunSum {
+        base: base.to_vec(),
+        shots: run1,
+        report: rep,
         setup,
-        (n + missing).to_string().into_bytes(),
-        same.to_string().into_bytes(),
-        changed.to_string().into_bytes(),
-        alike.to_string().into_bytes(),
-        nholed.to_string().into_bytes(),
-        new.to_string().into_bytes(),
-        missing.to_string().into_bytes(),
-        skipped.to_string().into_bytes(),
-        rscaled,
-        opts.only.join(&b','),
-        nproof.to_string().into_bytes(),
-    ] {
-        sum.extend(v);
-        sum.push(b'\t');
-    }
-    LAST_SUM.with(|s| *s.borrow_mut() = sum.clone());
-    if fail { Err(Exit(1)) } else { Ok(sum) }
+        report_scaled: rscaled,
+        only: opts.only.clone(),
+        checkpoints: n + missing,
+        same,
+        changed,
+        as_another: alike,
+        holes: nholed,
+        new,
+        missing,
+        skipped,
+        proof_failed: nproof,
+    };
+    Ok((!fail, sum))
 }
 
 /// check_approve OUT BASE SPECK RUNS: the runs made the baseline. With --only (#376), the checkpoints
@@ -4789,6 +4841,35 @@ mod tests {
             std::fs::metadata(gc.join("s2.diff.png")).is_ok_and(|m| m.len() > 0),
             "...its diff image written all the same"
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // Finding 754: a tab in --base or -o no longer shifts check run --json's summary (15 tab-joined
+    // fields read by position, $s[4] | tonumber met another field and jq printed nothing).
+    #[test]
+    fn compare_json_tab_in_paths() {
+        let d = scratch("tab");
+        let (base, out) = (d.join("ba\tse"), d.join("o\tut"));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(out.join("run1")).unwrap();
+        write(&out.join("run1/p1.png"), "");
+        write(&out.join("run1/p1.point"), "of screen\n");
+        let ctx = check_ctx();
+        let (rc, said) = exit::heard_all(|| {
+            check_compare_json(&ctx, &pb(&out), &pb(&base), None, &Opts::default())
+        });
+        let j: serde_json::Value = serde_json::from_str(said.lines().last().unwrap_or_default())
+            .unwrap_or_else(|e| panic!("{e}: {said}"));
+        assert_eq!(rc, Err(Exit(1)), "{said}");
+        assert_eq!(j["result"], "changed");
+        assert_eq!(j["base"].as_str(), base.to_str());
+        assert_eq!(j["shots"].as_str(), out.join("run1").to_str());
+        assert_eq!(j["only"], serde_json::Value::Null);
+        assert_eq!(
+            j["counts"].to_string(),
+            r#"{"checkpoints":1,"same":0,"changed":0,"as_another":0,"holes":0,"new":1,"missing":0,"skipped":0,"proof_failed":0}"#
+        );
+        assert_eq!(j["checkpoints"][0]["id"], "p1");
         let _ = std::fs::remove_dir_all(&d);
     }
 
