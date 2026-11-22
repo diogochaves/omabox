@@ -2072,19 +2072,11 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
         };
         sheet = sheet_out(ctx, &outp)?;
         tsv = cat!(base, ".marks.tsv");
-        let f = std::fs::File::open(shell::path(&so.video));
-        let ok = match f {
-            Ok(f) => copy_in(ctx, &bv, InFrom::File(f))? == 0,
-            Err(e) => {
-                say(cat!(
-                    "record: cannot read ",
-                    so.video,
-                    ": ",
-                    crate::shots::why(&e)
-                ));
-                false
-            }
-        };
+        // (a regular file, no link at its name or in a box's folder on its way, never a FIFO, and
+        // no more of it than its size said, REC_MAX at most: finding 755)
+        let (f, sz) = open_video(&so.video, max).map_err(|m| ctx.die(cat!("record sheet: ", m)))?;
+        size = sz;
+        let ok = copy_in(ctx, &bv, InFrom::Fd(OwnedFd::from(f), sz))? == 0;
         if !ok {
             sys_q(ctx, &w(&[b"/usr/bin/rm".as_slice(), b"-f", b"--", &bv]))?;
             return Err(ctx.die(cat!(
@@ -2095,7 +2087,6 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
                 "'"
             )));
         }
-        size = size_of(&shell::path(&so.video)).unwrap_or(0);
     }
     // Its ffprobe's bound by its size, at 10 MiB/s, as box_copy's.
     if !(0..=999_999_999_999_999).contains(&size) {
@@ -2188,19 +2179,8 @@ pub fn sheet_file_host(ctx: &mut Ctx, so: &SheetOpts) -> Res<()> {
 fn sheet_host_in(ctx: &mut Ctx, so: &SheetOpts, tmpd: &[u8]) -> Res<()> {
     let (fd, size, tsv, outp, sheet) = if so.fromfd.is_empty() {
         let base = so.video.strip_suffix(b".mp4").unwrap_or(&so.video).to_vec();
-        let f = std::fs::File::open(shell::path(&so.video)).map_err(|e| {
-            ctx.die(cat!(
-                "record sheet: cannot read ",
-                so.video,
-                ": ",
-                crate::shots::why(&e)
-            ))
-        })?;
-        let size = f
-            .metadata()
-            .ok()
-            .and_then(|m| i64::try_from(m.len()).ok())
-            .unwrap_or(0);
+        let (f, size) =
+            open_video(&so.video, i64::MAX).map_err(|m| ctx.die(cat!("record sheet: ", m)))?;
         let outp = if so.out.is_empty() {
             cat!(base, ".sheet.png")
         } else {
@@ -2287,21 +2267,57 @@ fn sheet_host_in(ctx: &mut Ctx, so: &SheetOpts, tmpd: &[u8]) -> Res<()> {
 }
 
 enum InFrom {
-    File(std::fs::File),
     Fd(OwnedFd, i64),
 }
 
+/// VIDEO, a file `record sheet` was named, open for reading and its size (finding 755): its folder
+/// held as walked from `/` with no link in a box's folder followed (shots::hold_folder: a box HOME's
+/// link to a host folder is refused), then the file in it as the regular file it is (no link at its
+/// name, a FIFO or a device refused, never waited on), at most MAX bytes. Err: the words for why.
+pub(crate) fn open_video(v: &[u8], max: i64) -> Result<(std::fs::File, i64), Vec<u8>> {
+    open_video_in(v, max, &crate::shots::box_writable)
+}
+
+pub(crate) fn open_video_in(
+    v: &[u8],
+    max: i64,
+    guarded: &dyn Fn(&[u8]) -> bool,
+) -> Result<(std::fs::File, i64), Vec<u8>> {
+    let name = shell::basename(v);
+    let (_, held) = crate::shots::hold_folder(&crate::shots::dirname(v), false, guarded)
+        .map_err(|m| cat!("cannot read ", v, ": ", m))?;
+    let Some(f) = held.open_regular(&name) else {
+        let why = match std::fs::symlink_metadata(shell::path(v)) {
+            Err(e) => crate::shots::why(&e),
+            Ok(m) if m.file_type().is_symlink() => {
+                "it is a link (omabox reads through none: name the file itself)".to_string()
+            }
+            Ok(_) => "it is not a regular file".to_string(),
+        };
+        return Err(cat!("cannot read ", v, ": ", why));
+    };
+    let size = f
+        .metadata()
+        .ok()
+        .and_then(|m| i64::try_from(m.len()).ok())
+        .unwrap_or(-1);
+    if size < 0 || size > max {
+        return Err(cat!(
+            v,
+            " is ",
+            bytes_h(size.max(0).to_string().as_bytes()),
+            ": more than omabox copies into a box (",
+            bytes_h(max.to_string().as_bytes()),
+            ")"
+        ));
+    }
+    Ok((f, size))
+}
+
 /// `box_sys /usr/bin/bash -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record PATH` fed the video
-/// (`< VIDEO`, or `head -c SIZE <&FD |`): its status (pipefail's).
+/// (`head -c SIZE <&FD |`): its status (pipefail's).
 fn copy_in(ctx: &mut Ctx, bv: &[u8], from: InFrom) -> Res<i32> {
     match from {
-        InFrom::File(f) => write_in_box(
-            ctx,
-            P::WRITE_SH,
-            "/usr/bin/bash",
-            &String::from_utf8_lossy(bv),
-            OwnedFd::from(f),
-        ),
         InFrom::Fd(fd, size) => {
             let Ok((r, wr)) = pipe() else { return Ok(1) };
             let lim = u64::try_from(size).unwrap_or(0);
@@ -3069,6 +3085,58 @@ fn host_ff(fd: RawFd, dir: &[u8], mode: Ff, argv: &[Vec<u8>]) -> (i32, Vec<u8>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Finding 755: `record sheet VIDEO`'s file opened as the regular file it is: no link at its
+    /// name, none in a box's folder on its way, no FIFO waited on, no device, no more than MAX.
+    #[test]
+    fn sheet_video_opens_no_link_no_fifo() {
+        use std::os::unix::fs::symlink;
+        let t = std::env::temp_dir().join(format!("omabox-sheetvid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let home = t.join("homes/b/home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(t.join("host")).unwrap();
+        std::fs::write(t.join("host/keys.env"), "KEY=1").unwrap();
+        std::fs::write(home.join("take.mp4"), "video").unwrap();
+        let root = shell::bytes(&t.join("homes")).to_vec();
+        let g = move |p: &[u8]| crate::shots::under_box_part(p, &root, b"home");
+        let p = |r: &str| shell::bytes(&t.join(r)).to_vec();
+        let (f, n) = open_video_in(&p("homes/b/home/take.mp4"), 100, &g).unwrap();
+        assert_eq!(n, 5);
+        drop(f);
+        assert!(
+            open_video_in(&p("homes/b/home/take.mp4"), 4, &g).is_err(),
+            "over MAX"
+        );
+        symlink(t.join("host/keys.env"), home.join("ln.mp4")).unwrap();
+        assert!(open_video_in(&p("homes/b/home/ln.mp4"), 100, &g).is_err());
+        symlink("/dev/zero", home.join("zero.mp4")).unwrap();
+        assert!(open_video_in(&p("homes/b/home/zero.mp4"), 100, &g).is_err());
+        assert!(
+            open_video_in(b"/dev/zero", i64::MAX, &g).is_err(),
+            "a device"
+        );
+        symlink(t.join("host"), home.join("dir")).unwrap();
+        std::fs::copy(home.join("take.mp4"), t.join("host/v.mp4")).unwrap();
+        assert!(open_video_in(&p("homes/b/home/dir/v.mp4"), 100, &g).is_err());
+        assert!(
+            open_video_in(&p("host/v.mp4"), 100, &g).is_ok(),
+            "outside a box"
+        );
+        let c = std::ffi::CString::new(p("homes/b/home/fifo.mp4")).unwrap();
+        // SAFETY: a valid C string.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let fifo = p("homes/b/home/fifo.mp4");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(open_video_in(&fifo, 100, &|_: &[u8]| false).is_err());
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(5))
+                .expect("waited on a FIFO")
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
 
     /// A contact sheet's range (#260): the frames whose label times are in it, at 30 fps and at an
     /// fps that is no whole number of ms a frame.
