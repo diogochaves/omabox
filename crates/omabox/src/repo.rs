@@ -905,12 +905,40 @@ pub fn host_path_text(
     } else {
         p[..p.iter().rposition(|&c| c == b'/').unwrap_or(0).max(1)].to_vec()
     };
-    let mount = match refuse_src(&dir) {
-        Some(why) => cat!("a box may not mount ", no_cntrl(&dir), " (", why, ")"),
-        None => cat!(how, " --ro-bind ", no_cntrl(&dir), " mounts it"),
-    };
+    // (#480: a folder no box may mount gets no fix, not even a copy: copying the system bus or a
+    // secret into the box HOME is what the refusal is there to stop)
+    let in_home = home != SBX_HOME.as_bytes() && rest(&home).is_some();
+    if let Some(why) = refuse_src(&dir) {
+        let bus = if p == b"/run/dbus" || p.starts_with(b"/run/dbus/") {
+            "; a box has a session bus of its own (up --polkit gives it a polkit agent)"
+        } else {
+            ""
+        };
+        return Some(if in_home {
+            cat!(
+                "note: ",
+                pp,
+                " is in your HOME, which box '",
+                n,
+                "' does not have, and no box may have it: ",
+                why,
+                bus
+            )
+        } else {
+            cat!(
+                "note: ",
+                pp,
+                " is not in box '",
+                n,
+                "', and no box may have it: ",
+                why,
+                bus
+            )
+        });
+    }
+    let mount = cat!(how, " --ro-bind ", no_cntrl(&dir), " mounts it");
     // (a desk box's HOME is at your HOME's path: there the path is the box's, #321)
-    if home != SBX_HOME.as_bytes() && rest(&home).is_some() {
+    if in_home {
         let fix = if how == "run" {
             mount
         } else {
@@ -1379,13 +1407,21 @@ mod tests {
         // (/proc is the box's own: /proc/self/fd/0, a command reading its stdin, is not noted)
         assert_eq!(t("run", "/proc/self/fd/0", false, true), None);
         assert_eq!(t("run", "/proc", false, true), None);
-        let dev = t("run", "/dev/dri/card0", false, true).unwrap_or_default();
-        assert!(
-            dev.ends_with(
-                "a box may not mount /dev/dri (it is inside /dev/ (secrets or live sockets))"
-            ),
-            "{dev}"
-        );
+        // #480: a folder no box may mount gets no fix, not even a copy into the box HOME
+        for how in ["run", "down, then up"] {
+            assert_eq!(
+                t(how, "/dev/dri/card0", false, true).as_deref(),
+                Some(
+                    "note: /dev/dri/card0 is not in box 'B', and no box may have it: it is inside /dev/ (secrets or live sockets)"
+                )
+            );
+            assert_eq!(
+                t(how, "/run/dbus", false, true).as_deref(),
+                Some(
+                    "note: /run/dbus is not in box 'B', and no box may have it: it is inside /run/ (secrets or live sockets); a box has a session bus of its own (up --polkit gives it a polkit agent)"
+                )
+            );
+        }
     }
 
     // #321: a desk box's HOME is at your HOME's path: its host folder maps to that path, a path of

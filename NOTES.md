@@ -15056,6 +15056,11 @@ from them.
     **t_check_proof** (the omarchy-pkgs bump's VM test, Omarchy 4.5) wanted `same     win` to end
     its line; the check rightly said `same     win (1 speck left out, the largest 2 px)`. The
     parenthesis is allowed now.
+746. **A path no box may mount gets no fix in the not-in-box note** (2026-11-22, #480). The note
+    for a host path a box lacks offered "copy it into the box HOME" before saying a box may not
+    mount it, so `run -- test -e /run/dbus` pointed an agent at copying the system bus. When
+    `refuse_src` refuses the path's folder the note now says only that no box may have it and why;
+    under `/run/dbus` it adds that a box has a session bus of its own (`up --polkit` for polkit).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
