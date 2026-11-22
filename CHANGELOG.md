@@ -29,8 +29,10 @@ in Hyprland's own env syntax. All fixed, each with a test that plants the link, 
 ### Changed
 - **The agent guard refuses Omarchy's theme, wallpaper and font commands** (`omarchy-theme-set`,
   `omarchy-theme-bg-set`, `omarchy-theme-bg-next`, `omarchy-font-set`), which changed your real
-  desktop without a display; the docs say exactly what the guard stops, and what Codex's does not.
-  `guard on codex` makes the guard's runtime file itself.
+  desktop without a display, whatever `WAYLAND_DISPLAY` names (a box's from `omabox env` too), but
+  hands them over under `omarchy update`, whose migrations would otherwise stop half way; the docs
+  say exactly what the guard stops, and what Codex's does not. `guard on codex` makes the guard's
+  runtime file itself.
 - **`look`'s report is said plain**: a window title's or page's terminal escapes come out as `?`.
 - **Every edit of a box's `box.json` holds the box's lock** and writes a temp file of its own, so
   concurrent commands no longer lose an edit or leave broken JSON.
