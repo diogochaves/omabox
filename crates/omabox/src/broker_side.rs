@@ -164,6 +164,8 @@ pub fn policy_of(
                 .map(|rest| (r, rest))
         });
         if let Some((r, rest)) = inside {
+            // (a kept folder of `/` gives `/rest`, not `//rest`, which would match nothing)
+            let r = r.strip_suffix(b"/").unwrap_or(r);
             let m = cat!(r, "/", rest);
             // (bash's printf | jq -R: one per line, none empty)
             for line in m.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
