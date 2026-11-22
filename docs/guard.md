@@ -48,8 +48,9 @@ fontconfig. The same PATH puts `share/guard` stand-ins for those four first, whi
 `omabox up --theme NAME`, `omabox look theme NAME` or `omabox run -- CMD` for a box (and `omabox host
 -- CMD` for your desktop, when you asked). They refuse whatever `WAYLAND_DISPLAY` names: a box's
 socket there (`eval "$(omabox env)"`) changes nothing about where they write, your HOME. One
-exception: run by Omarchy's own update (`omarchy update`, or `omarchy-migrate`, among their callers),
-they hand over to Omarchy's. Three of Omarchy 4.5's migrations re-stage the theme through
+exception: run by Omarchy's own update (`omarchy update`, or `omarchy-migrate`, among their callers:
+the program a caller runs, or the script its shell runs, by that name; not a command that only
+mentions the name), they hand over to Omarchy's. Three of Omarchy 4.5's migrations re-stage the theme through
 `omarchy-theme-set`, and `omarchy-migrate` stops at the first command that fails, so a refusal there
 would leave an update with its packages upgraded and its later migrations pending. An agent that runs
 `omarchy update` is changing your real system anyway; the guard does not stop that.

@@ -19,18 +19,20 @@
 # own `omarchy` dispatcher, which runs each command by its path, and a caller naming the path itself.
 name=${OMABOX_GUARD_AS:-${0##*/}}
 unset OMABOX_GUARD_AS
-# Omarchy's update among the callers: each word of each process's command line, up to init, by its
-# last part (bash runs them as `bash /usr/share/omarchy/bin/omarchy-migrate`).
+# Omarchy's update among the callers, up to init: a process whose argv[0], or argv[1] when argv[0] is a
+# shell (bash runs them as `bash /usr/share/omarchy/bin/omarchy-migrate`), is omarchy-update or
+# omarchy-migrate by its last part. Whole words only (a newline in a word made \001 first), never a
+# line inside one: an agent's command runs as one `bash -c` word, and a line of it ending in such a
+# path (`grep x /usr/share/omarchy/bin/omarchy-migrate`) let the rest through (finding 758).
 update=""
 p=$PPID n=0
 while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null && [ "$n" -lt 64 ]; do
-  if tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | {
-    while IFS= read -r w; do case ${w##*/} in omarchy-update | omarchy-migrate) exit 0 ;; esac; done
-    exit 1
-  }; then
-    update=1
-    break
-  fi
+  a0="" a1=""
+  { IFS= read -r a0; IFS= read -r a1; } <<WORDS
+$(tr '\n\0' '\001\n' < "/proc/$p/cmdline" 2>/dev/null | head -n 2)
+WORDS
+  case ${a0##*/} in bash | sh | dash | zsh) a0=$a1 ;; esac
+  case ${a0##*/} in omarchy-update | omarchy-migrate) update=1; break ;; esac
   p=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$p/status" 2>/dev/null)
   n=$((n + 1))
 done

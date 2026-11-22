@@ -70,10 +70,37 @@ pub fn capped(mut v: Vec<u8>, cap: u64) -> (Vec<u8>, bool) {
     (v, true)
 }
 
-/// A box's log text, fit for the terminal (S7, finding 755): every control character but newline
-/// and tab, and every byte that is no UTF-8, as `?`; never cut here (the width cuts lines).
+/// A box's log text, fit for the terminal (S7, finding 755): its colours (SGR, `ESC [ params m`, as
+/// quickshell writes into shell.log) dropped whole, then every other control character but newline
+/// and tab, and every byte that is no UTF-8, as `?` (finding 758); never cut here (the width cuts
+/// lines).
 pub fn plain_log(v: &[u8]) -> Vec<u8> {
-    crate::term::plain_cap(v, usize::MAX)
+    crate::term::plain_cap(&strip_sgr(v), usize::MAX)
+}
+
+/// V without its SGR sequences (`ESC [`, digits, `;` or `:`, then `m`); any other escape is left
+/// for `plain` to show as `?`.
+fn strip_sgr(v: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if !v.contains(&0x1b) {
+        return std::borrow::Cow::Borrowed(v);
+    }
+    let mut out = Vec::with_capacity(v.len());
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == 0x1b && v.get(i + 1) == Some(&b'[') {
+            let mut j = i + 2;
+            while j < v.len() && (v[j].is_ascii_digit() || v[j] == b';' || v[j] == b':') {
+                j += 1;
+            }
+            if v.get(j) == Some(&b'm') {
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(v[i]);
+        i += 1;
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// Where a log is read: in the box (as it sees the path) or on the host (the box dir's own).

@@ -203,6 +203,23 @@ pub fn box_mounts(bj: &serde_json::Value) -> Vec<(Vec<u8>, Vec<u8>)> {
     specs
 }
 
+/// box.json's plugins linked to their own path (finding 241), (id, dir) each: plugin_dirs' entries
+/// whose plugin_via is `linked` (path --home's, finding 758).
+pub fn linked_plugins(bj: &serde_json::Value) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let via = bj.get("plugin_via");
+    bj.get("plugin_dirs")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(id, _)| {
+            via.and_then(|v| v.get(id.as_str()))
+                .and_then(serde_json::Value::as_str)
+                == Some("linked")
+        })
+        .filter_map(|(id, d)| Some((id.as_bytes().to_vec(), text(d)?)))
+        .collect()
+}
+
 /// The box's lock, as up and down take it (mode's, finding 93), and the box still up under it.
 fn locked(ctx: &Ctx, what: &[u8]) -> Res<crate::boxes::Lock> {
     let Some(lock) = lock_file(

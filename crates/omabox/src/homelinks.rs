@@ -151,9 +151,12 @@ pub struct View {
     pub home: Vec<u8>,
     pub home_r: Vec<u8>,
     /// what the box mounts, (source, destination) each (box.json's `mounts`: the repo up runs from,
-    /// --ro-bind's, --overlay's): a target the box has at its own path through them is the box's
-    /// own view, not a way out (finding 241's links, 756)
+    /// --ro-bind's, --overlay's), and the plugins linked to their own path through them, (id, dir)
+    /// each (finding 241): only such a link, `.config/omarchy/plugins/ID` to that plugin's own
+    /// folder, is the box's own view (finding 758; 756 kept any link into a same-path mount, which a
+    /// box could plant to a repo file an edit through `path --home` would then overwrite)
     pub mounts: Vec<(Vec<u8>, Vec<u8>)>,
+    pub plugins: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 impl View {
@@ -170,13 +173,34 @@ impl View {
             home,
             home_r,
             mounts: Vec::new(),
+            plugins: Vec::new(),
         })
     }
 
-    /// The View with the box's MOUNTS (see `mounts`).
-    pub fn with_mounts(mut self, mounts: Vec<(Vec<u8>, Vec<u8>)>) -> View {
+    /// The View with the box's MOUNTS and its linked PLUGINS (see `mounts`).
+    pub fn with_mounts(
+        mut self,
+        mounts: Vec<(Vec<u8>, Vec<u8>)>,
+        plugins: Vec<(Vec<u8>, Vec<u8>)>,
+    ) -> View {
         self.mounts = mounts;
+        self.plugins = plugins;
         self
+    }
+
+    /// The link at REL, resolved to TO, is a linked plugin's own (finding 241): REL is
+    /// `.config/omarchy/plugins/ID` (the folder itself, nothing under it), TO is that plugin's
+    /// folder as it resolves, and the box has TO at that same path (`mounts`).
+    fn plugin_own(&self, rel: &[u8], to: &[u8]) -> bool {
+        let Some(id) = rel.strip_prefix(b".config/omarchy/plugins/") else {
+            return false;
+        };
+        !id.is_empty()
+            && !id.contains(&b'/')
+            && self.plugins.iter().any(|(i, dir)| {
+                i == id && resolve(&crate::bwrap::lexical(dir)).as_deref() == Some(to)
+            })
+            && crate::upspec::own_path_among(to, &self.mounts)
     }
 
     /// T (a resolved path) is in the box HOME.
@@ -196,18 +220,17 @@ impl View {
     /// The link at REL (in the box HOME), when it leads out (finding 752, 756): through `/proc`; into
     /// your HOME or a folder that holds it; to a regular file you can write; to what you can write
     /// among refuse_path's places of secrets and live sockets (or a missing part whose nearest folder
-    /// there is one you can write). A loop, a link into the box HOME or into what the box mounts at
-    /// that same path (`mounts`), a device (`/dev/null`), what you
+    /// there is one you can write). A loop, a link into the box HOME, a linked plugin's own
+    /// (`plugin_own`), a device (`/dev/null`), what you
     /// cannot write, and a folder you can write elsewhere (`/mnt/data/x`) do not.
     pub fn judge(&self, rel: &[u8]) -> Option<Out> {
         let (to, magic) = resolve_at(&cat!(self.own, "/", rel))?;
         let lead = if magic {
             Lead::Proc
-        } else if self.inside(&to)
-            || (!self.mounts.is_empty() && crate::upspec::own_path_among(&to, &self.mounts))
-        {
-            // (in the box HOME, or what the box has at that same path: a --plugin linked to its own
-            // path in the repo, a same-path --ro-bind or an --overlay, finding 241)
+        } else if self.inside(&to) || self.plugin_own(rel, &to) {
+            // (in the box HOME, or a --plugin linked to its own folder, which the box has at that
+            // same path: in the repo, a same-path --ro-bind or an --overlay, finding 241; any other
+            // link into them is judged as the rest, finding 758)
             return None;
         } else if self.leads_home(&to) {
             if within(&self.home, &to) || within(&self.home_r, &to) {
@@ -468,42 +491,64 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Finding 756: a link to what the box mounts at its own path (a --plugin in the repo, finding
-    /// 241) is the box's own view, even in your HOME; one beside that mount is not.
+    /// Finding 241, 758: only a linked plugin's own link (`.config/omarchy/plugins/ID` to its own
+    /// folder, at its same path in the box) is the box's view; any other link into a same-path mount
+    /// (a repo file, the whole repo at a plugin's name, the plugin's folder under another name) is
+    /// judged as the rest: it leads into your HOME.
     #[test]
-    fn same_path_mounts_are_the_boxs() {
+    fn only_a_linked_plugin_is_the_boxs() {
         let d = tmp("mounts");
         let user = d.join("u");
         let bx = user.join(".cache/omabox/b/home");
         let repo = user.join("code/r");
         std::fs::create_dir_all(bx.join(".config/omarchy/plugins")).unwrap();
+        std::fs::create_dir_all(bx.join(".config/app")).unwrap();
         std::fs::create_dir_all(repo.join("widget")).unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/main.rs"), b"fn main() {}").unwrap();
         std::fs::create_dir_all(user.join("code/other")).unwrap();
+        let w = repo.join("widget");
+        ln(w.to_str().unwrap(), &bx.join(".config/omarchy/plugins/w"));
+        ln(w.to_str().unwrap(), &bx.join(".config/omarchy/plugins/x"));
         ln(
-            repo.join("widget").to_str().unwrap(),
-            &bx.join(".config/omarchy/plugins/w"),
+            repo.to_str().unwrap(),
+            &bx.join(".config/omarchy/plugins/y"),
+        );
+        ln(
+            repo.join("src/main.rs").to_str().unwrap(),
+            &bx.join(".config/app/settings.json"),
         );
         ln(user.join("code/other").to_str().unwrap(), &bx.join("other"));
         let v = View::new(&b(&bx), &b(&user)).unwrap();
-        assert_eq!(
-            v.judge(b".config/omarchy/plugins/w").map(|o| o.lead),
-            Some(Lead::Home)
-        );
-        let v = v.with_mounts(vec![(b(&repo), b(&repo))]);
+        let lead = |v: &View, r: &str| v.judge(r.as_bytes()).map(|o| o.lead);
+        assert_eq!(lead(&v, ".config/omarchy/plugins/w"), Some(Lead::Home));
+        let plugins = vec![
+            (b"w".to_vec(), b(&w)),
+            (b"y".to_vec(), b(&repo.join("widget"))),
+        ];
+        let v = v.with_mounts(vec![(b(&repo), b(&repo))], plugins.clone());
         assert_eq!(
             v.judge(b".config/omarchy/plugins/w"),
             None,
-            "the repo, same path"
+            "a linked plugin's own folder, the repo at its same path"
         );
-        assert_eq!(
-            v.judge(b"other").map(|o| o.lead),
-            Some(Lead::Home),
-            "beside it"
-        );
-        let v = v.with_mounts(vec![(b(&user.join("code/other")), b(&repo))]);
+        for r in [
+            ".config/app/settings.json",
+            ".config/omarchy/plugins/x",
+            ".config/omarchy/plugins/y",
+            "other",
+        ] {
+            assert_eq!(lead(&v, r), Some(Lead::Home), "{r}");
+        }
+        let v = v.with_mounts(vec![(b(&user.join("code/other")), b(&repo))], plugins);
         assert!(
             v.judge(b".config/omarchy/plugins/w").is_some(),
             "a mount from elsewhere there"
+        );
+        let v = v.with_mounts(Vec::new(), vec![(b"w".to_vec(), b(&w))]);
+        assert!(
+            v.judge(b".config/omarchy/plugins/w").is_some(),
+            "not at its own path in the box"
         );
         let _ = std::fs::remove_dir_all(&d);
     }
