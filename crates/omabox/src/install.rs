@@ -2378,6 +2378,8 @@ mod tests {
         let mut ctx = Ctx::new(b"up", Vec::new());
         ctx.name = b"x".to_vec();
         ctx.d = shell::bytes(&d).to_vec();
+        // Its lock in the dir too (edit_box_json takes it), gone with it.
+        ctx.boxes = ctx.d.clone();
         (ctx, d)
     }
 

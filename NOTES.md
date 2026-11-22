@@ -15175,6 +15175,25 @@ from them.
     FIFO, the plain look over such run -d logs: no host file printed, no hang; a window title with
     OSC 52 said plain; a failed throwaway whose shell renames a HOME log between a file, a link to a
     host file and a FIFO the whole time: it ends, and its kept logs hold no host file).
+753. **box.json has one writer: under the box's lock, through a temporary file of its own**
+    (2026-11-22, review). Six places read, changed and wrote back `<box dir>/box.json` (jq_box_json
+    with its ten callers, take_over, the reaper's pidns record, plugin_check's status, up's client
+    render record), all through one fixed `box.json.tmp` opened with O_TRUNC, and only some under
+    the box's lock: `restart-shell`'s plugin status and `.omarchy_version`, deskshell's after-ready
+    write and install's version records took none. A write that read box.json before a takeover
+    and renamed after it put back the agent that had exited (the race finding 93's `mode` fix
+    closed for `mode` alone), and two writers at once could leave a long write's tail after a short
+    one: box.json no JSON for every command after. Now `boxes.rs`'s `edit_box_json` is the only
+    way: it takes `.lock-NAME` unless this thread holds it (`lock_file` hands back a `Lock` kept in
+    a thread's list, so `up`, `mode`, `plugin` and the others that hold it already do not wait on
+    their own lock; a Lock is not Send), reads box.json after the lock, writes the edit (a jq program
+    on the file, or `set_box_json`'s keys) to `.box.json.PID.N` (O_EXCL), syncs and renames it. A box
+    gone (its dir or box.json) is no write and leaves no lock file; a lock not had in 60 s, or a write
+    or rename that fails, is said (plugin_check's and the render record's failures were dropped).
+    Checks: cargo `box_json_edits_at_once_all_kept` (8 threads, 25 edits each of its own key: every
+    edit kept, one JSON value, no temporary file left; with the old way the threads read torn JSON
+    and lost edits), `box_json_edit_held_and_gone` (a holder edits at once, another thread cannot
+    have the lock meanwhile, a box gone makes no lock file and no dir).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

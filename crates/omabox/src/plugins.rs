@@ -657,18 +657,14 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
     if bad {
         say(cat!("the shell's log: omabox log -b ", ctx.name, " shell"));
     }
-    let tmp = ctx.at("box.json.tmp");
-    let j = Args::new(&["--argjson", "s"])
-        .arg(&status)
-        .arg(PLUGIN_STATUS_JQ)
-        .arg(&bjs)
-        .run_file(jq::Err::Inherit);
-    if j.ok() && std::fs::write(&tmp, &j.out).is_ok() {
-        let _ = std::fs::rename(&tmp, &bj);
-    } else {
-        // (bash left its box.json.tmp there: none left, finding 443's rule)
-        let _ = std::fs::remove_file(&tmp);
-    }
+    crate::boxes::edit_box_json(ctx, |bj| {
+        let j = Args::new(&["--argjson", "s"])
+            .arg(&status)
+            .arg(PLUGIN_STATUS_JQ)
+            .arg(shell::bytes(bj))
+            .run_file(jq::Err::Inherit);
+        j.ok().then_some(j.out)
+    });
     Ok(())
 }
 

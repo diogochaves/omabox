@@ -452,28 +452,14 @@ pub fn labwc_apply(ctx: &mut Ctx) -> Res<bool> {
     Ok(r.rc == 0)
 }
 
-/// `jq ARGS "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"`: whether
-/// box.json was written, why not said (jq's or mv's words, or omabox's). The temporary file is gone
-/// either way (bash left it when jq or the mv failed: finding 443).
+/// `jq ARGS "$D/box.json"` written back over box.json, through edit_box_json (under the box's lock,
+/// a temporary file of its own): whether box.json was written, why not said (jq's words, or
+/// omabox's; a box gone is unsaid).
 pub fn jq_box_json(ctx: &Ctx, args: Args) -> bool {
-    let tmp = cat!(ctx.d, "/box.json.tmp");
-    let _tmp = crate::shell::Rm(tmp.clone());
-    let f = match std::fs::File::create(shell::path(&tmp)) {
-        Ok(f) => f,
-        Err(e) => {
-            say(cat!(ctx.label(), crate::shots::cant_write(&tmp, &e)));
-            return false;
-        }
-    };
-    let r = args
-        .arg(cat!(ctx.d, "/box.json"))
-        .run_file(jq::Err::Inherit);
-    if let Err(e) = std::io::Write::write_all(&mut &f, &r.out) {
-        say(cat!(ctx.label(), crate::shots::cant_write(&tmp, &e)));
-        return false;
-    }
-    drop(f);
-    r.ok() && crate::shots::mv_f(&tmp, &cat!(ctx.d, "/box.json"))
+    crate::boxes::edit_box_json(ctx, |bj| {
+        let r = args.arg(shell::bytes(bj)).run_file(jq::Err::Inherit);
+        r.ok().then_some(r.out)
+    })
 }
 
 /// monitors_record: box.json's list of every monitor (for ls --json), from Hyprland, under the box's
