@@ -47,9 +47,9 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
             let s = if size < 0 { 0 } else { size };
             return Err(ctx.die(cat!(
                 "record sheet: the video is ",
-                bytes_h(s.to_string().as_bytes()),
+                bytes_h(s),
                 ": more than omabox copies into a box (",
-                bytes_h(max.to_string().as_bytes()),
+                bytes_h(max),
                 ")"
             )));
         }
@@ -363,9 +363,9 @@ pub(crate) fn open_video_in(
         return Err(cat!(
             v,
             " is ",
-            bytes_h(size.max(0).to_string().as_bytes()),
+            bytes_h(size.max(0)),
             ": more than omabox copies into a box (",
-            bytes_h(max.to_string().as_bytes()),
+            bytes_h(max),
             ")"
         ));
     }

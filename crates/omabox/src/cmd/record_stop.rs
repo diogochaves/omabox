@@ -14,7 +14,7 @@ use crate::exec::{ExecOpts, box_exec, dup_hi, pipe};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::jail::in_jail;
 use crate::jq;
-use crate::num::ms_s;
+use crate::num::{awk_num, fixed, ms_s};
 use crate::recprog as P;
 use crate::shell::{self, strip_nl};
 use std::io::Read;
@@ -176,9 +176,57 @@ fn awk_begin(vars: &[(&str, &[u8])], prog: &str) -> Vec<u8> {
     jq::tool("awk", &a, None, jq::Err::Inherit).text()
 }
 
-/// bytes_h B: a size in words.
-pub(super) fn bytes_h(b: &[u8]) -> Vec<u8> {
-    awk_begin(&[("b", b)], P::BYTES_H_AWK)
+/// bytes_h B: a size in words (P::BYTES_H_AWK's, in process).
+#[allow(clippy::cast_precision_loss)]
+pub(super) fn bytes_h(b: i64) -> Vec<u8> {
+    if b < 1_048_576 {
+        format!("{b} bytes")
+    } else if b < 1_073_741_824 {
+        format!("{} MiB", fixed(b as f64 / 1_048_576.0, 1))
+    } else {
+        format!("{} GiB", fixed(b as f64 / 1_073_741_824.0, 1))
+    }
+    .into_bytes()
+}
+
+// The one-line arithmetic bash did with `awk 'BEGIN { printf ... }'`, in process: the same doubles
+// (awk's numbers), the same printf (libc's, as awk's), so the same text (arithmetic_as_awk).
+
+/// `printf "%.3f", MS / 1000`: milliseconds as seconds.
+#[allow(clippy::cast_precision_loss)]
+fn ms_secs3(ms: i64) -> String {
+    fixed(ms as f64 / 1000.0, 3)
+}
+
+/// `printf "%.6f", M / 1000` of M as awk reads it.
+fn div1000_6(m: &[u8]) -> String {
+    fixed(awk_num(m) / 1000.0, 6)
+}
+
+/// `printf "%.6f", US / 1e6`: microseconds as seconds.
+#[allow(clippy::cast_precision_loss)]
+fn us_s6(us: i64) -> String {
+    fixed(us as f64 / 1e6, 6)
+}
+
+/// `x = O + D; printf "%.6f", (x > E ? x : E)`: the later of E and O + D.
+fn later_end(e: &[u8], o: &[u8], d: &[u8]) -> Vec<u8> {
+    let (x, e) = (awk_num(o) + awk_num(d), awk_num(e));
+    fixed(if x > e { x } else { e }, 6).into_bytes()
+}
+
+/// `printf "%.6f", F / R`: frame F's time at R fps. An R awk reads as 0 is awk's own (its division
+/// by zero said, nothing printed).
+#[allow(clippy::cast_precision_loss)]
+fn frame_s6(f: i64, r: &[u8]) -> Vec<u8> {
+    let rn = awk_num(r);
+    if rn == 0.0 {
+        return awk_begin(
+            &[("f", f.to_string().as_bytes()), ("r", r)],
+            r#"BEGIN { printf "%.6f", f / r }"#,
+        );
+    }
+    fixed(f as f64 / rn, 6).into_bytes()
 }
 
 /// rec_crf CUT CRF: the first pass's quality, the video's (--crf's, #278, or REC_CRF), 12 at most when
@@ -229,9 +277,9 @@ fn copy_size(ctx: &Ctx, file: &[u8], max: i64, st: &[u8]) -> Option<i64> {
             " in box '",
             ctx.name,
             "' is ",
-            bytes_h(size.to_string().as_bytes()),
+            bytes_h(size),
             ": more than omabox copies out of a box (",
-            bytes_h(max.to_string().as_bytes()),
+            bytes_h(max),
             ")"
         ));
         return None;
@@ -1086,14 +1134,11 @@ fn audio_filter(ctx: &mut Ctx, first: i64) -> Option<Vec<u8>> {
         return None;
     }
     let off = shell::dec(&a).unwrap_or(0) - first;
-    let ms = awk_begin(
-        &[("o", off.abs().to_string().as_bytes())],
-        r#"BEGIN { printf "%.3f", o / 1000 }"#,
-    );
+    let ms = ms_secs3(off.abs());
     if off >= 0 {
         Some(cat!("asetpts=N/SR/TB,adelay=delays=", ms, ":all=1,apad"))
     } else {
-        let s = awk_begin(&[("m", &ms)], r#"BEGIN { printf "%.6f", m / 1000 }"#);
+        let s = div1000_6(ms.as_bytes());
         Some(cat!(
             "asetpts=N/SR/TB,atrim=start=",
             s,
@@ -1227,16 +1272,10 @@ fn record_compose(
             continue;
         };
         k += 1;
-        let off = awk_begin(
-            &[("o", (m - t0).to_string().as_bytes())],
-            r#"BEGIN { printf "%.6f", o / 1e6 }"#,
-        );
+        let off = us_s6(m - t0);
         let d = &durs[i];
         if shell::re_match("^[0-9]+(\\.[0-9]+)?$", d) {
-            end = awk_begin(
-                &[("e", &end), ("o", &off), ("d", d)],
-                r#"BEGIN { x = o + d; printf "%.6f", (x > e ? x : e) }"#,
-            );
+            end = later_end(&end, off.as_bytes(), d);
         }
         args.push(b"-i".to_vec());
         args.push(cat!(dirs[i], "/raw.mkv"));
@@ -1289,17 +1328,8 @@ fn record_compose(
     }
     // No length known (a wf-recorder killed): until the first to end.
     let mut tlim: Vec<Vec<u8>> = Vec::new();
-    let positive = jq::tool(
-        "awk",
-        &[
-            b"-v".to_vec(),
-            cat!("e=", end),
-            b"BEGIN { exit !(e > 0) }".to_vec(),
-        ],
-        None,
-        jq::Err::Inherit,
-    )
-    .ok();
+    // (`awk -v e=END 'BEGIN { exit !(e > 0) }'`: END is a number awk printed)
+    let positive = awk_num(&end) > 0.0;
     if positive {
         tlim = vec![b"-t".to_vec(), end.clone()];
     } else {
@@ -1307,11 +1337,8 @@ fn record_compose(
     }
     // At most to the stop's time (#444).
     if let Some(l) = lim {
-        let shorter = !positive
-            || awk_begin(
-                &[("e", &end), ("l", l)],
-                r#"BEGIN { printf "%d", (l + 0 < e + 0) }"#,
-            ) == b"1";
+        // (`printf "%d", (l + 0 < e + 0)`)
+        let shorter = !positive || awk_num(l) < awk_num(&end);
         if shorter {
             tlim = vec![b"-t".to_vec(), l.to_vec()];
         }
@@ -1794,7 +1821,7 @@ fn record_cut(ctx: &mut Ctx, rec: &Rec, cut: i64, take: &Take) -> Res<Option<Vec
         return Ok(None);
     }
     let cut_b = cut.to_string().into_bytes();
-    let d = awk_begin(&[("m", &cut_b)], r#"BEGIN { printf "%.3f", m / 1000 }"#);
+    let d = ms_secs3(cut);
     // What ffmpeg says, a value a line at most: the host reads no more than that, and checks each.
     let grep_o = |ctx: &mut Ctx, a: &[Vec<u8>], re: &str| -> Res<Vec<u8>> {
         // (`fz=$(rec_ff ... | grep -oE RE | head ...)`: the grep in the substitution too)
@@ -1826,7 +1853,7 @@ fn record_cut(ctx: &mut Ctx, rec: &Rec, cut: i64, take: &Take) -> Res<Option<Vec
             "-map".into(),
             "0:v:0".into(),
             "-vf".into(),
-            format!("freezedetect=n=-60dB:d={}", String::from_utf8_lossy(&d)),
+            format!("freezedetect=n=-60dB:d={d}"),
             "-f".into(),
             "null".into(),
             "-".into(),
@@ -1932,12 +1959,7 @@ fn record_cut(ctx: &mut Ctx, rec: &Rec, cut: i64, take: &Take) -> Res<Option<Vec
         ));
         return Ok(Some(Vec::new()));
     }
-    let frac = |f: i64| {
-        awk_begin(
-            &[("f", f.to_string().as_bytes()), ("r", &fps)],
-            r#"BEGIN { printf "%.6f", f / r }"#,
-        )
-    };
+    let frac = |f: i64| frame_s6(f, &fps);
     let (mut sel, mut alist, mut ac, mut rcuts) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let (mut n, mut p, mut tot) = (0usize, 0i64, 0i64);
     for l in cuts.split(|&c| c == b'\n') {
@@ -2122,6 +2144,131 @@ mod tests {
     // t_unit_record's record_marks: wall-clock µs to ms from the first frame (in order; one before
     // it at 0), the wall-clock time as events has it, WebVTT cues from each to the next (the last to
     // the end), its text escaped; none, and an earlier take's files go; with a cut, the marks shifted.
+    /// The one-line `awk 'BEGIN { printf ... }'` arithmetic, in process: the text awk printed, at
+    /// rounding edges (x.xxx5), past 2^53, at zero and below it, and awk's own when R is 0.
+    #[test]
+    #[ignore = "runs awk: run by test/run.sh (cargo test -- --ignored)"]
+    fn arithmetic_as_awk() {
+        let ints: [i64; 22] = [
+            0,
+            1,
+            -1,
+            5,
+            499,
+            500,
+            -500,
+            999,
+            1000,
+            1234,
+            -1234,
+            1500,
+            2500,
+            1_048_575,
+            1_048_576,
+            1_310_720,
+            1_073_741_823,
+            1_073_741_824,
+            17_179_869_184,
+            9_007_199_254_740_993,
+            123_456_789_012_345_678,
+            i64::MAX,
+        ];
+        for v in ints {
+            let vb = v.to_string();
+            let o = |prog: &str| awk_begin(&[("o", vb.as_bytes())], prog);
+            assert_eq!(
+                ms_secs3(v).as_bytes(),
+                o(r#"BEGIN { printf "%.3f", o / 1000 }"#),
+                "%.3f of {v}/1000"
+            );
+            assert_eq!(
+                us_s6(v).as_bytes(),
+                o(r#"BEGIN { printf "%.6f", o / 1e6 }"#),
+                "%.6f of {v}/1e6"
+            );
+            assert_eq!(
+                div1000_6(ms_secs3(v).as_bytes()).as_bytes(),
+                awk_begin(
+                    &[("m", ms_secs3(v).as_bytes())],
+                    r#"BEGIN { printf "%.6f", m / 1000 }"#
+                ),
+                "%.6f of {v}'s seconds / 1000"
+            );
+            assert_eq!(
+                bytes_h(v),
+                awk_begin(&[("b", vb.as_bytes())], P::BYTES_H_AWK),
+                "bytes_h {v}"
+            );
+            for r in ["30", "60", "7", "29.97", "120", "0", "", "x"] {
+                assert_eq!(
+                    frame_s6(v, r.as_bytes()),
+                    awk_begin(
+                        &[("f", vb.as_bytes()), ("r", r.as_bytes())],
+                        r#"BEGIN { printf "%.6f", f / r }"#
+                    ),
+                    "%.6f of {v}/{r}"
+                );
+            }
+        }
+        let nums = [
+            "0",
+            "0.000000",
+            "0.0000005",
+            "0.0000015",
+            "0.0000025",
+            "0.000001",
+            "1.5",
+            "2.4999995",
+            "12.345678",
+            "123456789.1234565",
+            "9007199254740993",
+            "99999999999999999999999999999999999999999.5",
+        ];
+        for e in nums {
+            assert_eq!(
+                awk_num(e.as_bytes()) > 0.0,
+                jq::tool(
+                    "awk",
+                    &[
+                        b"-v".to_vec(),
+                        cat!("e=", e),
+                        b"BEGIN { exit !(e > 0) }".to_vec()
+                    ],
+                    None,
+                    jq::Err::Inherit
+                )
+                .ok(),
+                "{e} > 0"
+            );
+            for o in ["0.000000", "1.033333", "0.0000005"] {
+                for d in nums {
+                    assert_eq!(
+                        later_end(e.as_bytes(), o.as_bytes(), d.as_bytes()),
+                        awk_begin(
+                            &[
+                                ("e", e.as_bytes()),
+                                ("o", o.as_bytes()),
+                                ("d", d.as_bytes())
+                            ],
+                            r#"BEGIN { x = o + d; printf "%.6f", (x > e ? x : e) }"#
+                        ),
+                        "the later of {e} and {o} + {d}"
+                    );
+                }
+            }
+            for l in nums {
+                assert_eq!(
+                    awk_num(l.as_bytes()) < awk_num(e.as_bytes()),
+                    awk_begin(
+                        &[("e", e.as_bytes()), ("l", l.as_bytes())],
+                        r#"BEGIN { printf "%d", (l + 0 < e + 0) }"#
+                    ) == b"1",
+                    "{l} < {e}"
+                );
+            }
+        }
+    }
+
     #[test]
     #[ignore = "runs awk: run by test/run.sh (cargo test -- --ignored)"]
     fn record_marks_as_bash() {
