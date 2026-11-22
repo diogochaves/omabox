@@ -309,7 +309,7 @@ fn tmpdir() -> Vec<u8> {
 
 /// `mkdir -p -- "$(dirname -- OUT)" || die "LABEL: cannot make the directory D"`, then OUT resolved.
 fn place_dir(ctx: &Ctx, label: &str, out: &[u8]) -> Res<Vec<u8>> {
-    let dir = crate::shots::dirname(out);
+    let dir = crate::paths::dir_of(out);
     if !crate::shots::mkdir_p(&dir) {
         return Err(ctx.die(cat!(label, ": cannot make the directory ", dir)));
     }
@@ -418,7 +418,7 @@ fn shot(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()> 
         );
     }
     let out = place_dir(ctx, "shot", &out)?;
-    let dir = crate::shots::dirname(&out);
+    let dir = crate::paths::dir_of(&out);
     let Some((file, tmp)) = temp_beside(&dir, "shot") else {
         return Err(ctx.die(cat!("shot: cannot write in ", dir)));
     };
@@ -736,7 +736,7 @@ fn record(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()
                 );
             }
             let out = place_dir(ctx, "record", &out)?;
-            let dir = crate::shots::dirname(&out);
+            let dir = crate::paths::dir_of(&out);
             // Written here at stop: said now if it cannot be.
             let Some((_, t)) = temp_beside(&dir, "record") else {
                 return Err(ctx.die(cat!("record: cannot write in ", dir)));
@@ -817,7 +817,7 @@ fn record(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()
                     ")"
                 )));
             }
-            let dir = crate::shots::dirname(&out);
+            let dir = crate::paths::dir_of(&out);
             let base = out.strip_suffix(b".mp4").unwrap_or(&out).to_vec();
             if !crate::shots::mkdir_p(&dir) {
                 return Err(ctx.die(cat!(
@@ -908,7 +908,7 @@ fn record(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()
             if out.is_empty() {
                 out = cat!(base, ".sheet.png");
             }
-            let dir0 = crate::shots::dirname(&out);
+            let dir0 = crate::paths::dir_of(&out);
             if !crate::shots::mkdir_p(&dir0) {
                 return Err(ctx.die(cat!("record sheet: cannot make the directory ", dir0)));
             }
@@ -925,7 +925,7 @@ fn record(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()
             } else {
                 None
             };
-            let dir = crate::shots::dirname(&out);
+            let dir = crate::paths::dir_of(&out);
             let Some((tf, tmp)) = temp_beside(&dir, "sheet") else {
                 return Err(ctx.die(cat!("record sheet: cannot write in ", dir)));
             };

@@ -144,7 +144,11 @@ fn pic_name(n: &[u8]) -> bool {
 /// Why the path T (resolved) stays out by a name in it: each part below HOME (as written, or
 /// HOME_R, resolved), or each part when it is not in HOME.
 fn parts_why(home: &[u8], home_r: &[u8], t: &[u8]) -> Option<&'static str> {
-    let under = |h: &[u8]| t.strip_prefix(cat!(h, "/").as_slice()).map(<[u8]>::to_vec);
+    let under = |h: &[u8]| {
+        crate::paths::under(t, h)
+            .filter(|r| !r.is_empty())
+            .map(<[u8]>::to_vec)
+    };
     let rel = under(home_r)
         .or_else(|| under(home))
         .unwrap_or_else(|| t.to_vec());
@@ -1090,17 +1094,15 @@ fn box_sees(h: &[u8], homes: &[Vec<u8>], p: &[u8]) -> Option<Vec<u8>> {
     }
     let t = p.strip_suffix(b"/").filter(|t| !t.is_empty()).unwrap_or(p);
     for hm in homes {
-        let hm = hm.strip_suffix(b"/").unwrap_or(hm);
-        if t == hm {
-            return Some(h.to_vec());
-        }
-        if let Some(rest) = t.strip_prefix(hm).filter(|r| r.starts_with(b"/")) {
-            return Some(cat!(h, rest));
+        match crate::paths::under(t, hm) {
+            Some([]) => return Some(h.to_vec()),
+            Some(rest) => return Some(cat!(h, "/", rest)),
+            None => {}
         }
     }
     ["/usr", "/bin", "/sbin"]
         .iter()
-        .any(|r| t == r.as_bytes() || t.starts_with(&cat!(r, "/")))
+        .any(|r| crate::paths::at_or_under(t, r.as_bytes()))
         .then(|| t.to_vec())
 }
 
@@ -1529,8 +1531,8 @@ fn wallpaper(w: &mut Walk, plan: &SeedPlan) -> Res<()> {
             wallpaper_folder(w, &folder, &bgs)?;
         }
         let inside = readlink_e(&folder).and_then(|f| {
-            t.strip_prefix(cat!(f, "/").as_slice())
-                .filter(|n| !n.contains(&b'/'))
+            crate::paths::under(&t, &f)
+                .filter(|n| !n.is_empty() && !n.contains(&b'/'))
                 .map(<[u8]>::to_vec)
         });
         if let Some(n) = inside {

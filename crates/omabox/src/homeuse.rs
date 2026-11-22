@@ -5,6 +5,7 @@
 //! nothing uses it either.
 
 use crate::cat;
+use crate::paths::{at_or_under, under};
 use crate::shell;
 use std::collections::HashSet;
 
@@ -184,13 +185,12 @@ impl Users {
         let Some(p) = crate::repo::readlink_e(p) else {
             return false;
         };
-        let under = |q: &[u8]| q == p.as_slice() || q.starts_with(&cat!(p, "/"));
-        if s.open.iter().any(|o| under(o)) {
+        if s.open.iter().any(|o| at_or_under(o, &p)) {
             return true;
         }
         // P in its own file system: the host mount it is under (the longest mount point; the last
         // one of those, mounted over the rest), its root there and the rest of P.
-        let inside = |at: &[u8]| at == b"/" || p.as_slice() == at || p.starts_with(&cat!(at, "/"));
+        let inside = |at: &[u8]| at_or_under(&p, at);
         let Some((dev, root, at)) = s
             .host
             .iter()
@@ -207,19 +207,15 @@ impl Users {
         else {
             return true;
         };
-        let rest = if at.as_slice() == b"/" {
-            &p[..]
+        let rest = under(&p, at).unwrap_or_default();
+        let f = if rest.is_empty() {
+            root.clone()
+        } else if root.as_slice() == b"/" {
+            cat!("/", rest)
         } else {
-            &p[at.len()..]
+            cat!(root, "/", rest)
         };
-        let f = if root.as_slice() == b"/" {
-            rest.to_vec()
-        } else {
-            cat!(root, rest)
-        };
-        s.mounts
-            .iter()
-            .any(|(d, r)| d == dev && (r == &f || r.starts_with(&cat!(f, "/"))))
+        s.mounts.iter().any(|(d, r)| d == dev && at_or_under(r, &f))
     }
 }
 

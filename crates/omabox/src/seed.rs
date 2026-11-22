@@ -972,7 +972,7 @@ pub fn box_background(
 /// so that on the host the link leads into the box's folder, never into the user's real HOME (an
 /// agent following it from `path --home` would edit real files; finding 710).
 pub fn link_target(h: &[u8], at: &[u8], sbx: &[u8], rel: &[u8]) -> Vec<u8> {
-    let under = at.strip_prefix(cat!(h, "/").as_slice());
+    let under = crate::paths::under(at, h).filter(|r| !r.is_empty());
     match under {
         Some(r) if sbx != crate::boxes::SBX_HOME.as_bytes() => {
             let ups = r
@@ -1006,7 +1006,7 @@ pub fn theme_snapshot_note(dir: &[u8], top: &[u8]) {
     }
     let Some(t) = readlink_f(link) else { return };
     let name = shell::basename(link);
-    if t.starts_with(&cat!(top, "/")) {
+    if crate::paths::below(&t, top) {
         say(cat!(
             "note: theme ",
             name,
@@ -1033,7 +1033,9 @@ pub fn theme_snapshot_note(dir: &[u8], top: &[u8]) {
     let Some(ttop) = git_rev_parse(&t, &["--show-toplevel"]) else {
         return;
     };
-    let inner = t.strip_prefix(cat!(ttop, "/").as_slice()).unwrap_or(&t);
+    let inner = crate::paths::under(&t, &ttop)
+        .filter(|r| !r.is_empty())
+        .unwrap_or(&t);
     let mine = cat!(top, "/", inner);
     let own = if p(&mine).is_dir() {
         mine
@@ -1343,13 +1345,14 @@ fn links_out(root: &[u8], dir: &[u8], n: &mut usize, first: &mut Vec<u8>) {
         let Ok(ft) = e.file_type() else { continue };
         if ft.is_symlink() {
             let Some(t) = readlink_e(&l) else { continue };
-            let t2 = cat!(t, "/");
-            if t2.starts_with(&cat!(root, "/")) || t2.starts_with(b"/usr/") {
+            if crate::paths::at_or_under(&t, root) || crate::paths::at_or_under(&t, b"/usr") {
                 continue;
             }
             *n += 1;
             if first.is_empty() {
-                let rel = l.strip_prefix(cat!(root, "/").as_slice()).unwrap_or(&l);
+                let rel = crate::paths::under(&l, root)
+                    .filter(|r| !r.is_empty())
+                    .unwrap_or(&l);
                 *first = cat!(rel, " -> ", t);
             }
         } else if ft.is_dir() {
@@ -1668,7 +1671,7 @@ impl DeskWalk<'_> {
                 self.skipped(&r, b"a link that leads nowhere");
                 return Ok(());
             };
-            let Some(trel) = to.strip_prefix(cat!(self.root, "/").as_slice()) else {
+            let Some(trel) = crate::paths::under(&to, &self.root).filter(|r| !r.is_empty()) else {
                 self.skipped(&r, b"a link out of the folder (not followed)");
                 return Ok(());
             };
@@ -1799,10 +1802,10 @@ pub fn seed_blocked<'a>(
     jail_path: &dyn Fn(&[u8]) -> Option<Vec<u8>>,
 ) -> Option<(&'a Place, &'static str)> {
     for x in places {
-        if rel == x.at.as_slice() || rel.starts_with(&cat!(x.at, "/")) {
+        if crate::paths::at_or_under(rel, &x.at) {
             return Some((x, "in"));
         }
-        let Some(below) = x.at.strip_prefix(cat!(rel, "/").as_slice()) else {
+        let Some(below) = crate::paths::under(&x.at, rel).filter(|r| !r.is_empty()) else {
             continue;
         };
         let mut q = cat!(src, "/", below);

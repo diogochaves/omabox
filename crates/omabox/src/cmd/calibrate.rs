@@ -12,8 +12,9 @@ use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::jq::{self, Args};
 use crate::jqprog::{CALIB_FIT_AWK, CALIB_MARKS_AWK, JQ_MON};
 use crate::num::{awk_num, fixed};
+use crate::paths::dir_of;
 use crate::shell::{self, dec, strip_nl, test_int};
-use crate::shots::{dirname, mkdir_p, real, shot_fit_default, two_files};
+use crate::shots::{mkdir_p, real, shot_fit_default, two_files};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::process::Stdio;
@@ -605,7 +606,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if let Some(m) = crate::shots::overwrite_refusal(&card) {
         return Err(ctx.die(cat!("calibrate: ", m)));
     }
-    let dir = dirname(&card);
+    let dir = dir_of(&card);
     if !mkdir_p(&dir) {
         return Err(ctx.die(cat!("calibrate: cannot make the directory ", dir)));
     }

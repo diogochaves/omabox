@@ -309,7 +309,7 @@ pub fn crash_reports(ctx: &Ctx) -> Vec<Report> {
     ) else {
         return Vec::new();
     };
-    if !dir.starts_with(&cat!(home, "/")) {
+    if !crate::paths::below(&dir, &home) {
         return Vec::new();
     }
     let want = shell_config_dirs(ctx);

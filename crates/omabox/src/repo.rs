@@ -164,7 +164,7 @@ fn jail_cwd_root() -> Option<String> {
         let Some(r) = root.get("path").and_then(Value::as_str) else {
             continue;
         };
-        if !coverable(pol, root) || !(cwd == r || cwd.starts_with(&format!("{r}/"))) {
+        if !coverable(pol, root) || !crate::paths::at_or_under(cwd.as_bytes(), r.as_bytes()) {
             continue;
         }
         if best
@@ -436,7 +436,7 @@ fn utf8_char_len(v: &[u8]) -> usize {
 /// repo_link_out TOP PATH (#235): PATH (under TOP, there on the host) reached through a link in TOP
 /// that leads out of it: (that link, where it leads, where PATH is then).
 pub fn repo_link_out(top: &[u8], p: &[u8]) -> Option<[Vec<u8>; 3]> {
-    let under = |x: &[u8]| x.starts_with(&cat!(top, "/"));
+    let under = |x: &[u8]| crate::paths::below(x, top);
     if !under(p) || !shell::path(p).exists() {
         return None;
     }
@@ -1037,7 +1037,7 @@ pub fn host_path_notes(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
         // A desk box's HOME is at your HOME's path (#321): a path there counts only when the box
         // has the same file (the repo, a --ro-bind), or something where you have nothing; looked
         // up in the box's root, never through the host's.
-        if desk && (p == home.as_slice() || p.starts_with(&cat!(home, "/"))) {
+        if desk && crate::paths::at_or_under(p, &home) {
             return if std::fs::symlink_metadata(shell::path(p)).is_ok() {
                 crate::exec::same_in_box(&ctx.d, &pid, p)
             } else {

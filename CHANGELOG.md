@@ -5,6 +5,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Fixed
+- **`down`'s list of your boxes put `~` before every box folder when `HOME` was empty**; it shows
+  them as they are now. Paths are compared by one rule everywhere (finding 759).
+
 ## 1.5.2 — 2026-11-22
 
 Security and hardening from a review of the whole codebase. A process in a box could make omabox

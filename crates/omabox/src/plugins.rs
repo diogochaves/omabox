@@ -761,7 +761,7 @@ fn theme_word(name: &[u8]) -> Vec<u8> {
 /// /usr/share/omarchy) only where JAIL_PATH leads (#198): its themes/, or a theme in it, linked out
 /// of the jail's folders is none, never followed.
 pub fn tree_dir(d: &[u8], tree: &[u8], jail_path: &dyn Fn(&[u8]) -> Option<Vec<u8>>) -> bool {
-    if in_jail() && tree != b"/usr/share/omarchy" && d.starts_with(&cat!(tree, "/")) {
+    if in_jail() && tree != b"/usr/share/omarchy" && crate::paths::below(d, tree) {
         return jail_path(d).is_some_and(|q| shell::path(&q).is_dir());
     }
     shell::path(d).is_dir()
@@ -786,7 +786,7 @@ pub fn theme_folders(
     let stock = cat!(tree, "/themes/", name);
     if tree_dir(&stock, tree, jail_path) {
         let jailed =
-            in_jail() && tree != b"/usr/share/omarchy" && stock.starts_with(&cat!(tree, "/"));
+            in_jail() && tree != b"/usr/share/omarchy" && crate::paths::below(&stock, tree);
         v.push(if jailed {
             jail_path(&stock).unwrap_or(stock)
         } else {

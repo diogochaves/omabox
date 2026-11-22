@@ -1223,7 +1223,6 @@ fn under_overlay(d: &[u8], wd: &[u8]) -> bool {
         return false;
     };
     let (vals, _) = json::values(&text);
-    let p = cat!(wd, "/");
     let mut last = false;
     for v in &vals {
         let Some(serde_json::Value::Array(a)) = v.get("overlays") else {
@@ -1235,7 +1234,7 @@ fn under_overlay(d: &[u8], wd: &[u8]) -> bool {
             let serde_json::Value::String(o) = o else {
                 return false;
             };
-            if p.starts_with(&cat!(o, "/")) {
+            if crate::paths::at_or_under(wd, o.as_bytes()) {
                 last = true;
                 break;
             }

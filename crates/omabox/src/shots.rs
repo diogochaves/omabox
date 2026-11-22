@@ -7,36 +7,12 @@ use crate::cat;
 use crate::exit::{Ctx, Res, say};
 use crate::jail::in_jail;
 use crate::num::{awk_num, awk_str, fixed};
+use crate::paths::dir_of;
 use crate::screen::stamp;
 use crate::shell::{self, strip_nl};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::process::Stdio;
-
-/// `$(dirname -- "$V")`, as coreutils has it.
-pub fn dirname(p: &[u8]) -> Vec<u8> {
-    if p.is_empty() {
-        return b".".to_vec();
-    }
-    let mut end = p.len();
-    while end > 1 && p[end - 1] == b'/' {
-        end -= 1;
-    }
-    match p[..end].iter().rposition(|&c| c == b'/') {
-        None => b".".to_vec(),
-        Some(i) => {
-            let mut j = i;
-            while j > 0 && p[j - 1] == b'/' {
-                j -= 1;
-            }
-            if j == 0 {
-                b"/".to_vec()
-            } else {
-                p[..j].to_vec()
-            }
-        }
-    }
-}
 
 /// `mkdir -p -- DIR`: its own words on stderr when it cannot.
 pub fn mkdir_p(dir: &[u8]) -> bool {
@@ -512,7 +488,7 @@ pub fn shot_path(ctx: &Ctx, out: &[u8]) -> Res<(Vec<u8>, Vec<u8>, OutDir)> {
         return Err(ctx.die(cat!("shot: ", m)));
     }
     let (folder, held) =
-        hold_folder(&dirname(out), true, &box_writable).map_err(|m| ctx.die(cat!("shot: ", m)))?;
+        hold_folder(&dir_of(out), true, &box_writable).map_err(|m| ctx.die(cat!("shot: ", m)))?;
     let out = if folder == b"/" {
         cat!("/", shell::basename(out))
     } else {
@@ -566,7 +542,7 @@ impl OutFile {
         if let Some(m) = named {
             return Err(m);
         }
-        let (folder, held) = hold_folder(&dirname(out), true, guarded)?;
+        let (folder, held) = hold_folder(&dir_of(out), true, guarded)?;
         let f = OutFile {
             dir: held,
             folder,
@@ -587,7 +563,7 @@ impl OutFile {
     /// link on its way (a folder a box swapped for a link since is refused, never followed), NAME
     /// and NAME.part checked.
     pub fn resolved(path: &[u8], png: bool) -> Result<OutFile, Vec<u8>> {
-        let f = OutFile::in_dir(&dirname(path), &shell::basename(path), png)?;
+        let f = OutFile::in_dir(&dir_of(path), &shell::basename(path), png)?;
         f.check()?;
         Ok(f)
     }
@@ -1531,20 +1507,7 @@ mod tests {
     }
 
     #[test]
-    fn as_coreutils_and_awk() {
-        for (p, d) in [
-            ("", "."),
-            ("ab/", "."),
-            ("/", "/"),
-            ("//", "/"),
-            ("/a/", "/"),
-            ("a//b///", "a"),
-            ("///a", "/"),
-            ("..", "."),
-            ("a/b", "a"),
-        ] {
-            assert_eq!(dirname(p.as_bytes()), d.as_bytes(), "{p}");
-        }
+    fn as_awk() {
         assert_eq!(ratio(1920, 960), b"2");
         assert_eq!(ratio(1920, 1280), b"1.5");
         assert_eq!(ratio(1000, 100), b"10");
