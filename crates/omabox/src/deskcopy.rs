@@ -2453,6 +2453,12 @@ mod tests {
             "apikey.txt",
             ".netrc",
             "authorized_keys",
+            ".npmrc",
+            ".pypirc",
+            "rclone.conf",
+            ".vault-token",
+            "credentials.toml",
+            "keys.age",
         ] {
             assert_eq!(
                 seed::desk_box_name_refused(n.as_bytes()),

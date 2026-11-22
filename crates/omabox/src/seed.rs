@@ -1429,6 +1429,19 @@ pub fn bar_seed_note(
     ));
 }
 
+/// Credential files by exact name (lowercase), kept out whatever they hold when read: their formats
+/// can keep a password or token under a name the content check does not know (npm's `_auth`, a
+/// `.netrc`'s `password` with no `=`), finding 748.
+const SECRET_FILES: &[&str] = &[
+    ".netrc",
+    ".pgpass",
+    ".npmrc",
+    ".pypirc",
+    ".vault-token",
+    "rclone.conf",
+    "credentials.toml",
+];
+
 /// desk_name_refused NAME: why a desk file or folder stays out of a box by its name, or None: a
 /// secret's, a git dir (its config can hold credentials), a backup. Lowered as Unicode where the
 /// name is UTF-8 (`${1,,}` in a UTF-8 locale: the Kelvin sign is a `k`), else as ASCII.
@@ -1456,14 +1469,13 @@ pub fn desk_name_refused(name: &[u8]) -> Option<&'static str> {
         ]
         .iter()
         .any(has)
-        || [".pem", ".p12", ".pfx", ".gpg", ".asc", ".kdbx"]
+        || [".pem", ".p12", ".pfx", ".gpg", ".asc", ".kdbx", ".age"]
             .iter()
             .any(ends)
         || ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"]
             .iter()
             .any(starts)
-        || n == b".netrc"
-        || n == b".pgpass";
+        || SECRET_FILES.iter().any(|x| n == x.as_bytes());
     if secret {
         return Some("a secret's name");
     }
@@ -1493,15 +1505,10 @@ pub fn desk_box_name_refused(name: &[u8]) -> Option<&'static str> {
     };
     let has = |x: &&str| crate::exit::contains(&n, x.as_bytes());
     let ends = |x: &&str| n.ends_with(x.as_bytes());
-    let secret = [
-        "api-keys.env",
-        ".netrc",
-        ".pgpass",
-        "authorized_keys",
-        "known_hosts",
-    ]
-    .iter()
-    .any(|x| n == x.as_bytes())
+    let secret = ["api-keys.env", "authorized_keys", "known_hosts"]
+        .iter()
+        .chain(SECRET_FILES)
+        .any(|x| n == x.as_bytes())
         || n.starts_with(b".env.")
         || n.starts_with(b"id_")
         || [
@@ -1518,7 +1525,7 @@ pub fn desk_box_name_refused(name: &[u8]) -> Option<&'static str> {
         .iter()
         .any(has)
         || [
-            ".env", ".pem", ".p12", ".pfx", ".gpg", ".asc", ".kdbx", ".key",
+            ".env", ".pem", ".p12", ".pfx", ".gpg", ".asc", ".kdbx", ".key", ".age",
         ]
         .iter()
         .any(ends);
@@ -1532,9 +1539,25 @@ pub fn desk_box_name_refused(name: &[u8]) -> Option<&'static str> {
 }
 
 /// What desk_content_refused greps for: a key, token, secret, password or credential given a value
-/// (the key ends in the word, the value 6+ characters: finding 320), a bearer token, a private key,
-/// or a token-shaped string (GitHub, GitLab, Slack, OpenAI and Anthropic, AWS).
-const SECRET_ERE: &str = r#"(api[_-]?key|secret([_-]?key)?|token|passw(or)?d|credentials?|authorization)["']?[[:space:]]*[:=][[:space:]]*["']?[^"',[:space:]]{6,}|bearer[[:space:]]+[A-Za-z0-9._-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY|(^|[^A-Za-z0-9])(ghp|gho|ghs|ghu|ghr|github_pat|glpat|xox[abpr]|sk|sk-ant)[-_][A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}"#;
+/// (the key ends in the word, the value 6+ characters: finding 320) after `:` or `=`, or set as an
+/// environment variable by Hyprland's `hl.env("NAME", "VALUE")` (or a `setenv("NAME", "VALUE")`) and
+/// `env = NAME,VALUE` (a name ending in KEY, TOKEN, SECRET, PASSWORD, CREDENTIALS or AUTH: finding
+/// 748; a bare `,` after the word is a list's, not a value's), an ini's line `pass = VALUE` (rclone), a
+/// bearer token, a private key, a URL holding a password (`scheme://user:pass@`), or a token-shaped
+/// string (GitHub, GitLab, Slack, OpenAI and Anthropic, AWS, Google, Hugging Face, Groq, xAI, Stripe,
+/// npm, Grafana).
+const SECRET_ERE: &str = concat!(
+    r#"(api[_-]?key|secret([_-]?key)?|token|passw(or)?d|credentials?|authorization)["']?[[:space:]]*[:=][[:space:]]*["']?[^"',[:space:]]{6,}"#,
+    r#"|(hl\.env|setenv|putenv)[[:space:]]*\([[:space:]]*["'][A-Za-z0-9_.-]*(key|token|secret|passw(or)?d|credentials?|auth)["'][[:space:]]*,[[:space:]]*["']?[^"',[:space:]]{6,}"#,
+    r#"|(^|[[:space:]])env[[:space:]]*=[[:space:]]*[A-Za-z0-9_.-]*(key|token|secret|passw(or)?d|credentials?|auth)[[:space:]]*,[[:space:]]*["']?[^"',[:space:]]{6,}"#,
+    r#"|^[[:space:]]*pass[[:space:]]*=[[:space:]]*[A-Za-z0-9_-]{6,}[[:space:]]*$"#,
+    r#"|bearer[[:space:]]+[A-Za-z0-9._-]{16,}"#,
+    r#"|-----BEGIN [A-Z ]*PRIVATE KEY"#,
+    r#"|(^|[^A-Za-z0-9])(ghp|gho|ghs|ghu|ghr|github_pat|glpat|xox[abpr]|sk|sk-ant)[-_][A-Za-z0-9_-]{16,}"#,
+    r#"|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}"#,
+    r#"|(^|[^A-Za-z0-9])(hf_[A-Za-z0-9]{30,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{30,}|[rs]k_live_[A-Za-z0-9]{16,}|glsa_[A-Za-z0-9_]{20,})"#,
+    r#"|[a-z][a-z0-9+.-]*://[A-Za-z0-9._%+~-]+:[^]/[:space:]@"'()[{}|*?^$\]+@"#,
+);
 
 /// desk_content_refused FILE: why a desk file stays out of a box by what it holds, or None; one that
 /// cannot be read stays out too. Nothing of what matched is said. grep runs it as bash's does
@@ -2981,6 +3004,12 @@ mod tests {
             "a.pem",
             "id_rsa.pub",
             ".netrc",
+            ".NPMRC",
+            ".pypirc",
+            "rclone.conf",
+            ".vault-token",
+            "credentials.toml",
+            "secrets.age",
             "monkey",
             "\u{212a}ey",
         ] {
@@ -3025,6 +3054,62 @@ mod tests {
             ("{\"maxTokens\": 4}", false),
             ("{\"tokenizer\": \"x\"}", false),
             ("plain", false),
+            // Hyprland's env forms (finding 748): Lua and hyprlang, with and without spaces.
+            (
+                r#"hl.env("GEMINI_API_KEY", "AIzaSyD3xampleExampleExample0000000")"#,
+                true,
+            ),
+            (r#"hl.env("API_KEY","xyzxyzxyzxyz")"#, true),
+            (r#"hl.env("HF_TOKEN", "abcdefghijkl")"#, true),
+            ("env = OPENAI_API_KEY,abcdefgh", true),
+            ("env = GITHUB_TOKEN, abcdefgh", true),
+            ("hl.env('MY_SECRET', 'abcdefgh')", true),
+            // Token shapes, alone on a line.
+            ("x = AIzaSyD3xampleExampleExample00000000000", true),
+            ("x hf_abcdefghijklmnopqrstuvwxyz0123", true),
+            ("x gsk_abcdefghijklmnopqrstuvwxyz0123", true),
+            ("x xai-abcdefghijklmnopqrstuvwxyz0123", true),
+            ("x sk_live_abcdefghijklmnop", true),
+            ("x rk_live_abcdefghijklmnop", true),
+            ("x npm_abcdefghijklmnopqrstuvwxyz0123456", true),
+            ("x glsa_abcdefghijklmnopqrstuvwxyz_0123", true),
+            // A URL with a password; rclone's ini.
+            (r#"url = "https://user:hunter2hunter2@host/x""#, true),
+            ("remote = sftp://me:pw@host", true),
+            ("pass = abcdefghijk", true),
+            // Ordinary desktop lines stay in.
+            (r#"hl.env("XCURSOR_SIZE", "24")"#, false),
+            (
+                r#"hl.env("SSH_AUTH_SOCK", "/run/user/1000/ssh-agent.socket")"#,
+                false,
+            ),
+            (
+                r#"hl.env("PASSWORD_STORE_DIR", "/home/u/.password-store")"#,
+                false,
+            ),
+            (r#"hl.env("TOKENIZERS_PARALLELISM", "false")"#, false),
+            ("env = GDK_SCALE,2", false),
+            ("env = HYPRCURSOR_THEME,Bibata-Modern", false),
+            ("token_count = 12", false),
+            ("bypass = something-long", false),
+            ("passthrough = enabled-always", false),
+            (r#"url = "https://example.com/a@b""#, false),
+            ("git clone ssh://git@github.com:22/x", false),
+            ("https://host:8080/path", false),
+            ("x = AIzaShort", false),
+            ("leaf_abcdefghijklmnopqrstuvwxyz0123456", false),
+            ("npm-check-updates-and-more", false),
+            // A comma after the word outside an env setting is a list's or prose's.
+            (r#"fields = { "token", "password" }"#, false),
+            (
+                r#"{"label":"1Password","disabled":"omarchy-pkg-present 1password"}"#,
+                false,
+            ),
+            ("asks for a token, installs the unit", false),
+            ("  pass = !!(a && b)", false),
+            ("  pass = computeTheThing(x)", false),
+            (r#"re = r"(ssh://)?([^:]+:[^@]+@)""#, false),
+            (r#"os.setenv("ANTHROPIC_KEY", "abcdefghij")"#, true),
         ] {
             put(&f, text);
             assert_eq!(desk_content_refused(&f).is_some(), bad, "{text}");
