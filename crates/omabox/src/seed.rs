@@ -247,6 +247,9 @@ pub struct SeedPlan {
     pub plugins: Vec<(Vec<u8>, Vec<u8>)>,
     /// LINKED_PLUGINS: the ids the box sees at their own path (finding 241): linked, not mounted.
     pub linked: Vec<Vec<u8>>,
+    /// MOUNTS: what the box mounts, (source, destination) each (--ro-bind's with the repo, then
+    /// --overlay's): the link pass keeps a link to what the box has at that same path (finding 756).
+    pub mounts: Vec<(Vec<u8>, Vec<u8>)>,
     /// THEME (--theme, named as omarchy-theme-set names it) and THEME_DIRS (--theme-dir's, resolved).
     pub theme: Vec<u8>,
     pub theme_dirs: Vec<Vec<u8>>,
@@ -569,6 +572,8 @@ struct LinkPass {
     left_out: Vec<(Vec<u8>, Vec<u8>)>,
     /// where a walk stopped short (finding 752), and why
     cut: Option<(Vec<u8>, Vec<u8>)>,
+    /// the box's mounts (SeedPlan's), for homelinks::View::with_mounts
+    mounts: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 static LINK_PASS: std::sync::Mutex<LinkPass> = std::sync::Mutex::new(LinkPass {
@@ -576,6 +581,7 @@ static LINK_PASS: std::sync::Mutex<LinkPass> = std::sync::Mutex::new(LinkPass {
     bytes: 0,
     left_out: Vec::new(),
     cut: None,
+    mounts: Vec::new(),
 });
 
 /// home_links_out's caps: a picture, any other file, and all it copies in one up (deskcopy's IMAGES, and
@@ -592,57 +598,51 @@ fn link_pass() -> std::sync::MutexGuard<'static, LinkPass> {
 }
 
 /// home_links_out H D (#448, finding 714): each link seed_copy brought into D (a folder of the box HOME
-/// H) that leads out of the box HOME into your HOME, or to a file you can write. On the host,
-/// `omabox path --home` hands that folder to an agent's own file tools, and an edit through such a
-/// link wrote your file; in the box it mostly dangled (only the repo up runs from is mounted).
-/// Each becomes a copy of its file when deskcopy would copy that file (a regular one, refuse_src and
-/// no secret's name on its way, a picture up to 32 MiB or another file up to 1 MiB holding nothing
-/// that looks like a key; 64 files and 128 MiB in one up), else it is removed and seed_home says so.
-/// A link into the box HOME, or to what you cannot write (/usr/share/omarchy's), stays.
+/// H) that leads out of the box HOME (homelinks::View::judge): into your HOME or a folder that holds
+/// it, to a file you can write, to what you can write among your session's live sockets and secrets,
+/// or through /proc. On the host, `omabox path --home` hands that folder to an agent's own file tools,
+/// and an edit through such a link wrote there; in the box it mostly dangled (only the repo up runs
+/// from is mounted). One to a file becomes a copy of it when deskcopy would copy that file (a regular
+/// one, refuse_src and no secret's name on its way, a picture up to 32 MiB or another file up to 1 MiB
+/// holding nothing that looks like a key; 64 files and 128 MiB in one up), else it is removed and
+/// seed_home says so. A link into the box HOME, to what you cannot write (/usr/share/omarchy's), to a
+/// device (/dev/null) or to a folder you can write elsewhere (/mnt/data/x) stays (finding 756).
 fn home_links_out(ctx: &Ctx, h: &[u8], d: &Dest) -> Res<()> {
     home_links_under(ctx, h, d.rel())
 }
 
 /// home_links_out over REL in the box HOME H (empty: all of it, for a save restored there). A link is
-/// judged by where the host resolves it (homelinks, finding 752: into your HOME or a folder that holds
-/// it, or to a file you can write), never by its target's text; a loop leads nowhere and stays. When
-/// the walk stops short (homelinks' caps), seed_home says where.
+/// judged by where the host resolves it (homelinks, finding 752, 756), never by its target's text; a
+/// loop leads nowhere and stays. When the walk stops short (homelinks' caps), seed_home says where.
 fn home_links_under(ctx: &Ctx, h: &[u8], rel: &[u8]) -> Res<()> {
+    use crate::homelinks::Lead;
     let Some(view) = crate::homelinks::View::new(h, &shell::env_or_empty("HOME")) else {
         return Ok(());
     };
-    let writable = |t: &[u8]| {
-        std::ffi::CString::new(t.to_vec())
-            .is_ok_and(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
-    };
+    let view = view.with_mounts(link_pass().mounts.clone());
     // (each judged against the HOME as it is before any is taken out: `a -> r/home/USER/x` stays out
     // after `r -> /` is gone)
-    let mut out: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
-    let cut = crate::homelinks::walk_links::<()>(&view.own, rel, |r, _| {
-        let e = cat!(view.own, "/", r);
-        let Some(to) = crate::homelinks::resolve(&e) else {
-            return Ok(());
-        };
-        if view.inside(&to) || !(view.leads_home(&to) || writable(&to)) {
-            return Ok(());
-        }
-        let t = std::fs::canonicalize(p(&e))
-            .ok()
-            .map(|t| shell::bytes(&t).to_vec());
-        out.push((r.to_vec(), t));
-        Ok(())
-    })
-    .unwrap_or(None);
-    for (r, t) in out {
+    let mut out: Vec<(Vec<u8>, crate::homelinks::Out, Option<Vec<u8>>)> = Vec::new();
+    let cut =
+        crate::homelinks::walk_links::<()>(&view.own, rel, crate::homelinks::UP_CAPS, |r, _| {
+            let Some(o) = view.judge(r) else {
+                return Ok(());
+            };
+            let t = std::fs::canonicalize(p(&cat!(view.own, "/", r)))
+                .ok()
+                .map(|t| shell::bytes(&t).to_vec());
+            out.push((r.to_vec(), o, t));
+            Ok(())
+        })
+        .unwrap_or(None);
+    for (r, o, t) in out {
         let r = r.as_slice();
         let e = cat!(view.own, "/", r);
-        let why = match &t {
-            None => {
-                let raw = std::fs::read_link(p(&e))
-                    .map_or_else(|_| Vec::new(), |raw| shell::bytes(&raw).to_vec());
-                Some(cat!("it leads to ", raw, ", which is not there"))
-            }
-            Some(t) => link_copy_why(t, &view.home, &view.home_r),
+        let what = o.what();
+        let why = match (&o.lead, &t) {
+            (Lead::Live(_) | Lead::Proc, _) => Some(what.clone()),
+            (_, None) => Some(cat!(what, ": nothing is there")),
+            (_, Some(t)) => link_copy_why(t, &view.home, &view.home_r).map(|w| cat!(what, ": ", w)),
         };
         let Some(dest) = Dest::new(r) else {
             continue;
@@ -663,14 +663,8 @@ fn home_links_under(ctx: &Ctx, h: &[u8], rel: &[u8]) -> Res<()> {
                 desk_content_refused(&to)
             };
             let after = match refused {
-                Some(w) => Some(cat!("it leads to ", t, ": ", w)),
-                None if real > max => Some(cat!(
-                    "it leads to ",
-                    t,
-                    ", over ",
-                    (max >> 20).to_string(),
-                    " MiB"
-                )),
+                Some(w) => Some(cat!(what, ": ", w)),
+                None if real > max => Some(cat!(what, ": over ", (max >> 20).to_string(), " MiB")),
                 None => None,
             };
             let Some(after) = after else {
@@ -689,7 +683,7 @@ fn home_links_under(ctx: &Ctx, h: &[u8], rel: &[u8]) -> Res<()> {
             std::fs::remove_file(p(&e))
                 .map_err(|er| failed(ctx, &cat!("remove the link ", e), &er))?;
         }
-        let why = why.unwrap_or_else(|| b"it could not be copied".to_vec());
+        let why = why.unwrap_or_else(|| cat!(what, ": it could not be copied"));
         link_pass().left_out.push((r.to_vec(), why));
     }
     if let Some(c) = cut {
@@ -699,35 +693,31 @@ fn home_links_under(ctx: &Ctx, h: &[u8], rel: &[u8]) -> Res<()> {
 }
 
 /// Why home_links_out does not copy T (a link's target, resolved): what deskcopy would not follow or
-/// copy, or the caps.
+/// copy, or the caps; said after the link's own "it leads to T (...)".
 fn link_copy_why(t: &[u8], home: &[u8], home_r: &[u8]) -> Option<Vec<u8>> {
     let Ok(m) = std::fs::metadata(p(t)) else {
-        return Some(cat!("it leads to ", t, ", which could not be read"));
+        return Some(b"it could not be read".to_vec());
     };
     if !m.is_file() {
-        return Some(cat!("it leads to ", t, ", not a file"));
+        return Some(b"not a file".to_vec());
     }
     if let Some(w) = crate::deskcopy::follow_why(home, home_r, t, t) {
-        return Some(w);
+        let pre = cat!("it leads to ", t, ": ");
+        return Some(
+            w.strip_prefix(pre.as_slice())
+                .map_or(w.clone(), <[u8]>::to_vec),
+        );
     }
     let image = crate::deskcopy::is_image(t);
     let max = if image { LINK_IMAGE_MAX } else { LINK_FILE_MAX };
     if m.len() > max {
-        return Some(cat!(
-            "it leads to ",
-            t,
-            ", over ",
-            (max >> 20).to_string(),
-            " MiB"
-        ));
+        return Some(cat!("over ", (max >> 20).to_string(), " MiB"));
     }
     {
         let lp = link_pass();
         if lp.files >= LINK_FILES || lp.bytes + m.len() > LINK_BYTES {
             return Some(cat!(
-                "it leads to ",
-                t,
-                ", past what one up copies (",
+                "past what one up copies (",
                 LINK_FILES.to_string(),
                 " files, ",
                 (LINK_BYTES >> 20).to_string(),
@@ -736,7 +726,7 @@ fn link_copy_why(t: &[u8], home: &[u8], home_r: &[u8]) -> Option<Vec<u8>> {
         }
     }
     if !image && let Some(w) = desk_content_refused(t) {
-        return Some(cat!("it leads to ", t, ": ", w));
+        return Some(w.as_bytes().to_vec());
     }
     None
 }
@@ -772,7 +762,7 @@ fn home_links_note() {
         " is a link out of the box HOME and is left out: ",
         why,
         more,
-        ". The box HOME holds no link into your HOME (an agent editing through one would edit your file)"
+        ". On the host an agent editing through such a link would write where it leads"
     ));
 }
 
@@ -1554,32 +1544,39 @@ pub fn desk_box_name_refused(name: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// What desk_content_refused greps for: a key, token, secret, password or credential given a value
-/// (the key ends in the word, the value 6+ characters: finding 320) after `:` or `=`, or set as an
-/// environment variable by Hyprland's `hl.env("NAME", "VALUE")` (or a `setenv("NAME", "VALUE")`) and
-/// `env = NAME,VALUE` (a name ending in KEY, TOKEN, SECRET, PASSWORD, CREDENTIALS or AUTH: finding
-/// 748; a bare `,` after the word is a list's, not a value's), an ini's line `pass = VALUE` (rclone), a
-/// bearer token, a private key, a URL holding a password (`scheme://user:pass@`), or a token-shaped
-/// string (GitHub, GitLab, Slack, OpenAI and Anthropic, AWS, Google, Hugging Face, Groq, xAI, Stripe,
-/// npm, Grafana).
+/// What desk_content_refused greps for, over the whole file at once (`grep -z`: a call whose value is
+/// on the next line matches, finding 756): a key, token, secret, password or credential given a value
+/// (the key ends in the word, or in it and `_ID`, `_2` or `_V2`; `_PASS`/`_PW` names; the value 6+
+/// characters: finding 320) after `:` or `=` on its line, a Lua table's `["NAME"] = "VALUE"`, or set as
+/// an environment variable by Hyprland's `hl.env("NAME", "VALUE")` (or a `setenv("NAME", "VALUE")`,
+/// over lines) and `env = NAME,VALUE` (a name ending in KEY, TOKEN, SECRET, PASSWORD, CREDENTIALS,
+/// AUTH, PASS or PW, with those suffixes: finding 748; a bare `,` after the word is a list's, not a
+/// value's), an ini's line `pass = VALUE` (rclone), a bearer token, a private key, a URL holding a
+/// password (`scheme://user:pass@`, `scheme://:pass@`) or a key as its user (`https://KEY@host`,
+/// Sentry's), or a token-shaped string (GitHub, GitLab, Slack, OpenAI and Anthropic, AWS, Google,
+/// Hugging Face, Groq, xAI, Stripe, npm, Grafana, Perplexity, Replicate, Tavily, a JWT). With `-z` a
+/// line's end is a newline, which `[[:blank:]]` never matches and `[[:space:]]` does.
 const SECRET_ERE: &str = concat!(
-    r#"(api[_-]?key|secret([_-]?key)?|token|passw(or)?d|credentials?|authorization)["']?[[:space:]]*[:=][[:space:]]*["']?[^"',[:space:]]{6,}"#,
-    r#"|(hl\.env|setenv|putenv)[[:space:]]*\([[:space:]]*["'][A-Za-z0-9_.-]*(key|token|secret|passw(or)?d|credentials?|auth)["'][[:space:]]*,[[:space:]]*["']?[^"',[:space:]]{6,}"#,
-    r#"|(^|[[:space:]])env[[:space:]]*=[[:space:]]*[A-Za-z0-9_.-]*(key|token|secret|passw(or)?d|credentials?|auth)[[:space:]]*,[[:space:]]*["']?[^"',[:space:]]{6,}"#,
-    r#"|^[[:space:]]*pass[[:space:]]*=[[:space:]]*[A-Za-z0-9_-]{6,}[[:space:]]*$"#,
-    r#"|bearer[[:space:]]+[A-Za-z0-9._-]{16,}"#,
+    r#"(api[_-]?key|(secret[_-]?)?access[_-]?key|secret([_-]?key)?|token|passw(or)?d|credentials?|authorization|[_-](pass|pw))(_(id|[0-9]+|v[0-9]+))?["']?\]?[[:blank:]]*[:=][[:blank:]]*["']?[^"',[:space:]]{6,}"#,
+    r#"|(hl\.env|setenv|putenv)[[:space:]]*\([[:space:]]*["'][A-Za-z0-9_.-]*(key|token|secret|passw(or)?d|credentials?|auth|[_.-](pass|pw))(_(id|[0-9]+|v[0-9]+))?["'][[:space:]]*,[[:space:]]*["']?[^"',[:space:]]{6,}"#,
+    r#"|\[[[:blank:]]*["'][A-Za-z0-9_.-]*(key|token|secret|passw(or)?d|credentials?|auth|[_.-](pass|pw))(_(id|[0-9]+|v[0-9]+))?["'][[:blank:]]*\][[:blank:]]*=[[:blank:]]*["'][^"',[:space:]]{6,}"#,
+    r#"|(^|[[:space:]])env[[:blank:]]*=[[:blank:]]*[A-Za-z0-9_.-]*(key|token|secret|passw(or)?d|credentials?|auth|[_.-](pass|pw))(_(id|[0-9]+|v[0-9]+))?[[:blank:]]*,[[:blank:]]*["']?[^"',[:space:]]{6,}"#,
+    r#"|(^|[^[:print:][:blank:]])[[:blank:]]*pass[[:blank:]]*=[[:blank:]]*[A-Za-z0-9_-]{6,}[[:blank:]]*([^[:print:][:blank:]]|$)"#,
+    r#"|bearer[[:blank:]]+[A-Za-z0-9._-]{16,}"#,
     r#"|-----BEGIN [A-Z ]*PRIVATE KEY"#,
     r#"|(^|[^A-Za-z0-9])(ghp|gho|ghs|ghu|ghr|github_pat|glpat|xox[abpr]|sk|sk-ant)[-_][A-Za-z0-9_-]{16,}"#,
     r#"|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}"#,
-    r#"|(^|[^A-Za-z0-9])(hf_[A-Za-z0-9]{30,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{30,}|[rs]k_live_[A-Za-z0-9]{16,}|glsa_[A-Za-z0-9_]{20,})"#,
-    r#"|[a-z][a-z0-9+.-]*://[A-Za-z0-9._%+~-]+:[^]/[:space:]@"'()[{}|*?^$\]+@"#,
+    r#"|(^|[^A-Za-z0-9])(hf_[A-Za-z0-9]{30,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{30,}|[rs]k_live_[A-Za-z0-9]{16,}|glsa_[A-Za-z0-9_]{20,}|pplx-[A-Za-z0-9]{20,}|r8_[A-Za-z0-9]{20,}|tvly-[A-Za-z0-9-]{20,})"#,
+    r#"|(^|[^A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\."#,
+    r#"|[a-z][a-z0-9+.-]*://[A-Za-z0-9._%+~-]*:[^]/[:space:]@"'()[{}|*?^$\]+@"#,
+    r#"|[a-z][a-z0-9+.-]*://[A-Za-z0-9_-]{16,}@"#,
 );
 
 /// desk_content_refused FILE: why a desk file stays out of a box by what it holds, or None; one that
 /// cannot be read stays out too. Nothing of what matched is said. grep runs it as bash's does
-/// (`LC_ALL=C grep -aqiE`): the same regex engine, so the same answer.
+/// (`LC_ALL=C grep -aqizE`): the same regex engine, so the same answer.
 pub fn desk_content_refused(file: &[u8]) -> Option<&'static str> {
-    match grep(&[b"-aqiE", b"--", SECRET_ERE.as_bytes(), file]) {
+    match grep(&[b"-aqizE", b"--", SECRET_ERE.as_bytes(), file]) {
         0 => Some("it holds what looks like a key, token or password"),
         1 => None,
         _ => Some("it could not be read"),
@@ -1998,6 +1995,7 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
         bytes: 0,
         left_out: Vec::new(),
         cut: None,
+        mounts: plan.mounts.clone(),
     };
     // A save made before #448, or with a link planted in it, may hold links into your HOME: the same
     // pass over all of it, whatever box it is restored in (finding 752: an Omarchy box's save in a
@@ -2856,8 +2854,8 @@ mod tests {
     }
 
     /// #448, finding 714: seed_copy's links that lead to a file you can write: a picture or a plain
-    /// file copied in, a folder's or a secret's gone (said once by seed_home); one inside the copy, or
-    /// to a file you cannot write, kept.
+    /// file copied in, a secret's gone (said once by seed_home); one inside the copy, to a file you
+    /// cannot write, or to a folder you can write outside your HOME (finding 756), kept.
     #[test]
     fn seed_copy_links_out() {
         if !crate::exec::tools_or_skip("seed_copy_links_out", &["tar", "grep"]) {
@@ -2887,6 +2885,7 @@ mod tests {
             bytes: 0,
             left_out: Vec::new(),
             cut: None,
+            mounts: Vec::new(),
         };
         seed_copy(
             &c,
@@ -2908,7 +2907,14 @@ mod tests {
             !sc_there(&t("creds.txt")),
             "one that looks like a password: gone"
         );
-        assert!(!sc_there(&t("pics")), "a folder: gone");
+        // (finding 756: a folder you can write outside your HOME stays, as /dev/null does; one in
+        // your HOME goes, home_links_by_resolution)
+        if !s.starts_with(&format!(
+            "{}/",
+            String::from_utf8_lossy(&shell::env_or_empty("HOME"))
+        )) {
+            assert!(sc_is_ln(&t("pics")), "a folder elsewhere: kept");
+        }
         assert!(
             sc_is_ln(&t("backgrounds/colors")),
             "one inside the copy: kept"
@@ -2922,7 +2928,7 @@ mod tests {
         // (the unit tests share up's one list: another test's links may be in it too)
         assert!(
             said.contains("is a link out of the box HOME and is left out")
-                && said.contains("more like it)"),
+                && said.contains("~/t/creds.txt "),
             "{said}"
         );
         assert_eq!(
@@ -2967,6 +2973,7 @@ mod tests {
             bytes: 0,
             left_out: Vec::new(),
             cut: None,
+            mounts: Vec::new(),
         };
         home_links_under(&c, h("box").as_bytes(), b"").unwrap();
         assert!(!sc_there(&h("box/r")), "a link to /: gone");
@@ -3000,6 +3007,32 @@ mod tests {
         assert!(!sc_there(&h("box/proj/root")), "--seed: to /, gone");
         assert_eq!(sc_read(&h("box/proj/conf/ok")), "fine");
         assert!(sc_is_ln(&h("src/root")), "...the source untouched");
+        // Finding 756: a --seed folder's links to /dev/null and to a folder you can write outside
+        // your HOME stay as they were, and nothing is said of them.
+        sc_mk(&h("data/sets"));
+        sc_mk(&h("src2/logs"));
+        sc_ln("/dev/null", &h("src2/logs/debug.log"));
+        sc_ln(&h("data/sets"), &h("src2/data"));
+        let _ = std::mem::take(&mut link_pass().left_out);
+        seed_copy_in(&c, h("box").as_bytes(), &sc_src(&h("src2")), &sc_dest("ml")).unwrap();
+        assert!(sc_is_ln(&h("box/ml/logs/debug.log")), "-> /dev/null: kept");
+        // (a temp dir in your HOME makes that folder one in your HOME)
+        assert!(
+            sc_is_ln(&h("box/ml/data")) || s.starts_with(&format!("{home}/")),
+            "-> a writable folder: kept"
+        );
+        assert!(
+            link_pass().left_out.is_empty(),
+            "{:?}",
+            link_pass().left_out
+        );
+        // (and a note says what is true of the link: `/` holds your HOME, not "into" it)
+        link_pass().left_out = vec![(
+            b"r".to_vec(),
+            b"it leads to / (a folder that holds your HOME): not a file".to_vec(),
+        )];
+        let (_, said) = crate::exit::heard(home_links_note);
+        assert!(!said.contains("no link into your HOME"), "{said}");
         std::fs::remove_dir_all(&s).unwrap();
     }
 
@@ -3214,6 +3247,56 @@ mod tests {
             ("  pass = computeTheThing(x)", false),
             (r#"re = r"(ssh://)?([^:]+:[^@]+@)""#, false),
             (r#"os.setenv("ANTHROPIC_KEY", "abcdefghij")"#, true),
+            // Finding 756: a call over lines, names with a suffix after the word, PASS/PW names,
+            // Lua's bracket keys, AWS's secret, a key as a URL's user or with no user, JWTs and more
+            // providers' shapes.
+            (
+                "hl.env(\n  \"MISTRAL_API_KEY\",\n  \"Zq8xLmP2vB7nK4tR9wE1yU6i\"\n)",
+                true,
+            ),
+            ("hl.env(\"HF_TOKEN\",\n\t'abcdef123456')", true),
+            (r#"hl.env("ACCESS_KEY_ID", "abcdef123456")"#, true),
+            ("env = OPENAI_API_KEY_2,abcdef123456", true),
+            (r#"hl.env("ELEVENLABS_KEY_V2", "abcdef123456")"#, true),
+            ("api_key_2 = abcdef123456", true),
+            (r#"hl.env("DB_PASS", "abcdef123456")"#, true),
+            ("env = DB_PASS,abcdef123456", true),
+            (r#"hl.env("API_PW", "abcdef123456")"#, true),
+            ("export DB_PASS=abcdef123456", true),
+            (
+                r#"  ["MISTRAL_API_KEY"] = "Zq8xLmP2vB7nK4tR9wE1yU6i","#,
+                true,
+            ),
+            (r#"  ["OPENAI_KEY"] = "Zq8xLmP2vB7nK4tR9wE1yU6i","#, true),
+            (
+                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+                true,
+            ),
+            ("aws_access_key_id = abcdef123456", true),
+            (
+                "dsn = https://0123456789abcdef0123456789abcdef@o1.ingest.sentry.io/1",
+                true,
+            ),
+            ("url = https://:hunter2hunter2@host/x", true),
+            (
+                "t = eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig",
+                true,
+            ),
+            ("x pplx-abcdefghijklmnopqrstuvwxyz", true),
+            ("x r8_abcdefghijklmnopqrstuvwxyz", true),
+            ("x tvly-abcdefghijklmnopqrstuvwxyz", true),
+            ("[remote]\npass = abcdefghijk\nuser = me", true),
+            // ...and what stays in: near misses of the new forms.
+            ("token_type = bearer", false),
+            ("render_pass = 2", false),
+            ("bypass_cache = something-long", false),
+            ("hl.env(\n  \"XCURSOR_SIZE\",\n  \"24\"\n)", false),
+            ("token:\n  colors: something-long", false),
+            ("  pass = abcdefghijk(x)", false),
+            ("ssh://git@github.com/x", false),
+            ("https://user@example.com/x", false),
+            (r#"  ["XCURSOR_THEME"] = "Bibata-Modern","#, false),
+            ("eyJustAWord.eyJ", false),
         ] {
             put(&f, text);
             assert_eq!(desk_content_refused(&f).is_some(), bad, "{text}");

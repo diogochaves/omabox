@@ -15371,6 +15371,55 @@ from them.
     not written, well under 60 s); t_throwaway_term (a TERM while run's own down runs: run ends, its
     box gone).
 
+756. **The box HOME's link pass took harmless links out of `--seed` folders and called them links
+    into your HOME; `path --home` judged by another rule; the secret check missed common key forms**
+    (2026-11-22, review of 752 and 748). Since 752 every `--seed` folder and every restore went through
+    the pass, whose arm "or to anything you can write" (`access(W_OK)`) took out `-> /dev/null` and
+    `-> /mnt/data/datasets` ("not a file") with a note saying the box HOME "holds no link into your
+    HOME". One rule now, `homelinks.rs`'s `View::judge`, for up's pass and `path --home`'s warning: a
+    link leads out when it lands in your HOME or a folder that holds it, at a regular file you can
+    write (S2: a copy, else left out), at what you can write among `refuse_path`'s places of live
+    sockets and secrets (the runtime dir, `/run`, `/dev/shm`, `/tmp` itself and its socket folders; a
+    missing file whose nearest folder is one of them), or when its way passes through `/proc`
+    (`/proc/self/cwd`, `/dev/fd/N`, `/dev/stdout`, `/proc/PID/root`: resolved as omabox's own cwd, fds
+    or root they told nothing of the process that writes through them later; nothing under `/proc`
+    is followed now). A device, what you cannot write and a folder you can write elsewhere stay (a
+    seeded project's `data -> /mnt/data/x` comes in as before 752), and so does a link to what the
+    box mounts at that same path (the repo `up` runs from, a same-path `--ro-bind`, an `--overlay`:
+    up's `SeedPlan::mounts`, box.json's `mounts` for `path --home`): a `--plugin` linked to its own
+    path in the repo (finding 241) was taken out by 752's pass whenever a `--seed` or a restore
+    covered `~/.config/omarchy/plugins` (`t_plugin_link` failed 8 checks). Each note says what is true of its
+    link ("it leads to / (a folder that holds your HOME): not a file", "it leads to T (a file you can
+    write, outside your HOME): over 1 MiB", "it leads through /proc (...)"); `path --home` names the
+    first with the same words ("holds N links out of it, as up's check judges them"). The walk reads
+    each entry's type from the folder listing (d_type), not an lstat each, and `path --home` has caps
+    of its own: measured on a box HOME of 221,775 entries (five real `node_modules`, 3,332 links),
+    warm cache, up's pass (200,000 entries, 64 deep) took ~300 ms and now ~134 ms; `path --home` took
+    330-460 ms at 200,000 and now ~40 ms at 50,000 entries, 32 deep (it says where it stopped, as
+    before). `SECRET_ERE` is grepped over the whole file (`grep -z`): a `hl.env(` call with its name
+    and value on lines of their own matches; names with `_ID`, `_2` or `_V2` after the word,
+    `_PASS`/`_PW` names, Lua's `["NAME"] = "VALUE"`, `AWS_SECRET_ACCESS_KEY=`/`access_key =`, a URL
+    with a key as its user (`https://KEY@host`, 16+ characters) or no user (`https://:pass@`), JWTs
+    (`eyJ...\.eyJ...\.`), `pplx-`, `r8_` and `tvly-` too; the `:`/`=` forms stay on one line
+    (`[[:blank:]]`), so a YAML `token:` over a nested map is not one. Over the places 748 scanned
+    (5,186 files: `~/.config/hypr`, the terminals', `~/.config/omarchy`, `/usr/share/omarchy/default`)
+    the old expression matched 163 files and the new 164: the one more a plugin repo's test holding a
+    made-up `SECRET_ACCESS_KEY`; none of the Hyprland config or the terminals'. (96 of the 163, before
+    and after, are Omarchy 4.5's `i18n/*/cli.json` and `shell.json`, whose `"...Password": "<words>"`
+    strings read as a value; no desk copy takes them.) Tests: cargo `homelinks`'s `what_else_leads_out`
+    (/dev/null, a writable folder and a missing file there stay; a writable file, `/proc/self/cwd`,
+    `/dev/fd/3`, `/dev/stdout`, `/proc/1/root`, `/dev/shm`, the runtime dir and a missing file in it
+    lead out; the note's words), `same_path_mounts_are_the_boxs` (a link into the repo, in your HOME,
+    kept once the repo is a same-path mount; one beside it, or a mount from elsewhere there, not),
+    `seed.rs`'s `home_links_by_resolution` (a `--seed` folder's
+    `/dev/null` and writable-folder links kept, nothing said; failed before), `seed_copy_links_out` (a
+    folder elsewhere now kept), `content_refused` (each new form, and near misses: `token_type =
+    bearer`, `render_pass = 2`, a multi-line `hl.env` of `XCURSOR_SIZE`, `token:` over a map),
+    `path.rs`'s `real_home_links_found` (a writable file and `/proc` counted, `/dev/null` and a folder
+    not); `t_theme_links` (`--seed` of such a folder: kept, unsaid, `path --home` silent, a file you
+    can write a copy; a link planted through `/proc` named) and `t_desk_copy` (a desk box's `--seed`
+    folder, the same two links kept, unsaid), `t_plugin_link` (passes again).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
