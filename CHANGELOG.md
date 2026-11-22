@@ -20,9 +20,18 @@ in Hyprland's own env syntax. All fixed, each with a test that plants the link, 
   `env = NAME,VALUE`) and more token shapes (Google, Hugging Face, Groq, xAI, Stripe, npm, URLs
   with a password); more credential stores stay out of every box (`.npmrc`, `.pypirc`, cargo,
   rclone, Vault, sops/age, Copilot, Cursor and others).
-- **Links in a box HOME are judged by where they resolve**: a link to `/` or `/home`, or one through
-  it, is removed; every restored save and every `--seed` folder is checked; a check cut short says
-  where it stopped.
+- **Links in a box HOME are judged by where they resolve**: a link into your HOME or a folder holding
+  it, to a file you can write, into the runtime dir or `/tmp`'s sockets, or through `/proc`, is
+  removed (a writable file copied); links to devices and to folders elsewhere stay. Every restored
+  save and `--seed` folder is checked, `path --home` warns by the same rule, and a check cut short
+  says where it stopped.
+- **`record sheet VIDEO`, `omabox log` and `look` read box files bounded and through no box link**:
+  a video or log a box swapped for a link, a FIFO or `/dev/zero` is refused; logs are read from
+  their last 8 MiB and printed plain (colour codes dropped, other controls as `?`); `-o` through a
+  folder link a box planted is refused.
+- **The secret check sees more**: a multi-line `hl.env(`, names like `_KEY_ID`, `_PASS`, Lua
+  `["NAME"] =`, AWS secret keys, JWTs, keys in URLs, Perplexity, Replicate and Tavily keys; a plugin
+  settings file over 8 MiB is held back unread.
 - **The ai-jail broker trusts only an ai-jail in its own namespaces**, and only folders the jail
   really has; `peek` connects through the box's socket link, as `omabox env` does.
 
