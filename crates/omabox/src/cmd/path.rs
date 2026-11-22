@@ -60,7 +60,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // every box's since #448, whose seeding leaves none: one there is a save's from before, or
         // planted)
         let user = shell::env_or_empty("HOME");
-        if let Some((n, first, to)) = real_home_links(&cat!(ctx.d, "/home"), &user) {
+        let found = real_home_links(&cat!(ctx.d, "/home"), &user);
+        if let Some((first, to)) = &found.first {
+            let n = found.n;
             say(cat!(
                 "path: box '",
                 ctx.name,
@@ -72,6 +74,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 " -> ",
                 to,
                 "): on the host, following one reaches your own files, not the box's. Edit the box's files by their paths in this folder or through `omabox run`, never through a link"
+            ));
+        }
+        // (finding 752: a look cut short is said, not taken for none)
+        if let Some(c) = &found.cut {
+            say(cat!(
+                "path: note: box '",
+                ctx.name,
+                "''s HOME was checked for links into your real HOME only up to ~/",
+                c.rel,
+                " (",
+                c.why,
+                "): links past it were not checked; never edit through a link there"
             ));
         }
         return out(cat!(ctx.d, "/home\n"));
@@ -110,77 +124,50 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     out(text)
 }
 
-/// How many folders deep, and how many entries in all, real_home_links looks.
-const SCAN_DEPTH: usize = 6;
-const SCAN_ENTRIES: usize = 20_000;
+/// What real_home_links found: how many links lead into your HOME, the first one's path in the box
+/// HOME and target as written, and where the look stopped short, if it did.
+#[derive(Debug, Default)]
+struct Found {
+    n: u64,
+    first: Option<(Vec<u8>, Vec<u8>)>,
+    cut: Option<crate::homelinks::Cut>,
+}
 
 /// The links in a box HOME's folder (DIR, as the host sees it) that lead into the user's real HOME
-/// (USER, at its path or below; one into the box's own folder is not), each target taken lexically
-/// from the link's folder (finding 710): how many, the first one's path in the folder and its
-/// target. None when there are none. At most SCAN_DEPTH folders deep and SCAN_ENTRIES entries. A
-/// theme's own folder as a link (.config/omarchy/themes/NAME) is up --theme-dir's: live, as asked.
-fn real_home_links(dir: &[u8], user: &[u8]) -> Option<(u64, Vec<u8>, Vec<u8>)> {
-    use crate::bwrap::lexical;
-    let user = lexical(user);
-    if user == b"/" || user.is_empty() {
-        return None;
-    }
-    let own = std::fs::canonicalize(shell::path(dir)).ok()?;
-    let own = shell::bytes(&own).to_vec();
-    let under = |t: &[u8], h: &[u8]| t == h || t.starts_with(&cat!(h, "/"));
-    let mut todo: Vec<(Vec<u8>, usize)> = vec![(Vec::new(), 0)];
-    let (mut n, mut seen, mut first) = (0u64, 0usize, None);
-    while let Some((rel, depth)) = todo.pop() {
-        let at = if rel.is_empty() {
-            own.clone()
-        } else {
-            cat!(own, "/", rel)
-        };
-        let Ok(rd) = std::fs::read_dir(shell::path(&at)) else {
-            continue;
-        };
-        for e in rd.flatten() {
-            seen += 1;
-            if seen > SCAN_ENTRIES {
-                return first.map(|(f, t)| (n, f, t));
-            }
-            let name = shell::bytes(std::path::Path::new(&e.file_name())).to_vec();
-            let r = if rel.is_empty() {
-                name
-            } else {
-                cat!(rel, "/", name)
-            };
-            let Ok(ft) = e.file_type() else { continue };
-            if ft.is_symlink() {
-                let Ok(raw) = std::fs::read_link(e.path()) else {
-                    continue;
-                };
-                let raw = shell::bytes(&raw).to_vec();
-                let to = if raw.starts_with(b"/") {
-                    lexical(&raw)
-                } else {
-                    lexical(&cat!(at, "/", raw))
-                };
-                let theme_dir = r.starts_with(b".config/omarchy/themes/")
-                    && !r[b".config/omarchy/themes/".len()..].contains(&b'/');
-                if under(&to, &user) && !under(&to, &own) && !theme_dir {
-                    n += 1;
-                    first.get_or_insert((r, raw));
-                }
-            } else if ft.is_dir() && depth < SCAN_DEPTH {
-                todo.push((r, depth + 1));
-            }
+/// (USER), by up's own rule (homelinks, finding 752: where the host resolves each, into your HOME or
+/// a folder that holds it; not into the box's own folder). Within homelinks' caps; where it stopped
+/// is said. A theme's own folder as a link (.config/omarchy/themes/NAME) is up --theme-dir's: live,
+/// as asked.
+fn real_home_links(dir: &[u8], user: &[u8]) -> Found {
+    let Some(view) = crate::homelinks::View::new(dir, user) else {
+        return Found::default();
+    };
+    let mut f = Found::default();
+    let cut = crate::homelinks::walk_links::<()>(&view.own, b"", |r, _| {
+        let theme_dir = r.starts_with(b".config/omarchy/themes/")
+            && !r[b".config/omarchy/themes/".len()..].contains(&b'/');
+        if theme_dir || view.link_into_home(r).is_none() {
+            return Ok(());
         }
-    }
-    first.map(|(f, t)| (n, f, t))
+        f.n += 1;
+        if f.first.is_none() {
+            let raw = std::fs::read_link(shell::path(&cat!(view.own, "/", r)))
+                .map_or_else(|_| Vec::new(), |t| shell::bytes(&t).to_vec());
+            f.first = Some((r.to_vec(), raw));
+        }
+        Ok(())
+    });
+    f.cut = cut.unwrap_or(None);
+    f
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// path --home's note (finding 710): links into the real HOME, absolute or climbing out, counted;
-    /// one into the box's folder (a relative one omabox makes), into /usr, or below the depth, not.
+    /// path --home's note (finding 710, 752): links into the real HOME, absolute or climbing out,
+    /// at any depth, or to a folder that holds it, counted; one into the box's folder (a relative one
+    /// omabox makes) or into /usr, not.
     #[test]
     fn real_home_links_found() {
         let d = std::env::temp_dir().join(format!("omabox-pathlinks-{}", std::process::id()));
@@ -195,9 +182,9 @@ mod tests {
         let db = shell::bytes(&bx).to_vec();
         ln("../../../../Pictures/w.png", &cur.join("background"));
         ln("/usr/share/x", &bx.join("share"));
-        assert_eq!(
-            real_home_links(&db, &ub),
-            None,
+        let f = real_home_links(&db, &ub);
+        assert!(
+            f.first.is_none() && f.cut.is_none(),
             "relative into the box, /usr: none"
         );
         let real = format!("{}/Pictures/w.png", user.display());
@@ -205,7 +192,7 @@ mod tests {
         ln("../../../../../../../../.bashrc", &cur.join("climb"));
         let deep = bx.join("a/b/c/d/e/f/g");
         std::fs::create_dir_all(&deep).unwrap();
-        ln(&real, &deep.join("too-deep"));
+        ln(&real, &deep.join("deep"));
         // (a --theme-dir's link is the theme's whole folder; one inside a theme is not)
         let themes = bx.join(".config/omarchy/themes");
         std::fs::create_dir_all(themes.join("t/backgrounds")).unwrap();
@@ -213,11 +200,18 @@ mod tests {
             &format!("{}/dev/live", user.display()),
             &themes.join("live"),
         );
-        let (n, first, _) = real_home_links(&db, &ub).unwrap();
-        assert_eq!(n, 2, "{}", String::from_utf8_lossy(&first));
-        ln(&real, &themes.join("t/backgrounds/1.png"));
-        assert_eq!(real_home_links(&db, &ub).unwrap().0, 3);
+        let f = real_home_links(&db, &ub);
+        let (first, _) = f.first.unwrap();
+        assert_eq!(f.n, 3, "{}", String::from_utf8_lossy(&first));
         assert!(first.starts_with(b".local/state/omarchy/current/"));
+        ln(&real, &themes.join("t/backgrounds/1.png"));
+        assert_eq!(real_home_links(&db, &ub).n, 4);
+        // (a link to /, and one through it whose text stays in the box HOME)
+        ln("/", &bx.join("r"));
+        ln(&format!("r{}/.bashrc", user.display()), &bx.join("via"));
+        let f = real_home_links(&db, &ub);
+        assert_eq!(f.n, 6);
+        assert!(f.cut.is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
 }

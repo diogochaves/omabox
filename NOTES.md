@@ -15176,6 +15176,43 @@ from them.
     OSC 52 said plain; a failed throwaway whose shell renames a HOME log between a file, a link to a
     host file and a FIFO the whole time: it ends, and its kept logs hold no host file).
 
+752. **The box HOME's link pass judged a link by its text and stopped short in silence** (2026-11-22;
+    #448's and finding 714's pass, reviewed). `home_links_under` kept a link whose target as written
+    was inside the box HOME (`a -> r/home/USER/.ssh/id_rsa` beside `r -> /`), and one to a folder
+    you cannot write that holds your HOME (`/`, `/home`): on the host, `path --home`'s folder then
+    led into your files again, and `path --home`'s own check (`real_home_links`, the target's text
+    against `$HOME`) said nothing. Both now use one rule (`homelinks.rs`): where the host resolves
+    the link, from its folder in the box HOME, each link on the way followed and a missing part kept
+    as written (a write through it would make it; realpath -m); it leads out when that lands in your
+    HOME (as written or resolved) or in a folder that holds it, outside the box HOME. A loop leads
+    nowhere and stays. Every link is judged before any is taken out (otherwise `r` going first left
+    `z -> r/...` dangling inside the box HOME, and kept). up's pass also still takes a link to a file you can write. The walk (one,
+    `homelinks::walk_links`, for both) stopped at 20,000 entries (8 folders deep; `path --home` 6)
+    without a word, and popped non-dot folders first, so one `npm install` in the box HOME used it
+    up before `.config` or `.local`: now `.config` and `.local` first, then the other dot folders,
+    then the rest, 200,000 entries and 64 folders deep, and a cut is said ("up: note: the check for
+    links out of the box HOME stopped at ~/X (after N entries)", `path: note: ... only up to ~/X`).
+    Every `up --from` gets the pass, a desk box's too: it was skipped by the new box's desktop, not
+    the save's, so an Omarchy box's save (or one with a planted link) restored as a desk box kept its
+    links; omabox's own links in a desk HOME are relative (finding 710) and stay, a planted one to
+    your HOME's path becomes a copy or goes. A `--seed` folder's links came in unchanged: they now
+    get the same pass (a link to a file you can write, a copy of it, as seed_copy's; one into the
+    repo `up` runs from too). Where the pass and the extensions check copied a file they had read
+    on the host, the copy is checked again (size, `desk_content_refused`), as the desk copy checks
+    its own (finding 701), and removed if it changed into what they refuse. Tests: cargo
+    (`homelinks`: `links_judged_by_where_they_resolve` (the two cases above, a missing file, a
+    relative chain out and one inside, /usr, a loop), `walk_says_where_it_stops` (dot folders first,
+    both caps named); `seed.rs`'s `home_links_by_resolution` (the pass over a restored HOME, the cut
+    note, a `--seed` folder's links), `seed_copies_as_bash` (a seeded link to a writable file now a
+    copy); `path.rs`'s `real_home_links_found` (any depth, `/`, through it)); `t_theme_links` (an
+    Omarchy box: `path --home` names `r -> /` and `via -> r$HOME/...`; `up --from` a save holding
+    them: both gone, said; `--seed` of a folder with a link to a password file and one to `/`: gone,
+    said), `t_desk_idle_links` (a desk box restoring a save with them: `r` gone and said, `via` a
+    copy, `path --home` silent; the save's folder link to `~/.config/x` now left out by the pass
+    before the idle edit looks, whose own refusal stays `idle_edit_follows_no_link`'s);
+    `t_desk_home_standin`'s `--seed` link on a mount's way now leads to a folder you cannot write,
+    which the pass keeps, so the mount check still meets it.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

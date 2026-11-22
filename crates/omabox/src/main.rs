@@ -24,6 +24,7 @@ mod grid;
 mod guard;
 mod help;
 mod helpers;
+mod homelinks;
 mod homesnap;
 mod homeuse;
 mod host;

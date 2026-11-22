@@ -13177,6 +13177,8 @@ t_desk_home_standin() {
   : > "$fh/.config/omabox/config"
   echo omabox-321-src > "$base/src/f"
   ln -s "$base/target" "$base/lnk/l"; desk_lua "$fh/.config"
+  # (a folder you cannot write: up's link pass keeps a --seed's link there, finding 752)
+  chmod a-w "$base/target"
   dh() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
   dh_up() { (cd "$base" && dh up "$@" 2>&1); }
   standin() { (cd "$fh" && command find . -printf '%p %y %s %T@\n' | LC_ALL=C sort); }
@@ -20964,12 +20966,19 @@ t_desk_idle_links() {
   check_match "up --desktop desk: Caelestia's idle timeouts off in its copy" "caelestia's own idle timeouts off in the box's ~/\.config/caelestia/shell\.json" "$out"
   check "a link at the edit's temp name, to .bashrc's path (the box's own view of it)" \
     dl run -b "$B" -- ln -s "$fh/.bashrc" "$fh/.config/caelestia/shell.json.omabox-idle"
+  # (finding 752: and a link to /, and one through it, which on the host lead into the stand-in HOME)
+  check "a link to / and one through it" dl run -b "$B" -- sh -c 'ln -s / "$1/r" && ln -s "r$1/.bashrc" "$1/via"' sh "$fh"
   check "...saved" dl save "$S1" -b "$B"
   check "down" dl down "$B"
   out=$(cd "$base" && dl up "$B" --desktop desk --net isolated --no-shell --from "$S1" 2>&1) ||
     { no "up --from that save" "$out"; dl down "$B" >/dev/null 2>&1; return; }
   ok "up --from that save"
   check_eq "...the stand-in's .bashrc as it was" "# the real one" "$(cat "$fh/.bashrc")"
+  local dh; dh=$(dl path -b "$B" --home 2>/dev/null)
+  check_fails "...a desk box restoring a save: its link to / gone (finding 752)" test -e "$dh/r" -o -L "$dh/r"
+  check "...the one through it (to the stand-in's .bashrc) a copy, no link" bash -c "[ -f '$dh/via' ] && [ ! -L '$dh/via' ]"
+  check_match "...said by up" "up: note: ~/r is a link out of the box HOME and is left out: it leads to /, not a file" "$out"
+  check_eq "...path --home silent" "" "$(dl path -b "$B" --home 2>&1 >/dev/null)"
   check_eq "...the box's shell.json edited, a file of its own" "[] false" \
     "$(dl run -b "$B" -- sh -c 'jq -c .general.idle.timeouts "$1"; test -L "$1" && echo true || echo false' sh "$fh/.config/caelestia/shell.json" 2>/dev/null | paste -sd ' ')"
   check "a folder link in its place, to the stand-in's ~/.config/x" \
@@ -20982,7 +20991,9 @@ t_desk_idle_links() {
   ok "up --from it, no ~/.config/caelestia on the host"
   mv "$base/caelestia.away" "$fh/.config/caelestia"
   check_eq "...the stand-in's ~/.config/x/shell.json as it was" "$host" "$(cat "$fh/.config/x/shell.json")"
-  check_match "...said: not followed" "caelestia's own idle timeouts not turned off in the box's ~/\.config/caelestia/shell\.json: a link on its way \(~/\.config/caelestia\), not followed" "$out"
+  # (finding 752: the restored HOME's pass takes that link out before the edit looks; the edit's own
+  # refusal of a link on its way is deskcopy.rs's idle_edit_follows_no_link)
+  check_match "...the link left out, said" "up: note: ~/\.config/caelestia is a link out of the box HOME and is left out" "$out"
   check "down" dl down "$B"
   dl saves rm "$S1" >/dev/null 2>&1; dl saves rm "$S2" >/dev/null 2>&1
   check_fails "no box process left" pgrep -f "$rt/omabox/"
@@ -21146,17 +21157,37 @@ t_theme_links() {
   ln -s "$fh/pics/w.png" "$H/planted.png"
   check_match "...one planted: named" "^omabox: path: box '$B''s HOME holds 1 link into your real HOME \(planted\.png -> " \
     "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
-  # A save holding such a link (made before the fix, or planted): up --from it gets the copy.
+  # finding 752: judged by where it resolves: a link to / (a folder holding HOME) and one through it
+  # whose text reads as inside the box HOME.
+  ln -s / "$H/r"; ln -s "r$fh/pics/creds.txt" "$H/via"
+  check_match "...a link to / and one through it: named too" "^omabox: path: box '$B''s HOME holds 3 links into your real HOME " \
+    "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
+  # A save holding such links (made before the fix, or planted): up --from it gets the copy.
   local S=$P-tls
-  check "a save of it, the planted link in it" env HOME="$fh" "$CLI" save "$S" -b "$B"
+  check "a save of it, the planted links in it" env HOME="$fh" "$CLI" save "$S" -b "$B"
   HOME=$fh ob down "$B" >/dev/null 2>&1
   UP_OUT=$(HOME=$fh ob up "$B" --from "$S" --no-shell --net isolated --theme tokyo-night 2>&1) || { no "up --from that save" "$UP_OUT"; HOME=$fh ob saves rm "$S" >/dev/null 2>&1; return; }
   H=$(HOME=$fh ob path -b "$B" --home 2>/dev/null)
   check "up --from it: the save's link to your picture a copy" bash -c "[ -f '$H/planted.png' ] && [ ! -L '$H/planted.png' ] && cmp -s '$fh/pics/w.png' '$H/planted.png'"
+  check_fails "...its link to / gone" test -e "$H/r" -o -L "$H/r"
+  check_fails "...the one through it gone" test -e "$H/via" -o -L "$H/via"
+  check_match "...said by up" "up: note: ~/(r|via) is a link out of the box HOME and is left out: .*\([0-9]+ more like it\)" "$UP_OUT"
   check_eq "...path --home silent" "" "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
   check_eq "your files untouched" "password = hunter22" "$(cat "$fh/pics/creds.txt")"
   HOME=$fh ob down "$B" >/dev/null 2>&1
   HOME=$fh ob saves rm "$S" >/dev/null 2>&1
+  # --seed of a folder holding a link into your HOME and one to /: the same pass (finding 752).
+  local sd=$fh/sd
+  mkdir -p "$sd/conf"; echo fine > "$sd/conf/ok"
+  ln -s "$fh/pics/creds.txt" "$sd/conf/creds"; ln -s / "$sd/root"
+  UP_OUT=$(HOME=$fh ob up "$B" --seed "$sd:proj" --no-shell --net isolated --theme tokyo-night 2>&1) || { no "up --seed a folder with links" "$UP_OUT"; HOME=$fh ob down "$B" >/dev/null 2>&1; return; }
+  H=$(HOME=$fh ob path -b "$B" --home 2>/dev/null)
+  check_eq "up --seed: the folder's file in" "fine" "$(cat "$H/proj/conf/ok" 2>&1)"
+  check_fails "...its link to a password file gone" test -e "$H/proj/conf/creds" -o -L "$H/proj/conf/creds"
+  check_fails "...its link to / gone" test -e "$H/proj/root" -o -L "$H/proj/root"
+  check_match "...said by up" "up: note: ~/proj/(conf/creds|root) is a link out of the box HOME and is left out" "$UP_OUT"
+  check_eq "...path --home silent" "" "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
+  HOME=$fh ob down "$B" >/dev/null 2>&1
 }
 
 # up --theme NAME (finding 245): the box on that theme, not the desk's current one (a theme the desk is
