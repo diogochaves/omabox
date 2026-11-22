@@ -20800,6 +20800,8 @@ t_desk_copy() {
   : > "$fh/.config/omabox/config"
   echo "$lua" > "$hy/hyprland.lua"; echo '-- binds' > "$hy/binds.lua"
   head -c 2097152 /dev/zero | tr '\0' - > "$hy/big.lua"
+  # (finding 748: a key set in Hyprland's own env syntax, name and value apart by a comma)
+  printf 'hl.env("XCURSOR_SIZE", "24")\nhl.env("GEMINI_API_KEY", "AIza%s")\n' "$(head -c 35 /dev/zero | tr '\0' 0)" > "$hy/env.lua"
   ln -s "$hy" "$fh/.config/hypr"
   echo "not a key" > "$fh/.ssh/id_test"; ln -s "$fh/.ssh" "$hy/ssh"
   printf '\x89PNG\r\n\x1a\nomabox-321' > "$fh/Pictures/w.png"
@@ -20826,7 +20828,7 @@ t_desk_copy() {
   D=$(dc path -b "$B")
   desk_guard "$B" "$D" "$fh" "$c" dc || { dc down "$B" >/dev/null 2>&1; return; }
   check_eq "box.json: desk_copy's skipped, shell_guess, shell_from" \
-    ".config/hypr/big.lua .config/hypr/ssh|dms|unit" \
+    ".config/hypr/big.lua .config/hypr/env.lua .config/hypr/ssh|dms|unit" \
     "$(jq -r '"\([.desk_copy.skipped[].path] | join(" "))|\(.shell_guess)|\(.shell_from)"' "$D/box.json")"
   check_match "...the link to .ssh: where it leads, refused" "^it leads to $(re_q "$fh/.ssh"): it is inside " \
     "$(jq -r '.desk_copy.skipped[] | select(.path == ".config/hypr/ssh") | .why' "$D/box.json")"
@@ -20838,6 +20840,9 @@ t_desk_copy() {
   check_fails "...not the link to .ssh" dc run -b "$B" -- test -e "$fh/.config/hypr/ssh"
   check_fails "...nor .ssh" dc run -b "$B" -- test -e "$fh/.ssh"
   check_fails "...nor the big file" dc run -b "$B" -- test -e "$fh/.config/hypr/big.lua"
+  check_fails "...nor the hl.env line's file that sets a key" dc run -b "$B" -- test -e "$fh/.config/hypr/env.lua"
+  check_eq "...why: what it holds" "it holds what looks like a key, token or password" \
+    "$(jq -r '.desk_copy.skipped[] | select(.path == ".config/hypr/env.lua") | .why' "$D/box.json")"
   check_fails "...nor the systemd links" dc run -b "$B" -- test -e "$fh/.config/systemd"
   check_eq "--seed over a copied file: --seed's" "-- seeded" "$(dc run -b "$B" -- cat "$fh/.config/hypr/binds.lua" 2>/dev/null)"
   dc run -b "$B" -- sh -c 'echo "-- the box wrote" >> ~/.config/hypr/hyprland.lua' >/dev/null 2>&1

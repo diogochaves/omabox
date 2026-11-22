@@ -15061,6 +15061,34 @@ from them.
     mount it, so `run -- test -e /run/dbus` pointed an agent at copying the system bus. When
     `refuse_src` refuses the path's folder the note now says only that no box may have it and why;
     under `/run/dbus` it adds that a box has a session bus of its own (`up --polkit` for polkit).
+748. **A key set in Hyprland's own env syntax stays out of a desk box** (2026-11-22). The content
+    check of a desk copy (`SECRET_ERE`, finding 320's rule) wanted `:` or `=` after a key's name, so
+    `hl.env("GEMINI_API_KEY", "...")` and hyprlang's `env = OPENAI_API_KEY,...` in `~/.config/hypr`
+    went into the box HOME, and the box's Hyprland, which runs that config (702), exported them to
+    every app. The check now takes a comma too, but only where a variable is set: after `hl.env(`,
+    `setenv(` or `putenv(` with a quoted name, and after `env =`, for a name ending in KEY, TOKEN,
+    SECRET, PASSWORD, CREDENTIALS or AUTH (a bare `token, ` or `"1Password","disabled"` is a list's
+    or prose's: a comma anywhere made 19 files of this machine's plugins and Omarchy's own menu
+    match). New shapes: Google's `AIza` + 35, Hugging Face's `hf_`, Groq's `gsk_`, xAI's `xai-`,
+    Stripe's `sk_live_`/`rk_live_`, npm's `npm_`, Grafana's `glsa_`, a URL holding a password
+    (`scheme://user:pass@`, the user a name's characters so a regex's `([^:]+:[^@]+@)` is not one),
+    and rclone's ini line `pass = VALUE` (the whole line, a word's characters: JavaScript's
+    `pass = !!x` is not one). Over this machine's `~/.config/hypr` (33 files), terminals' configs,
+    `~/.config/omarchy` (1508, plugin repos mostly) and `/usr/share/omarchy/default` (464), the new
+    check matches 8 files the old did not, all plugin repos' tests or review notes holding a made-up
+    `https://user:pass@` URL; none of the Hyprland config, the terminals' or Omarchy's defaults.
+    Exact names kept out of every desk copy (`desk_name_refused`, `desk_box_name_refused`):
+    `.npmrc`, `.pypirc`, `rclone.conf`, `.vault-token`, `credentials.toml`, and the `.age` ending.
+    `refuse_path` (S3) refuses more credential stores: `~/.npmrc`, `~/.pypirc`, cargo's
+    `credentials{,.toml}`, `~/.config/rclone`, `~/.vault-token`, `~/.config/sops`, `~/.config/age`,
+    `~/.terraform.d`, glab's, hub's, doctl's, `~/.oci`, `~/.local/share/gnome-keyring`, Bitwarden's,
+    Signal's, `~/.thunderbird`, `~/.config/github-copilot`, `~/.cursor`, `~/.config/Cursor`
+    (`~/.docker`, `~/.kube` and `~/.netrc` were there). Checks: `seed.rs`'s `content_refused` (each
+    form and shape caught; `hl.env("XCURSOR_SIZE", "24")`, `env = GDK_SCALE,2`, `token_count = 12`,
+    `SSH_AUTH_SOCK`, `PASSWORD_STORE_DIR` and the lists above let in), `names_refused`,
+    `deskcopy.rs`'s `desk_names`, `repo.rs`'s `credential_stores_refused` and the
+    `secret_paths_are_refused` proptest; `t_desk_copy` (a stand-in HOME's `hypr/env.lua` setting a
+    key by `hl.env` left out, said, its why in box.json).
 749. **`record`'s files and look's contact sheet are written through no link** (2026-11-22, the
     2026-11-22 review). 621 (#338) gave `shot` a held output folder but left `record` its old writes
     as a choice of the user's path. That holds only while the box cannot choose: with `-o` in a box

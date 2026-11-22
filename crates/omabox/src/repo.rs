@@ -306,6 +306,24 @@ pub fn refuse_path(p: &[u8], look: bool) -> Option<Vec<u8>> {
         "/.config/op",
         "/.git-credentials",
         "/.config/git/credentials",
+        // Package registries, cloud and vault CLIs, encrypted-secret tools (finding 748).
+        "/.npmrc",
+        "/.pypirc",
+        "/.cargo/credentials",
+        "/.cargo/credentials.toml",
+        "/.config/rclone",
+        "/.vault-token",
+        "/.config/sops",
+        "/.config/age",
+        "/.terraform.d",
+        "/.config/glab-cli",
+        "/.config/hub",
+        "/.config/doctl",
+        "/.oci",
+        "/.local/share/gnome-keyring",
+        "/.config/Bitwarden",
+        "/.config/Signal",
+        "/.thunderbird",
     ]
     .iter()
     .map(|x| cat!(h, x))
@@ -323,6 +341,9 @@ pub fn refuse_path(p: &[u8], look: bool) -> Option<Vec<u8>> {
             "/.pi",
             "/.hermes",
             "/.gemini",
+            "/.config/github-copilot",
+            "/.cursor",
+            "/.config/Cursor",
             "/.mozilla",
             "/.config/chromium",
             "/.config/google-chrome",
@@ -1180,6 +1201,9 @@ mod tests {
             root in proptest::sample::select(vec![
                 ".ssh", ".gnupg", ".local/share/keyrings", ".password-store", ".aws", ".kube",
                 ".docker", ".config/gh", ".config/omarchy", ".config/omarchy/hooks", ".claude", ".codex",
+                ".npmrc", ".pypirc", ".cargo/credentials.toml", ".config/rclone", ".vault-token",
+                ".config/sops", ".config/sops/age", ".config/age", ".config/github-copilot", ".cursor",
+                ".docker/config.json", ".kube/config", ".netrc", ".terraform.d",
             ]),
             tail in proptest::collection::vec(proptest::sample::select(vec!["a", "b.c", ".", "x y"]), 0..3),
             slash: bool,
@@ -1198,6 +1222,40 @@ mod tests {
             for sys in ["/run", "/dev/input", "/proc/1", "/sys"] {
                 proptest::prop_assert!(refuse_src(sys.as_bytes()).is_some(), "{}", sys);
             }
+        }
+    }
+
+    // Finding 748: credential stores of registries, cloud CLIs and editors' agents are refused;
+    // their neighbours are not.
+    #[test]
+    fn credential_stores_refused() {
+        let h = shell::env_or_empty("HOME");
+        for x in [
+            ".npmrc",
+            ".pypirc",
+            ".cargo/credentials",
+            ".cargo/credentials.toml",
+            ".config/rclone/rclone.conf",
+            ".vault-token",
+            ".config/sops/age/keys.txt",
+            ".config/age/keys.txt",
+            ".config/github-copilot/apps.json",
+            ".cursor",
+            ".docker/config.json",
+            ".kube/config",
+            ".netrc",
+            ".local/share/gnome-keyring",
+        ] {
+            assert!(refuse_path(&cat!(h, "/", x), false).is_some(), "{x}");
+        }
+        for x in [
+            ".cargo/registry",
+            ".npmrc-notes",
+            ".config/hypr",
+            ".config/rclone-ui",
+            ".config/walker",
+        ] {
+            assert_eq!(refuse_path(&cat!(h, "/", x), false), None, "{x}");
         }
     }
 
