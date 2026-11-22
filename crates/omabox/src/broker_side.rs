@@ -10,6 +10,7 @@ use crate::json;
 use crate::procfs;
 use crate::shell;
 use serde_json::{Map, Value};
+use std::os::unix::fs::OpenOptionsExt;
 
 /// bwrap's options and how many words each takes after it (BWRAP_ARITY).
 fn arity(op: &[u8]) -> Option<usize> {
@@ -298,6 +299,106 @@ fn child_named(pid: &[u8], name: &[u8]) -> Option<Vec<u8>> {
         .find(|c| procfs::read(c, "comm").is_some_and(|n| n == name))
 }
 
+/// What find_jail reads of a process (PID, or `self` for this one), so the unit tests can hand it an
+/// ancestry of their own: its parent, its name, its exe's file name, and a namespace link of it.
+pub trait ProcView {
+    fn ppid(&self, pid: &[u8]) -> Option<Vec<u8>>;
+    fn comm(&self, pid: &[u8]) -> Option<Vec<u8>>;
+    fn exe_name(&self, pid: &[u8]) -> Option<Vec<u8>>;
+    fn ns(&self, pid: &[u8], kind: &str) -> Option<Vec<u8>>;
+}
+
+/// The host's /proc, as the broker reads it.
+pub struct HostProc;
+
+impl ProcView for HostProc {
+    fn ppid(&self, pid: &[u8]) -> Option<Vec<u8>> {
+        procfs::proc_ppid(pid).filter(|pp| !pp.is_empty())
+    }
+    fn comm(&self, pid: &[u8]) -> Option<Vec<u8>> {
+        procfs::read(pid, "comm")
+    }
+    fn exe_name(&self, pid: &[u8]) -> Option<Vec<u8>> {
+        let e = std::fs::read_link(shell::path(&cat!("/proc/", pid, "/exe"))).ok()?;
+        e.file_name()
+            .map(|n| shell::bytes(std::path::Path::new(n)).to_vec())
+    }
+    fn ns(&self, pid: &[u8], kind: &str) -> Option<Vec<u8>> {
+        let l = std::fs::read_link(shell::path(&cat!("/proc/", pid, "/ns/", kind))).ok()?;
+        Some(shell::bytes(&l).to_vec())
+    }
+}
+
+/// The caller's jail: walking up from PEER, the first `bwrap` whose parent is ai-jail itself, as
+/// (that bwrap, its parent). ai-jail itself: an exe named `ai-jail` in this broker's own user and pid
+/// namespaces. A process inside a jail never is, so a jailed agent that can make a user namespace
+/// (ai-jail with seccomp off) and runs a binary it named ai-jail with a bwrap of its own under it
+/// does not pass that bwrap off as its jail: the walk goes on up to the real one (finding 751; it
+/// took the first parent so named).
+pub fn find_jail(peer: &[u8], pv: &dyn ProcView) -> Option<(Vec<u8>, Vec<u8>)> {
+    let here = |pid: &[u8]| {
+        ["user", "pid"].iter().all(|k| {
+            let mine = pv.ns(b"self", k);
+            mine.is_some() && pv.ns(pid, k) == mine
+        })
+    };
+    let mut p = peer.to_vec();
+    while shell::dec(&p).is_some_and(|n| n > 1) {
+        let pp = pv.ppid(&p)?;
+        if pv.comm(&p).is_some_and(|c| c == b"bwrap")
+            && pv.exe_name(&pp).as_deref() == Some(b"ai-jail")
+            && here(&pp)
+        {
+            return Some((p, pp));
+        }
+        p = pp;
+    }
+    None
+}
+
+/// Whether the jail (ROOT, an O_PATH fd of its init's root) has the host's folder RR (P resolved on
+/// the host) at P, the path its command line mounts it at: the same file, by device and inode, P
+/// walked inside the jail (its links followed as the jail sees
+/// them, never out of it). A jail's command line is its word only: a folder it names that the jail
+/// does not have is not one of its folders (finding 751). A kernel without openat2: true (find_jail's
+/// namespace check stands alone then).
+pub fn jail_has(root: &std::fs::File, p: &[u8], rr: &[u8]) -> bool {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::fs::MetadataExt;
+    let Ok(host) = std::fs::metadata(shell::path(rr)) else {
+        return false;
+    };
+    let Ok(c) = std::ffi::CString::new(if p.is_empty() {
+        b"/".to_vec()
+    } else {
+        p.to_vec()
+    }) else {
+        return false;
+    };
+    // SAFETY: open_how is plain data; zeroed, then the fields set.
+    let mut how: libc::open_how = unsafe { std::mem::zeroed() };
+    how.flags = (libc::O_PATH | libc::O_CLOEXEC) as u64;
+    how.resolve = libc::RESOLVE_IN_ROOT | libc::RESOLVE_NO_MAGICLINKS;
+    // SAFETY: openat2 reads the path and how (its size given) and returns a new fd of ours, or -1.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            root.as_raw_fd(),
+            c.as_ptr(),
+            &how,
+            std::mem::size_of::<libc::open_how>(),
+        )
+    };
+    if fd < 0 {
+        let e = std::io::Error::last_os_error().raw_os_error();
+        return matches!(e, Some(libc::ENOSYS | libc::EPERM));
+    }
+    // SAFETY: just opened, ours alone.
+    let f = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd as i32) });
+    f.metadata()
+        .is_ok_and(|m| m.dev() == host.dev() && m.ino() == host.ino())
+}
+
 /// The caller this broker's omabox runs for: its pid, in this process's pid namespace, and its start
 /// in clock ticks. The relay's `listen` sets OMABOX_BROKER_PEER from the socket's SO_PEERCRED (the
 /// kernel's, not the caller's word: what the caller sends is renamed OMABOX_RELAY_*), and init makes
@@ -341,29 +442,10 @@ pub fn init(ctx: &Ctx) -> Res<()> {
     {
         let _ = CALLER.set((peer.clone(), start));
     }
-    let (mut p, mut jail, mut parent) = (peer.clone(), None, Vec::new());
-    while shell::dec(&p).is_some_and(|n| n > 1) {
-        let Some(pp) = procfs::proc_ppid(&p).filter(|pp| !pp.is_empty()) else {
-            break;
-        };
-        let exe = std::fs::read_link(shell::path(&cat!("/proc/", pp, "/exe")))
-            .ok()
-            .and_then(|e| {
-                e.file_name()
-                    .map(|n| shell::bytes(std::path::Path::new(n)).to_vec())
-            });
-        if procfs::read(&p, "comm").is_some_and(|c| c == b"bwrap")
-            && exe.as_deref() == Some(b"ai-jail")
-        {
-            jail = Some(p.clone());
-            parent = pp;
-            break;
-        }
-        p = pp;
-    }
+    let found = find_jail(&peer, &HostProc);
     // Not in a jail: a caller's omabox hands its command here only when it cannot make a user
     // namespace (relay_wanted, #114): said so, or the refusal reads like the broker's fault.
-    let Some(jail) = jail else {
+    let Some((jail, parent)) = found else {
         return Err(ctx.die("the omabox broker serves agents inside ai-jail; this caller is not in one. Its omabox came here because it cannot make a user namespace: unprivileged user namespaces look disabled on this machine (sysctl kernel.unprivileged_userns_clone, kernel.apparmor_restrict_unprivileged_userns); omabox needs them (./install.sh --check starts a box to show it works)"));
     };
     let ns = |pid: &[u8]| std::fs::read_link(shell::path(&cat!("/proc/", pid, "/ns/pid"))).ok();
@@ -373,17 +455,9 @@ pub fn init(ctx: &Ctx) -> Res<()> {
     let Some(start) = procfs::proc_start(&jail).filter(|s| !s.is_empty()) else {
         return Err(ctx.die("broker: the jail is gone"));
     };
-    let cmdline = std::fs::read(shell::path(&cat!("/proc/", jail, "/cmdline"))).unwrap_or_default();
-    let fds = cat!("/proc/", parent, "/fd");
-    let mut pol = policy_of(
-        &cmdline,
-        Some(&fds),
-        &read_args_fd,
-        &crate::repo::readlink_e,
-    )
-    .map_err(|why| ctx.die(cat!("broker: cannot read the jail's policy: ", why)))?;
-    // The jail's mounts as its own PID 1 sees them: bwrap's init in the jail. Not the caller's: its
-    // view of them is the caller's to narrow (#210 review). jail_verify reads them again through it.
+    // The jail's own PID 1: bwrap's init in the jail. Its mounts are the jail's as the jail sees them
+    // (not the caller's: its view of them is the caller's to narrow, #210 review), and its root is
+    // where each folder the jail's command line names is confirmed (finding 751).
     let init = child_named(&jail, b"bwrap");
     let mntns = init
         .as_ref()
@@ -394,6 +468,20 @@ pub fn init(ctx: &Ctx) -> Res<()> {
     let Ok(mi) = std::fs::read(shell::path(&cat!("/proc/", init, "/mountinfo"))) else {
         return Err(ctx.die("broker: cannot read the jail's mounts"));
     };
+    let jroot = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(shell::path(&cat!("/proc/", init, "/root")))
+        .map_err(|_| ctx.die("broker: cannot read the jail's root"))?;
+    let cmdline = std::fs::read(shell::path(&cat!("/proc/", jail, "/cmdline"))).unwrap_or_default();
+    let fds = cat!("/proc/", parent, "/fd");
+    // (each folder resolved on the host, and kept only when the jail has that same folder there)
+    let resolve = |r: &[u8]| {
+        let rr = crate::repo::readlink_e(r)?;
+        jail_has(&jroot, r, &rr).then_some(rr)
+    };
+    let mut pol = policy_of(&cmdline, Some(&fds), &read_args_fd, &resolve)
+        .map_err(|why| ctx.die(cat!("broker: cannot read the jail's policy: ", why)))?;
     with_mounts(&mut pol, &mi);
     let id = cat!(jail, " ", start);
     let Some(obj) = pol.as_object_mut() else {
@@ -599,6 +687,120 @@ mod tests {
         ] {
             assert!(r(c).is_some_and(|m| m.contains("does not change")), "{c}");
         }
+    }
+
+    /// A stand-in /proc: each pid's (parent, comm, exe name, user ns, pid ns); `self` is the broker.
+    struct Fake(
+        Vec<(
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+            &'static str,
+        )>,
+    );
+
+    impl Fake {
+        fn row(&self, pid: &[u8]) -> Option<&(&str, &str, &str, &str, &str, &str)> {
+            self.0.iter().find(|r| r.0.as_bytes() == pid)
+        }
+    }
+
+    impl ProcView for Fake {
+        fn ppid(&self, pid: &[u8]) -> Option<Vec<u8>> {
+            self.row(pid).map(|r| r.1.as_bytes().to_vec())
+        }
+        fn comm(&self, pid: &[u8]) -> Option<Vec<u8>> {
+            self.row(pid).map(|r| r.2.as_bytes().to_vec())
+        }
+        fn exe_name(&self, pid: &[u8]) -> Option<Vec<u8>> {
+            self.row(pid).map(|r| r.3.as_bytes().to_vec())
+        }
+        fn ns(&self, pid: &[u8], kind: &str) -> Option<Vec<u8>> {
+            let r = self.row(pid)?;
+            Some(if kind == "user" { r.4 } else { r.5 }.as_bytes().to_vec())
+        }
+    }
+
+    /// find_jail (finding 751): ai-jail is a parent so named in the broker's own user and pid
+    /// namespaces; one inside a jail (another user or pid namespace) is passed over, the walk going
+    /// on to the real jail above it, or to none.
+    #[test]
+    fn find_jail_wants_ai_jail_in_the_brokers_namespaces() {
+        let host = ("self", "1", "omabox", "omabox", "u0", "p0");
+        let real = [
+            host,
+            ("60", "1", "ai-jail", "ai-jail", "u0", "p0"),
+            ("70", "60", "bwrap", "bwrap", "u0", "p0"),
+        ];
+        // the caller under the real jail
+        let mut v = real.to_vec();
+        v.push(("100", "70", "claude", "node", "u1", "p1"));
+        assert_eq!(
+            find_jail(b"100", &Fake(v)),
+            Some((b"70".to_vec(), b"60".to_vec()))
+        );
+        // a fake ai-jail inside it, in the jail's user namespace, with a bwrap of its own: the real one
+        let mut v = real.to_vec();
+        v.extend([
+            ("80", "70", "ai-jail", "ai-jail", "u1", "p1"),
+            ("90", "80", "bwrap", "bwrap", "u1", "p1"),
+            ("100", "90", "sh", "sh", "u2", "p2"),
+        ]);
+        assert_eq!(
+            find_jail(b"100", &Fake(v)),
+            Some((b"70".to_vec(), b"60".to_vec()))
+        );
+        // only a fake one: another user namespace, or the same user namespace and another pid one
+        for (u, pn) in [("u1", "p0"), ("u0", "p1")] {
+            let v = vec![
+                host,
+                ("80", "1", "ai-jail", "ai-jail", u, pn),
+                ("90", "80", "bwrap", "bwrap", u, pn),
+                ("100", "90", "sh", "sh", "u2", "p2"),
+            ];
+            assert_eq!(find_jail(b"100", &Fake(v)), None, "{u} {pn}");
+        }
+        // no namespace to read: not ai-jail
+        let v = vec![
+            ("80", "1", "ai-jail", "ai-jail", "u0", "p0"),
+            ("90", "80", "bwrap", "bwrap", "u0", "p0"),
+            ("100", "90", "sh", "sh", "u2", "p2"),
+        ];
+        assert_eq!(find_jail(b"100", &Fake(v)), None);
+    }
+
+    /// jail_has (finding 751): a folder the jail's command line names counts only when the jail has
+    /// that same folder (device and inode) at its path, walked inside the jail: not there, another
+    /// folder there, or a link there to the host's folder (followed inside the jail) is not.
+    #[test]
+    fn jail_has_wants_the_same_folder_inside_the_jail() {
+        let d = std::env::temp_dir().join(format!("omabox-jailhas-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let host = d.join("host/proj");
+        let jail = d.join("jail");
+        std::fs::create_dir_all(&host).unwrap();
+        std::fs::create_dir_all(jail.join("other")).unwrap();
+        std::os::unix::fs::symlink(&host, jail.join("esc")).unwrap();
+        let open = |p: &std::path::Path| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC)
+                .open(p)
+                .unwrap()
+        };
+        let h = shell::bytes(&host).to_vec();
+        assert!(jail_has(&open(std::path::Path::new("/")), &h, &h));
+        let j = open(&jail);
+        assert!(!jail_has(&j, &h, &h), "not in the jail");
+        assert!(!jail_has(&j, b"/other", &h), "another folder there");
+        assert!(!jail_has(&j, b"/esc", &h), "a link out of the jail");
+        assert!(
+            !jail_has(&j, b"/other", b"/nonexistent-omabox"),
+            "gone on the host"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     fn line(w: &[&str]) -> Vec<u8> {
