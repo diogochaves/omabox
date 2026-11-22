@@ -5,7 +5,8 @@
 //! which box it decided on (DownIf).
 
 use crate::args::{optarg, unknown_opt};
-use crate::boxes::{BoxSys, RealBox, box_alive, list_names, lock_file, meta};
+use crate::boxes::{BoxSys, RealBox, box_alive, list_names, lock_file};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exit::{Ctx, Res, muted, say};
 use crate::jail::{in_jail, jail_id};
@@ -133,7 +134,7 @@ fn down_one_with<S: BoxSys + ?Sized>(
     }
     // A jailed caller's box is checked again under the lock: select_box passed a name whose up (the
     // user's, or another jail's) had not written its box.json yet, and that up has finished since.
-    if in_jail() && meta(&ctx.d, "jail").0 != jail_id() {
+    if in_jail() && BoxMeta::load(&ctx.d).jail != jail_id() {
         drop(lock);
         return Err(ctx.die(cat!(
             "box '",
@@ -144,7 +145,7 @@ fn down_one_with<S: BoxSys + ?Sized>(
     // The reaper decided on the box it watched, then waited here: an `up` holding the lock may have
     // started a new box under the name (finding 74). Not that one.
     if let Some(c) = &cond.created
-        && meta(&ctx.d, "created").0 != *c
+        && BoxMeta::load(&ctx.d).created != *c
     {
         return Ok(true);
     }
@@ -181,7 +182,7 @@ fn down_one_with<S: BoxSys + ?Sized>(
     for p in peeks {
         p.signal(libc::SIGTERM);
     }
-    let was_interactive = meta(&ctx.d, "mode").0 == b"interactive";
+    let was_interactive = BoxMeta::load(&ctx.d).interactive();
     if !sys.kill_box(ctx) {
         return Ok(false);
     }
@@ -299,7 +300,7 @@ fn down_none(ctx: &Ctx) -> bool {
     let home = shell::env_or_empty("HOME");
     let mut has = Vec::new();
     for n in &mine {
-        let dir = crate::paths::home_short(&meta(&cat!(ctx.boxes, "/", n), "dir").0, &home);
+        let dir = crate::paths::home_short(&BoxMeta::load(&cat!(ctx.boxes, "/", n)).dir, &home);
         if !has.is_empty() {
             has.extend_from_slice(b"; ");
         }
@@ -324,7 +325,7 @@ fn down_orphans_with<S: BoxSys + ?Sized>(sys: &S, ctx: &mut Ctx) -> Res<()> {
         if sys.box_state(&ctx.d) != "up" || !crate::ready::box_orphan(ctx) {
             continue;
         }
-        found.push((ctx.name.clone(), meta(&ctx.d, "created").0));
+        found.push((ctx.name.clone(), BoxMeta::load(&ctx.d).created));
     }
     crate::cmdlog::walking(false);
     if found.is_empty() {
@@ -365,7 +366,7 @@ fn submap_release(ctx: &Ctx) {
         let mut c = ctx.clone();
         c.d = cat!(ctx.boxes, "/", n);
         c.name = n;
-        if meta(&c.d, "mode").0 == b"interactive" && box_alive(&c).unwrap_or(false) {
+        if BoxMeta::load(&c.d).interactive() && box_alive(&c).unwrap_or(false) {
             return;
         }
     }

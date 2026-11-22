@@ -80,10 +80,7 @@ pub fn ns_check(recorded: Option<(u64, u64)>, now: (u64, u64)) -> Result<(), Vec
 
 /// box.json's `mount_ns` in the box dir D.
 fn recorded(d: &[u8]) -> Option<(u64, u64)> {
-    let t = std::fs::read(crate::shell::path(&cat!(d, "/box.json"))).ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&t).ok()?;
-    let m = v.get("mount_ns")?;
-    Some((m.get("mnt")?.as_u64()?, m.get("owner")?.as_u64()?))
+    crate::boxmeta::BoxMeta::load(d).mount_ns
 }
 
 fn errno() -> i32 {

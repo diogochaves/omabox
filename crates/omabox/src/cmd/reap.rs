@@ -10,7 +10,8 @@
 //! it `ROOT/build/omabox _reap ...` before the switch), which kill_reapers knows; it also writes its
 //! pid and start time in the box dir (`reaper.pid`), so a down by another omabox ends it (#383).
 
-use crate::boxes::{BoxPid, agent_alive, box_alive, box_pid, meta, touch};
+use crate::boxes::{BoxPid, agent_alive, box_alive, box_pid, touch};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::cmd::down::{DownIf, down_one, prune_marks};
 use crate::exit::{Ctx, Res, muted, say};
@@ -159,21 +160,22 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let name = args.first().cloned().unwrap_or_default();
     select_box(ctx, &name)?;
     let d = ctx.d.clone();
-    let idle = meta(&d, "idle").0;
+    let m = BoxMeta::load(&d);
+    let idle = &m.idle;
     let mut r = Reap {
         created: args.get(1).cloned().unwrap_or_default(),
         idle: if idle.is_empty() {
             0
         } else {
-            shell::test_int(&idle).unwrap_or(0)
+            shell::test_int(idle).unwrap_or(0)
         },
-        owner: meta(&d, "owner").0,
-        owner_start: meta(&d, "owner_start").0,
-        interactive: meta(&d, "mode").0 == b"interactive",
-        agent: meta(&d, "agent").0,
+        owner: m.owner.clone(),
+        owner_start: m.owner_start.clone(),
+        interactive: m.interactive(),
+        agent: m.agent.clone(),
         retry_said: false,
         host: None,
-        guard: (meta(&d, "protect").0 == b"true").then(|| Guard {
+        guard: m.protect.then(|| Guard {
             events: crate::net::AddrEvents::open(),
             last: None,
             said: false,
@@ -466,7 +468,7 @@ fn when() -> Vec<u8> {
 /// down's refusal).
 fn poll(ctx: &mut Ctx, r: &mut Reap) -> Res<bool> {
     let name = ctx.name.clone();
-    if meta(&ctx.d, "created").0 != r.created {
+    if BoxMeta::load(&ctx.d).created != r.created {
         return Ok(false);
     }
     let down = |ctx: &mut Ctx, agent_gone: bool| -> Res<bool> {
@@ -544,12 +546,12 @@ fn poll(ctx: &mut Ctx, r: &mut Reap) -> Res<bool> {
             " box '",
             name,
             "': its agent session (",
-            meta(&ctx.d, "agent").0,
+            BoxMeta::load(&ctx.d).agent,
             ") ended: taking it down"
         ));
         down(ctx, true)?;
         // Still up, with an agent that runs: its session took it over meanwhile (take_over).
-        if !(shell::path(&ctx.d).is_dir() && meta(&ctx.d, "created").0 == r.created) {
+        if !(shell::path(&ctx.d).is_dir() && BoxMeta::load(&ctx.d).created == r.created) {
             return Ok(false);
         }
         if agent_alive(&ctx.d) {
@@ -558,7 +560,7 @@ fn poll(ctx: &mut Ctx, r: &mut Reap) -> Res<bool> {
                 " box '",
                 name,
                 "': taken over by its session's new agent (",
-                meta(&ctx.d, "agent").0,
+                BoxMeta::load(&ctx.d).agent,
                 "): kept"
             ));
             return Ok(true);
@@ -631,7 +633,7 @@ fn now() -> i64 {
 /// down that left a box on purpose, is not to retry), and wants another try at the next poll. Said
 /// once, not every poll.
 fn retry(ctx: &Ctx, r: &mut Reap) -> bool {
-    if !(shell::path(&ctx.d).is_dir() && meta(&ctx.d, "created").0 == r.created) {
+    if !(shell::path(&ctx.d).is_dir() && BoxMeta::load(&ctx.d).created == r.created) {
         return false;
     }
     if !r.retry_said {
@@ -669,8 +671,12 @@ fn keys_ensure(ctx: &Ctx, sig: Option<&[u8]>) {
 /// is gone or another took the name.
 fn wait_pidns(ctx: &Ctx, created: &[u8]) -> bool {
     let end = crate::settle::after(15);
-    while meta(&ctx.d, "pidns").0.is_empty() {
-        if !(ctx.at("box.json").is_file() && meta(&ctx.d, "created").0 == created) {
+    loop {
+        let m = BoxMeta::load(&ctx.d);
+        if !m.pidns.is_empty() {
+            break;
+        }
+        if !(ctx.at("box.json").is_file() && m.created == created) {
             return false;
         }
         if !starting_alive(ctx) {

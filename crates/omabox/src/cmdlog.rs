@@ -405,7 +405,7 @@ pub fn selected(name: &[u8], d: &[u8]) {
 fn callers(d: &[u8]) -> bool {
     !crate::jail::in_jail()
         || (shell::path(&cat!(d, "/box.json")).is_file()
-            && crate::boxes::meta(d, "jail").0 == crate::jail::jail_id())
+            && crate::boxmeta::BoxMeta::load(d).jail == crate::jail::jail_id())
 }
 
 /// The front hands CMD ARGS to its command, called at START: kept for `end` when it is a command

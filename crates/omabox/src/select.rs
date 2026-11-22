@@ -139,7 +139,10 @@ pub fn select_box(ctx: &mut Ctx, given: &[u8]) -> Res<()> {
     crate::cmdlog::selected(&ctx.name, &ctx.d);
     // A jailed agent drives only the boxes its jail started (finding 99): not the user's, nor another
     // jail's, which may see more than this one.
-    if in_jail() && ctx.at("box.json").is_file() && boxes::meta(&ctx.d, "jail").0 != jail_id() {
+    if in_jail()
+        && ctx.at("box.json").is_file()
+        && crate::boxmeta::BoxMeta::load(&ctx.d).jail != jail_id()
+    {
         return Err(ctx.die(cat!(
             "box '",
             ctx.name,

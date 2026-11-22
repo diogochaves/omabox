@@ -8,7 +8,8 @@
 //! (up_box.rs's seat_check, S1).
 
 use crate::args::{optarg, unknown_opt_hint};
-use crate::boxes::{self, box_alive, meta};
+use crate::boxes::{self, box_alive};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exit::{self, Ctx, Exit, Res, say};
 use crate::install::{self, Aq};
@@ -1395,7 +1396,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // its box is not this caller's to be told about.
     if crate::jail::in_jail()
         && ctx.at("box.json").is_file()
-        && meta(&ctx.d, "jail").0 != crate::jail::jail_id()
+        && BoxMeta::load(&ctx.d).jail != crate::jail::jail_id()
     {
         return Err(ctx.die(cat!(
             "box '",
@@ -1892,10 +1893,10 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
         && crate::omshell::ipc(ctx, &[b"notifications", b"isDnd"]).as_deref()
             != Ok(b"on".as_slice());
     let dock_on =
-        u.has("no-dock") && crate::omshell::dock_enabled(ctx) && meta(&ctx.d, "shell").0 == b"true";
+        u.has("no-dock") && crate::omshell::dock_enabled(ctx) && BoxMeta::load(&ctx.d).shell;
     let ctx: &Ctx = ctx;
     let d = &ctx.d;
-    let m = |k: &str| meta(d, k).0;
+    let m = BoxMeta::load(d);
     let or = |v: Vec<u8>, none: &str| {
         if v.is_empty() {
             none.as_bytes().to_vec()
@@ -1926,24 +1927,24 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
         };
         format!("[{}]", items.join(",")).into_bytes()
     };
-    let meta_scale = || or(m("scale"), "1");
+
     let mut diff: Vec<Vec<u8>> = Vec::new();
-    if u.has("interactive") && m("mode") != b"interactive" {
-        diff.push(cat!("--interactive (it is ", m("mode"), ")"));
+    if u.has("interactive") && !m.interactive() {
+        diff.push(cat!("--interactive (it is ", m.mode, ")"));
     }
-    if u.has("size") && !u.interactive && !(m("size") == u.size && meta_scale() == u.scale) {
+    if u.has("size") && !u.interactive && !(m.size == u.size && m.scale_or_1() == u.scale) {
         diff.push(cat!(
             "--size ",
             crate::mon::size_text(&u.size, &u.scale),
             " (it is ",
-            crate::mon::size_text(&m("size"), &meta_scale()),
+            crate::mon::size_text(&m.size, m.scale_or_1()),
             ")"
         ));
     }
     if u.has("net") {
-        let theirs = m("net");
+        let theirs = &m.net;
         if matches!(u.net.as_slice(), b"isolated" | b"host") {
-            if theirs != u.net {
+            if *theirs != u.net {
                 diff.push(cat!("--net ", u.net, " (it is ", theirs, ")"));
             }
         } else if matches!(theirs.as_slice(), b"isolated" | b"host") {
@@ -1951,15 +1952,13 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
         }
     }
     if u.has("allow") {
-        let theirs = Ports::parse(&m("allow"))
-            .map(|p| p.csv())
-            .unwrap_or_default();
+        let theirs = Ports::parse(&m.allow).map(|p| p.csv()).unwrap_or_default();
         if theirs != u.allow {
             diff.push(cat!(
                 "--allow ",
                 u.allow,
                 " (it allows ",
-                or(m("allow"), "none"),
+                or(m.allow.clone(), "none"),
                 ")"
             ));
         }
@@ -1973,16 +1972,16 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
             ")"
         ));
     }
-    if u.has("systemd") && m("systemd") != b"true" {
+    if u.has("systemd") && !m.systemd {
         diff.push(b"--systemd (it has no user manager)".to_vec());
     }
-    if u.has("audio") && m("audio") != b"true" {
+    if u.has("audio") && !m.audio {
         diff.push(b"--audio (it has no audio)".to_vec());
     }
-    if u.has("polkit") && m("polkit") != b"true" {
+    if u.has("polkit") && !m.polkit {
         diff.push(b"--polkit (it has no polkit)".to_vec());
     }
-    if u.has("stock-bar") && m("bar") != b"stock" {
+    if u.has("stock-bar") && m.bar != b"stock" {
         diff.push(b"--stock-bar (it has your bar)".to_vec());
     }
     // (a clean box is a stock one too)
@@ -2002,18 +2001,18 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
             ));
         }
     }
-    if u.has("desk-shell") && m("bar") != b"desk" {
-        let has = if m("bar") == b"stock" {
+    if u.has("desk-shell") && m.bar != b"desk" {
+        let has = if m.bar == b"stock" {
             "the stock bar"
         } else {
             "your bar with only its own plugins"
         };
         diff.push(cat!("--desk-shell (it has ", has, ")"));
     }
-    if u.has("xwayland") && m("xwayland") != b"true" {
+    if u.has("xwayland") && !m.xwayland {
         diff.push(b"--xwayland (it has none)".to_vec());
     }
-    if u.has("autoreload") && m("autoreload") != b"true" {
+    if u.has("autoreload") && !m.autoreload {
         diff.push(b"--autoreload (its autoreload is off)".to_vec());
     }
     if u.has("no-pointer") {
@@ -2032,7 +2031,7 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
     if u.has("no-shell") && jqr(".shell | tostring") != b"false" {
         diff.push(b"--no-shell (it has the shell)".to_vec());
     }
-    let desktop = Desktop::of_box(&m("desktop"));
+    let desktop = Desktop::of_box(&m.desktop);
     if u.has("desktop") && desktop != u.desktop {
         diff.push(cat!(
             "--desktop ",
@@ -2042,15 +2041,15 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
             ")"
         ));
     }
-    if u.has("shell") && m("shell_cmd") != u.shell_cmd {
+    if u.has("shell") && m.shell_cmd != u.shell_cmd {
         // (a desk box's, #321 step 4: what its slot runs from its config, when it runs one)
-        let desk_cmd = if Desktop::of_box(&m("desktop")) == Desktop::Desk {
+        let desk_cmd = if Desktop::of_box(&m.desktop) == Desktop::Desk {
             crate::shellnote::slot_cmd(ctx)
         } else {
             Vec::new()
         };
-        let theirs = if !m("shell_cmd").is_empty() {
-            m("shell_cmd")
+        let theirs = if !m.shell_cmd.is_empty() {
+            m.shell_cmd.clone()
         } else if !desk_cmd.is_empty() {
             cat!(crate::term::plain_cap(&desk_cmd, 200), ", from your config")
         } else if crate::boxes::plain_like(&ctx.d) {
@@ -2066,39 +2065,39 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
             ")"
         ));
     }
-    if u.has("omarchy") && m("omarchy") != u.omarchy {
+    if u.has("omarchy") && m.omarchy != u.omarchy {
         diff.push(cat!(
             "--omarchy ",
             u.tree(),
             " (it runs ",
-            or(m("omarchy"), "/usr/share/omarchy"),
+            or(m.omarchy.clone(), "/usr/share/omarchy"),
             ")"
         ));
     }
-    if u.has("hyprland") && m("hyprland") != u.hyprland {
+    if u.has("hyprland") && m.hyprland != u.hyprland {
         diff.push(cat!(
             "--hyprland ",
             u.hyprland,
             " (it runs ",
-            or(m("hyprland"), "the installed one"),
+            or(m.hyprland.clone(), "the installed one"),
             ")"
         ));
     }
-    if u.has("quickshell") && m("quickshell") != u.quickshell {
+    if u.has("quickshell") && m.quickshell != u.quickshell {
         diff.push(cat!(
             "--quickshell ",
             u.quickshell,
             " (its shell runs ",
-            or(m("quickshell"), "the installed one"),
+            or(m.quickshell.clone(), "the installed one"),
             ")"
         ));
     }
-    if u.has("from") && m("from") != u.from {
+    if u.has("from") && m.from != u.from {
         diff.push(cat!(
             "--from ",
             u.from,
             " (it started from ",
-            or(m("from"), "no save"),
+            or(m.from.clone(), "no save"),
             ")"
         ));
     }
@@ -2126,12 +2125,12 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
             "; files are seeded only when a box starts)"
         ));
     }
-    if u.has("theme") && m("theme") != u.theme {
+    if u.has("theme") && m.theme != u.theme {
         diff.push(cat!(
             "--theme ",
             u.theme,
             " (it started on ",
-            or(m("theme"), "your desktop's theme"),
+            or(m.theme.clone(), "your desktop's theme"),
             ")"
         ));
     }

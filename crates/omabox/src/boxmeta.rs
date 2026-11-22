@@ -17,12 +17,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 /// BoxMeta's keys (a test checks this list against the struct).
-const KNOWN: [&str; 34] = [
+const KNOWN: [&str; 40] = [
     "mode",
     "size",
     "scale",
     "created",
     "net",
+    "from",
+    "theme",
+    "bar",
     "allow",
     "idle",
     "desktop",
@@ -47,6 +50,9 @@ const KNOWN: [&str; 34] = [
     "pidns",
     "shell",
     "wayland_screen",
+    "systemd",
+    "xwayland",
+    "autoreload",
     "audio",
     "polkit",
     "protect",
@@ -72,6 +78,15 @@ pub struct BoxMeta {
     /// host, connected, isolated or none (empty: before it).
     #[serde(with = "text")]
     pub net: Vec<u8>,
+    /// The save it started from (`up --from`).
+    #[serde(with = "text")]
+    pub from: Vec<u8>,
+    /// Its `up --theme`.
+    #[serde(with = "text")]
+    pub theme: Vec<u8>,
+    /// stock or user (desk: a desk box's).
+    #[serde(with = "text")]
+    pub bar: Vec<u8>,
     /// The --allow ports, comma-separated.
     #[serde(with = "text")]
     pub allow: Vec<u8>,
@@ -129,6 +144,12 @@ pub struct BoxMeta {
     #[serde(with = "flag")]
     pub wayland_screen: bool,
     #[serde(with = "flag")]
+    pub systemd: bool,
+    #[serde(with = "flag")]
+    pub xwayland: bool,
+    #[serde(with = "flag")]
+    pub autoreload: bool,
+    #[serde(with = "flag")]
     pub audio: bool,
     #[serde(with = "flag")]
     pub polkit: bool,
@@ -175,6 +196,11 @@ impl BoxMeta {
         m.other = other;
         m.read = ok;
         m
+    }
+
+    /// `mode` is interactive.
+    pub fn interactive(&self) -> bool {
+        self.mode == b"interactive"
     }
 
     /// The scale, 1 when box.json has none.
@@ -298,12 +324,15 @@ mod tests {
     /// Each field of M against json::field of KEY on TEXT, as every call site read it.
     fn same_as_field(text: &[u8]) {
         let m = BoxMeta::parse(text);
-        let texts: [(&str, &Vec<u8>); 27] = [
+        let texts: [(&str, &Vec<u8>); 30] = [
             ("mode", &m.mode),
             ("size", &m.size),
             ("scale", &m.scale),
             ("created", &m.created),
             ("net", &m.net),
+            ("from", &m.from),
+            ("theme", &m.theme),
+            ("bar", &m.bar),
             ("allow", &m.allow),
             ("idle", &m.idle),
             ("desktop", &m.desktop),
@@ -340,6 +369,9 @@ mod tests {
         let flags = [
             ("shell", m.shell),
             ("wayland_screen", m.wayland_screen),
+            ("systemd", m.systemd),
+            ("xwayland", m.xwayland),
+            ("autoreload", m.autoreload),
             ("audio", m.audio),
             ("polkit", m.polkit),
             ("protect", m.protect),

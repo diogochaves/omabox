@@ -9,7 +9,7 @@
 //! output's removal, runs first).
 
 use super::up::{Up, pid_self};
-use crate::boxes::{self, BoxPid, box_pid, meta};
+use crate::boxes::{self, BoxPid, box_pid};
 use crate::bwrap::{Bwrap, DevNode};
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, out, say};
@@ -934,7 +934,7 @@ fn guarded(u: &Up) -> bool {
 
 /// `setsid -f "$ROOT/bin/omabox" _reap NAME CREATED </dev/null >>"$D/reap.log" 2>&1`.
 fn start_reaper(ctx: &Ctx) {
-    let created = meta(&ctx.d, "created").0;
+    let created = crate::boxmeta::BoxMeta::load(&ctx.d).created;
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
