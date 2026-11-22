@@ -6,7 +6,8 @@
 //! tame values only (finding 63).
 
 use crate::args::{optarg, unknown_opt};
-use crate::boxes::{BoxPid, box_env, box_pid, meta, need_box};
+use crate::boxes::{BoxPid, box_env, box_pid, need_box};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::deskwin::ws_check;
 use crate::exit::{Ctx, Res, say};
@@ -86,7 +87,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         host_session_die(ctx)?;
         None
     };
-    if meta(&ctx.d, "mode").0 == b"interactive" {
+    if BoxMeta::load(&ctx.d).interactive() {
         // omabox-wlfd connects and execs bwrap, so the host sees the window as the outer bwrap's.
         if let Some(asked) = &asked {
             let pid = match box_pid(&ctx.d) {
@@ -99,7 +100,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             "box '",
             ctx.name,
             "' is interactive: it is already a window on ",
-            ws_text(&meta(&ctx.d, "workspace").0)
+            ws_text(&BoxMeta::load(&ctx.d).workspace)
         ));
         return Ok(());
     }

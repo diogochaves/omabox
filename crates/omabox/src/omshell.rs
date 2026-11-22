@@ -9,7 +9,8 @@
 //! `~/.local/state/omarchy/workspace-layouts/N.lua` (`mode = "floating"`), a default for the rest in
 //! `default.lua`, as `omarchy-hyprland-workspace-layout-current` reads them.
 
-use crate::boxes::{box_home_read, meta};
+use crate::boxes::box_home_read;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ExecOpts, Redir, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Res};
@@ -25,7 +26,7 @@ pub const NOTIFICATIONS_NS: &str = "omarchy-notifications";
 
 /// The Omarchy tree the box runs: its --omarchy DIR, else the installed one.
 pub fn tree(ctx: &Ctx) -> Vec<u8> {
-    let t = meta(&ctx.d, "omarchy").0;
+    let t = BoxMeta::load(&ctx.d).omarchy;
     if t.is_empty() {
         b"/usr/share/omarchy".to_vec()
     } else {
@@ -54,7 +55,7 @@ pub fn tree_has_dnd(tree: &[u8]) -> bool {
 /// refusal.
 pub fn need_shell(ctx: &Ctx, cmd: &str) -> Res<()> {
     plain_refuse(ctx, cmd, "it has no Omarchy shell to ask")?;
-    if meta(&ctx.d, "shell").0 != b"true" {
+    if !BoxMeta::load(&ctx.d).shell {
         return Err(ctx.die(cat!(
             cmd,
             ": box '",
@@ -354,7 +355,7 @@ fn drop_layers(layers: &[u8], ns: &str, on: Option<&[Vec<u8>]>) -> Vec<u8> {
 /// `live.json` leaves out a transient toast, so the shell is asked. False when that cannot tell (no
 /// Omarchy shell; 4.0's, which counts none: its layer goes with its last toast; no answer).
 fn no_toasts(ctx: &Ctx) -> bool {
-    if meta(&ctx.d, "shell").0 != b"true" {
+    if !BoxMeta::load(&ctx.d).shell {
         return false;
     }
     let mut c = ctx.clone();

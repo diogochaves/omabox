@@ -4,9 +4,8 @@
 //! kill_box, kill_reapers, rm_box), sweep_homes, box_held, more_screens, client_render_check and
 //! box_json.
 
-use crate::boxes::{
-    BoxPid, BoxSys, RealBox, box_home_file, box_home_read, box_state, meta, run_read,
-};
+use crate::boxes::{BoxPid, BoxSys, RealBox, box_home_file, box_home_read, box_state, run_read};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, muted, say};
@@ -1090,12 +1089,6 @@ fn box_exec_out(
     rc.ok().map(|rc| (rc, out))
 }
 
-/// meta_scale: box.json's scale, 1 when none.
-fn meta_scale(d: &[u8]) -> Vec<u8> {
-    let s = meta(d, "scale").0;
-    if s.is_empty() { b"1".to_vec() } else { s }
-}
-
 /// wait_ready WANT_SHELL: Hyprland up, an NVIDIA box's screen at its size, then (WANT_SHELL) the bar
 /// on screen with the tray watcher when its layout has a tray, the start-up cover gone, the
 /// notification server, and a headless box's bar holding still. Sets R.bar_at.
@@ -1103,15 +1096,16 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
     let t = ready_timeout(ctx)?;
     let deadline = after(t);
     wait_hyprland(ctx, r)?;
-    if meta(&ctx.d, "wayland_screen").0 == b"true" {
+    let m = BoxMeta::load(&ctx.d);
+    if m.wayland_screen {
         // labwc's initial xdg configure can replace the requested mode with 1280x720. Reapply it
         // after Hyprland starts, when the parent headless output already has the requested size.
-        let size = meta(&ctx.d, "size").0;
+        let size = &m.size;
         let lua = cat!(
             "hl.monitor({ output = 'WAYLAND-1', mode = '",
             size,
             "', position = '0x0', scale = ",
-            meta_scale(&ctx.d),
+            m.scale_or_1(),
             " })"
         );
         let e = on_box(
@@ -1154,7 +1148,7 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
     // ran desk-shell.lua), or a shell whose program is not installed (`missing`, finding 701), is a
     // desk with no shell, as a plain box without --shell.
     if crate::boxes::slot_shell(&ctx.d) {
-        let desk = meta(&ctx.d, "shell_cmd").0.is_empty();
+        let desk = BoxMeta::load(&ctx.d).shell_cmd.is_empty();
         if desk && run_read(&ctx.d, crate::shellnote::DESK_SHELL_CMD).is_none() {
             use crate::shellnote::{DeskSlot, desk_slot};
             if desk_slot(ctx) == DeskSlot::None {
@@ -1305,7 +1299,7 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
     // The bar's pixels holding still (3 identical captures), so the first shot shows a finished bar.
     // Not for interactive boxes: they are for the user's eyes, and a hidden one draws only at the
     // host's render_unfocused_fps.
-    if meta(&ctx.d, "mode").0 == b"interactive" {
+    if BoxMeta::load(&ctx.d).interactive() {
         return Ok(());
     }
     // (bash's `local geom; geom=$(on_box ... | layer_at ...)` under set -e and pipefail: a failure
@@ -1560,7 +1554,7 @@ fn shell_adopt_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Vec<u8>> {
     if !crate::exit::contains(&t, b"An instance of this configuration is already running") {
         return None;
     }
-    let tree = meta(&ctx.d, "omarchy").0;
+    let tree = BoxMeta::load(&ctx.d).omarchy;
     let cfg = cat!(
         if tree.is_empty() {
             b"/usr/share/omarchy".as_slice()
@@ -1595,7 +1589,7 @@ fn shell_adopt_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Vec<u8>> {
 /// shell_crash_text WHEN HOW: shell_crash's answer in words. A box on a Quickshell build (finding
 /// 358) says which.
 pub fn shell_crash_text(ctx: &Ctx, when: &str, how: &[u8]) -> Vec<u8> {
-    crash_text(&ctx.name, &meta(&ctx.d, "quickshell").0, when, how)
+    crash_text(&ctx.name, &BoxMeta::load(&ctx.d).quickshell, when, how)
 }
 
 fn crash_text(name: &[u8], qs: &[u8], when: &str, how: &[u8]) -> Vec<u8> {
@@ -1846,8 +1840,8 @@ pub fn box_json(ctx: &Ctx, hung: bool, shell_given: &str, gone: &str) -> Vec<u8>
     let orphan = state == "up" && box_orphan(ctx);
     // A desk box's slot (#321, finding 709): its shell_cmd is what the slot runs (the box's own file,
     // shown as `ls` shows it), and shell_from where it came from: config, guess or none.
-    let (slot, from) = if meta(&ctx.d, "shell_cmd").0.is_empty() && crate::boxes::slot_shell(&ctx.d)
-    {
+    let m = crate::boxmeta::BoxMeta::load(&ctx.d);
+    let (slot, from) = if m.shell_cmd.is_empty() && crate::boxes::slot_shell_of(&m) {
         use crate::shellnote::{DeskSlot, desk_slot};
         let from = match desk_slot(ctx) {
             DeskSlot::Config => "config",

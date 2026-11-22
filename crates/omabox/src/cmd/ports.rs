@@ -8,7 +8,8 @@
 //! servers are on the host's own ports, and said so (`host-net`).
 
 use crate::args::{optarg, unexpected, unknown_opt};
-use crate::boxes::{BoxPid, box_pid, box_state, list_names, meta, need_box};
+use crate::boxes::{BoxPid, box_pid, box_state, list_names, need_box};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exit::{Ctx, Res, out};
 use crate::jail::in_jail;
@@ -169,7 +170,8 @@ fn run_with<S: PortsSys>(sys: &S, ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         };
         // Read once, with a fallback (#92): a box going down meanwhile has its dir removed. A box
         // whose box.json is gone already is left out.
-        let (net, _) = meta(&ctx.d, "net");
+        let m = BoxMeta::load(&ctx.d);
+        let net = &m.net;
         if net.is_empty() && !ctx.at("box.json").is_file() {
             continue;
         }
@@ -199,8 +201,7 @@ fn run_with<S: PortsSys>(sys: &S, ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // An isolated box's --allow ports (#286): pasta listens on them in the box, leading to the
         // host's, so a box server on one fails at once. Listed, so that is not a mystery.
         if net == b"isolated" {
-            let (allow, _) = meta(&ctx.d, "allow");
-            for port in comma_words(&allow) {
+            for port in comma_words(&m.allow) {
                 let key = cat!(ctx.name, " ", port);
                 if !shell::is_num(&port) || addrs.get(&key).is_some_and(|a| !a.is_empty()) {
                     continue;
@@ -237,7 +238,7 @@ fn run_with<S: PortsSys>(sys: &S, ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             let Some(pid) = sys.up_pid(&ctx.d) else {
                 continue;
             };
-            if meta(&ctx.d, "net").0 != b"connected" {
+            if BoxMeta::load(&ctx.d).net != b"connected" {
                 continue;
             }
             let mut own = HashMap::new();

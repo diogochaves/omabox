@@ -4,7 +4,8 @@
 //! for a main screen away, finding 234 for NVIDIA's labwc output).
 
 use crate::args::{optarg, unknown_opt};
-use crate::boxes::{box_alive, box_file, lock_file, meta, need_box};
+use crate::boxes::{box_alive, box_file, lock_file, need_box};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Res, out, say};
@@ -99,7 +100,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         return out(cat!(size_text(&screen, &sc), "\n"));
     }
-    if meta(&ctx.d, "mode").0 != b"headless" {
+    if !BoxMeta::load(&ctx.d).headless() {
         return Err(ctx.die(cat!(
             "mode: box '",
             ctx.name,
@@ -110,7 +111,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (m, sc) = split_scale(ctx, "mode", &want)?;
     let want = parse_mode(ctx, &m)?;
     // On NVIDIA labwc's output first: the main window, maximized there, follows it (finding 234).
-    if meta(&ctx.d, "wayland_screen").0 == b"true" {
+    if BoxMeta::load(&ctx.d).wayland_screen {
         let Some(parent) = mon::parent_display(ctx) else {
             return Err(ctx.die("mode: no usable parent Wayland display"));
         };

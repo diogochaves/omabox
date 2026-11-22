@@ -5,7 +5,8 @@
 //! desktop did meanwhile (#274: desk_snap before the input, desk_facts and desk_target after). As
 //! bin/omabox's SETTLE_* globals and functions, one struct here.
 
-use crate::boxes::{BoxSys, RealBox, meta, touch};
+use crate::boxes::{BoxSys, RealBox, touch};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::desk::{Target, desk_facts, desk_snap, desk_target_with};
 use crate::exec::{ErrTo, In, Out, on_box, pipe};
@@ -822,13 +823,14 @@ impl Settle {
                     // A hidden interactive box is drawn (finding 90) unless it is older than that
                     // or confirm-close replaced its window; a headless box always draws: no frame
                     // is a Hyprland that stopped answering (#124).
-                    if meta(&ctx.d, "mode").0 != b"interactive" {
+                    let m = BoxMeta::load(&ctx.d);
+                    if !m.interactive() {
                         if hypr_answers_with(sys, ctx, "2")? {
                             cat!("box '", n, "' sent no frame")
                         } else {
                             hung_text_with(sys, ctx, "")?
                         }
-                    } else if meta(&ctx.d, "drawn_hidden").0 != b"true" {
+                    } else if !m.drawn_hidden {
                         cat!(
                             "box '",
                             n,
@@ -845,7 +847,7 @@ impl Settle {
                             "box '",
                             n,
                             "' sent no frame (",
-                            ws_text(&meta(&ctx.d, "workspace").0),
+                            ws_text(&m.workspace),
                             "; ask the user; never switch their workspace or focus)"
                         )
                     }

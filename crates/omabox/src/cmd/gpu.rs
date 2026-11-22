@@ -6,7 +6,8 @@
 //! the headless boxes rendering on a GPU taken down.
 
 use crate::args::{optarg, unknown_opt};
-use crate::boxes::{box_alive, list_names, meta, need_box};
+use crate::boxes::{box_alive, list_names, need_box};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exit::{Ctx, Res, out, say};
 use crate::gpu::{
@@ -240,7 +241,7 @@ fn gpu_on_nvidia(ctx: &Ctx) -> bool {
     if d == b"nvidia" {
         return true;
     }
-    if meta(&ctx.d, "mode").0 != b"interactive" {
+    if !BoxMeta::load(&ctx.d).interactive() {
         return false;
     }
     for p in box_pids(ctx) {
@@ -339,7 +340,7 @@ fn gpu_release(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut names: Vec<Vec<u8>> = Vec::new();
     for n in list_names(ctx, false) {
         select_box(ctx, &n)?;
-        if meta(&ctx.d, "mode").0 != b"headless" || !box_alive(ctx)? {
+        if !BoxMeta::load(&ctx.d).headless() || !box_alive(ctx)? {
             continue;
         }
         // (`node=$(jq ...)`, `on=$(jq ...)`)

@@ -7,7 +7,8 @@
 //! yours (it is on omabox-polkit's command line in the box).
 
 use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
-use crate::boxes::{meta, need_box};
+use crate::boxes::need_box;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::cmd::up_box::BOX_POLKIT;
 use crate::exec::{ExecOpts, Redir, box_exec, pipe, read_all};
@@ -132,7 +133,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
-    if meta(&ctx.d, "polkit").0 != b"true" {
+    if !BoxMeta::load(&ctx.d).polkit {
         return Err(ctx.die(cat!(
             "polkit: box '",
             ctx.name,

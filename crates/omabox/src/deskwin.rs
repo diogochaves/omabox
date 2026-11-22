@@ -6,7 +6,8 @@
 //!
 //! As in mon.rs: a step that fails ends the command the same way in every caller (finding 442).
 
-use crate::boxes::{BoxPid, box_pid, meta};
+use crate::boxes::{BoxPid, box_pid};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, say};
@@ -45,7 +46,7 @@ fn win_pid(ctx: &Ctx) -> Vec<u8> {
 
 /// `$(meta workspace)` through ws_check, 9 when box.json has none.
 fn box_ws(ctx: &Ctx) -> Option<Vec<u8>> {
-    let ws = meta(&ctx.d, "workspace").0;
+    let ws = BoxMeta::load(&ctx.d).workspace;
     ws_check(if ws.is_empty() { b"9" } else { &ws })
 }
 

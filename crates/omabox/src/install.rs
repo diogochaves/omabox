@@ -4,6 +4,7 @@
 //! them (#198).
 
 use crate::boxes::{BoxSys, RealBox};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, muted, say};
 use crate::jail::in_jail;
@@ -1264,7 +1265,8 @@ pub fn hypr_version(ctx: &Ctx) {
 }
 
 fn hypr_version_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) {
-    let own = crate::boxes::meta(&ctx.d, "hyprland").0;
+    let m = BoxMeta::load(&ctx.d);
+    let own = m.hyprland;
     let line = box_first_line(sys, ctx, &[b"timeout", b"6", b"hyprctl", b"version"], 65536);
     if line.is_empty() {
         let o = if own.is_empty() {
@@ -1288,7 +1290,7 @@ fn hypr_version_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) {
             .arg(JQ_INLINE[0]),
     );
     // A --hyprland folder's box runs that folder's hyprctl (#424): nothing to warn of.
-    if own.is_empty() || !crate::boxes::meta(&ctx.d, "hyprctl").0.is_empty() {
+    if own.is_empty() || !m.hyprctl.is_empty() {
         return;
     }
     let a: Vec<Vec<u8>> = [&b"timeout"[..], b"6", b"hyprctl", b"version", b"-j"]
@@ -1330,7 +1332,7 @@ fn qs_version_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) {
     let qs = crate::shellnote::box_qs(ctx);
     let line = box_first_line(sys, ctx, &[b"timeout", b"6", &qs, b"--version"], 4096);
     if line.is_empty() {
-        let own = crate::boxes::meta(&ctx.d, "quickshell").0;
+        let own = BoxMeta::load(&ctx.d).quickshell;
         if !own.is_empty() {
             say(cat!(
                 "box '",

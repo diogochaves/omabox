@@ -4,7 +4,8 @@
 //! Exit 0 either way: silence is an answer, said as such.
 
 use crate::args::{optarg, unknown_opt};
-use crate::boxes::{meta, need_box};
+use crate::boxes::need_box;
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ExecOpts, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Res, out};
@@ -47,7 +48,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
-    if meta(&ctx.d, "audio").0 != b"true" {
+    if !BoxMeta::load(&ctx.d).audio {
         return Err(ctx.die(cat!(
             "audio: box '",
             ctx.name,

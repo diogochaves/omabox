@@ -5,7 +5,8 @@
 //! position and scale (#200, finding 279).
 
 use crate::args::{optarg, unknown_opt, unknown_word};
-use crate::boxes::{box_alive, meta, need_box};
+use crate::boxes::{box_alive, need_box};
+use crate::boxmeta::BoxMeta;
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Res, out, say};
@@ -108,7 +109,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
-    if meta(&ctx.d, "mode").0 != b"headless" {
+    if !BoxMeta::load(&ctx.d).headless() {
         return Err(ctx.die(cat!(
             "output: box '",
             ctx.name,
@@ -195,7 +196,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     // Cycles: gone for --for (or gaps from 50 ms to 2 s in turn), back, a second to rebuild. The
     // first shell crash ends them: that is what they look for.
-    let sh = meta(&ctx.d, "shell").0 == b"true";
+    let sh = BoxMeta::load(&ctx.d).shell;
     let before = shell_crash_dirs(ctx);
     let before = strip_nl(&before);
     let n0 = cat!(before, "\n")
@@ -534,7 +535,7 @@ fn output_back_one(ctx: &Ctx, rec: &[u8]) -> Res<Vec<u8>> {
             rec
         )));
     }
-    let kind: &[u8] = if meta(&ctx.d, "wayland_screen").0 == b"true" {
+    let kind: &[u8] = if BoxMeta::load(&ctx.d).wayland_screen {
         b"wayland"
     } else {
         b"headless"

@@ -148,7 +148,8 @@ fn protect_notes(ctx: &Ctx, before: &[u8], v: &[u8]) {
         .into_iter()
         .filter(|n| {
             let d = cat!(ctx.boxes, "/", n);
-            crate::boxes::box_state(&d) == "up" && crate::boxes::meta(&d, "net").0 == b"connected"
+            crate::boxes::box_state(&d) == "up"
+                && crate::boxmeta::BoxMeta::load(&d).net == b"connected"
         })
         .collect();
     if !up.is_empty() {

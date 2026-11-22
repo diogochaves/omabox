@@ -3,6 +3,7 @@
 //! `--help`, the relay and the broker.
 mod args;
 mod boxes;
+mod boxmeta;
 mod broker_side;
 mod bwrap;
 mod cmd;
