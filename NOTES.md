@@ -15417,7 +15417,6 @@ from them.
     t_omarchy_tree (the box lock held by `flock`: restart-shell exit 0, restarted, the record said
     not written, well under 60 s); t_throwaway_term (a TERM while run's own down runs: run ends, its
     box gone).
-
 758. **Only a linked plugin's own link is the box's view; the guard's update hand-off reads whole
     words; `log` drops colours; the gone line asks box.json** (2026-11-22, the review's third round).
     **Links into a mount:** 756 kept any link in the box HOME whose target was at or under what the
