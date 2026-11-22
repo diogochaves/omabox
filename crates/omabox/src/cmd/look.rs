@@ -674,8 +674,7 @@ fn plain(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     need_box(ctx)?;
     let name = ctx.name.clone();
     let name = name.as_slice();
-    let mut problems: Vec<Vec<u8>> = Vec::new();
-    let mut notes: Vec<Vec<u8>> = Vec::new();
+    let mut l = Look::new(None);
     let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name];
     if let Some(o) = &o_file {
         sh.extend([b"-o".as_slice(), o]);
@@ -684,7 +683,7 @@ fn plain(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let shot = if r.ok {
         last_line(&r.out)
     } else {
-        problems.push(cat!("shot: ", shell::subst(&r.err)));
+        l.problem(cat!("shot: ", shell::subst(&r.err)));
         None
     };
     // Its windows, the active one first; that one's text, where its toolkit gives any.
@@ -729,7 +728,7 @@ fn plain(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         for (id, st) in m {
             let state = st.get("state").and_then(Value::as_str).unwrap_or("unknown");
             if state != "loaded" && state != "hosted" {
-                problems.push(format!("plugin {id}: {state}").into_bytes());
+                l.problem(format!("plugin {id}: {state}").into_bytes());
             }
             plugins.push(format!("{id} {state}"));
             ids.push(id.clone());
@@ -737,44 +736,32 @@ fn plain(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     if let Some(st) = me.get("shell_state").and_then(Value::as_str) {
         if !matches!(st, "running" | "none" | "") {
-            problems.push(format!("the box's shell is {st} (omabox restart-shell)").into_bytes());
+            l.problem(format!("the box's shell is {st} (omabox restart-shell)").into_bytes());
         }
     }
     // What was logged since the last look.
     let old = mark_read(ctx);
     let now = mark_now(ctx);
-    problems.extend(new_problems(ctx, name, &old, &now, &ids));
+    l.problems.extend(new_problems(ctx, name, &old, &now, &ids));
     mark_write(ctx, &now);
     let n = wins.len().to_string();
-    let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
+    l.head("screenshot", shot.as_deref().unwrap_or(b"none"));
     let wl = lines
         .iter()
         .fold(n.into_bytes(), |acc, l| cat!(acc, "\n  ", l));
-    head.push(("windows", &wl));
+    l.head("windows", wl);
     if let Some(t) = &text {
-        head.push(("text", t));
+        l.head("text", t);
     }
-    let pl = plugins.join(", ").into_bytes();
     if !plugins.is_empty() {
-        head.push(("plugins", &pl));
+        l.head("plugins", plugins.join(", "));
     }
-    head.push(("box", name));
+    l.head("box", name);
     if wins.is_empty() && plugins.is_empty() {
-        notes.push(b"no window is open in the box".to_vec());
+        l.note(b"no window is open in the box".to_vec());
     }
-    let mut rep = report(&head, &problems, &notes, None, None);
-    // (said as new once there was a look before: one seen then is not gone, only not repeated)
-    if old.is_some() {
-        if let Some(at) = rep.windows(10).position(|w| w == b"\nproblems:") {
-            rep.splice(at + 1..at + 1, b"new ".iter().copied());
-        }
-    }
-    out(rep)?;
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(Exit(1))
-    }
+    l.new = old.is_some();
+    l.finish()
 }
 
 /// How many windows a plain look lists.
@@ -1155,10 +1142,9 @@ pub fn console_problems(lines: &[Vec<u8>]) -> Vec<Vec<u8>> {
 }
 
 fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
-    let mut problems: Vec<Vec<u8>> = Vec::new();
-    let mut notes: Vec<Vec<u8>> = Vec::new();
+    let mut l = Look::new(a.keep.then_some(name));
     let mut sheet = None;
-    start(ctx, a, name, me, &[], &mut problems)?;
+    start(ctx, a, name, me, &[], &mut l)?;
     // The program, a job of the box's: its log is its output.
     // In a box that was up: the same program still running from the last look is stopped first, and
     // its window is the job's, else one that was not there before it (never another program's).
@@ -1183,10 +1169,10 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     if !r.ok {
         // One that ended at once ran: its end and its output are the report.
         if let Some((end, log)) = ended_at_once(&r.err) {
-            problems.push(cat!("it ", end, ", before opening a window"));
+            l.problem(cat!("it ", end, ", before opening a window"));
             let output = job_log(&log);
-            problems.extend(problem_lines(&output));
-            notes.extend(look_exit_notes(
+            l.problems.extend(problem_lines(&output));
+            l.notes.extend(look_exit_notes(
                 &end,
                 cwd.as_ref(),
                 a.own,
@@ -1194,14 +1180,9 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
                 &a.cmd,
                 &output,
             ));
-            out(report(
-                &[("screenshot", b"none")],
-                &problems,
-                &notes,
-                Some(&output),
-                a.keep.then_some(name),
-            ))?;
-            return Err(Exit(1));
+            l.head("screenshot", b"none");
+            l.output = Some(output);
+            return l.finish();
         }
         let _ = std::io::Write::write_all(&mut std::io::stderr(), &r.err);
         return Err(ctx.die("look: the program could not be started in the box"));
@@ -1241,11 +1222,12 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
                     " (--timeout for a slower one)"
                 ),
             };
-            problems.push(why);
+            l.problem(why);
             // A script not executable (126) or named without ./ (127): the look that runs it (#471).
             if let Some(e) = &ended {
                 let tail = job_log(&log);
-                notes.extend(look_exit_notes(e, cwd.as_ref(), a.own, name, &a.cmd, &tail));
+                l.notes
+                    .extend(look_exit_notes(e, cwd.as_ref(), a.own, name, &a.cmd, &tail));
             }
         }
         Some(w) => {
@@ -1300,7 +1282,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
                     }
                     if let Some(k) = k {
                         if let Ok(r) = k.join() {
-                            keys_done(r, &mut problems);
+                            keys_done(r, &mut l.problems);
                         }
                     }
                 });
@@ -1312,27 +1294,27 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
                 match contact_sheet(&paths, a.shots.min(4), &out_s) {
                     Ok(p) => sheet = Some(p),
                     Err(why) => {
-                        notes.push(cat!(
+                        l.note(cat!(
                             "no contact sheet (",
                             why,
                             "): the shots are each named in order"
                         ));
                         for (n, p) in paths.iter().enumerate() {
-                            notes.push(cat!(format!("shot {}: ", n + 1), p));
+                            l.note(cat!(format!("shot {}: ", n + 1), p));
                         }
                     }
                 }
             } else {
                 if !a.keys.is_empty() {
                     let r = ob(&keys);
-                    keys_done(r, &mut problems);
+                    keys_done(r, &mut l.problems);
                 }
                 if let Some(d) = &a.after {
                     ob(&[b"wait", b"--json", b"for", d]);
                 }
                 let r = ob(&still);
                 if r.code == 124 && !a.page {
-                    notes.push(b"still changing after 5s: the shot is of a moving window".to_vec());
+                    l.note(b"still changing after 5s: the shot is of a moving window".to_vec());
                 }
                 let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name, b"--window", sel];
                 if let Some(o) = &a.out {
@@ -1342,7 +1324,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
                 if r.ok {
                     shot = last_line(&r.out);
                 } else {
-                    problems.push(cat!("shot: ", shell::subst(&r.err)));
+                    l.problem(cat!("shot: ", shell::subst(&r.err)));
                 }
             }
             let s = |k: &str| w.get(k).and_then(Value::as_str).unwrap_or("").to_string();
@@ -1360,7 +1342,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             // Ended meanwhile (a crash after its first frame).
             if pid.is_some() && job_pid(name, &log).is_none() {
                 if let Some(e) = pid.and_then(|p| job_end(name, Some(p))) {
-                    problems.push(cat!("it ", e, " after opening its window"));
+                    l.problem(cat!("it ", e, " after opening its window"));
                 }
             }
         }
@@ -1368,7 +1350,7 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     // In a box that stays up the program does too: said, with what stops it.
     if a.own {
         if let Some(p) = pid.filter(|_| job_pid(name, &log).is_some()) {
-            notes.push(cat!(
+            l.note(cat!(
                 "left running in the box: omabox stop -b ",
                 name,
                 " ",
@@ -1379,48 +1361,27 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     let mut output = job_log(&log);
     if a.page {
         let c = console_lines(&output);
-        problems.extend(console_problems(&c));
+        l.problems.extend(console_problems(&c));
         output = c.iter().flat_map(|l| cat!(l, "\n")).collect();
     } else {
-        problems.extend(problem_lines(&output));
+        l.problems.extend(problem_lines(&output));
     }
-    let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
+    l.head("screenshot", shot.as_deref().unwrap_or(b"none"));
     if let Some(sh) = &sheet {
-        head.push(("sheet", sh));
+        l.head("sheet", sh);
     }
     if !window_line.is_empty() {
-        head.push(("window", &window_line));
+        l.head("window", &window_line);
     }
-    if a.own {
-        head.push(("box", name));
-        // (what this look reported is not new to the next one)
-        mark_write(ctx, &mark_now(ctx));
-    }
-    out(report(
-        &head,
-        &problems,
-        &notes,
-        Some(&output),
-        a.keep.then_some(name),
-    ))?;
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(Exit(1))
-    }
+    l.own_box(ctx, a.own, name);
+    l.output = Some(output);
+    l.finish()
 }
 
 /// up NAME for a look: its own process, its errors the caller's; --owner and no idle limit unless
 /// the box is kept; EXTRA (a plugin's --plugin DIR) before the caller's UP OPTIONS. Its warnings are
 /// problems.
-fn start(
-    ctx: &Ctx,
-    a: &App,
-    name: &[u8],
-    me: u32,
-    extra: &[&[u8]],
-    problems: &mut Vec<Vec<u8>>,
-) -> Res<Vec<u8>> {
+fn start(ctx: &Ctx, a: &App, name: &[u8], me: u32, extra: &[&[u8]], l: &mut Look) -> Res<Vec<u8>> {
     if a.own {
         return Ok(Vec::new());
     }
@@ -1436,7 +1397,7 @@ fn start(
         let _ = std::io::Write::write_all(&mut std::io::stderr(), &r.err);
         return Err(ctx.die("look: the box did not start"));
     }
-    warnings(&r.err, problems);
+    warnings(&r.err, &mut l.problems);
     Ok(r.err)
 }
 
@@ -1731,9 +1692,8 @@ fn plugin(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 }
 
 fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) -> Res<()> {
-    let mut problems: Vec<Vec<u8>> = Vec::new();
-    let mut notes: Vec<Vec<u8>> = Vec::new();
-    start(ctx, a, name, me, &[b"--plugin", dir], &mut problems)?;
+    let mut l = Look::new(a.keep.then_some(name));
+    start(ctx, a, name, me, &[b"--plugin", dir], &mut l)?;
     // Its state, as ls --json has it.
     let status = || -> Value {
         let ls: Value = serde_json::from_slice(&ob(&[b"ls", b"--json"]).out).unwrap_or(Value::Null);
@@ -1767,7 +1727,7 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
                 "' could not be given the plugin (look --fresh for a box of its own)"
             )));
         }
-        warnings(&r.err, &mut problems);
+        warnings(&r.err, &mut l.problems);
     }
     let st = status();
     let f = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
@@ -1784,11 +1744,11 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
         line = cat!(line, ", in ", f("host"), "'s layout");
     }
     if state != "loaded" && state != "hosted" {
-        problems.push(cat!("plugin ", id, ": ", state.as_str()));
+        l.problem(cat!("plugin ", id, ": ", state.as_str()));
     }
     let still: [&[u8]; 6] = [b"wait", b"-b", name, b"--timeout", b"5s", b"still"];
     if ob(&still).code == 124 {
-        notes.push(b"still changing after 5s: the shot is of a moving screen".to_vec());
+        l.note(b"still changing after 5s: the shot is of a moving screen".to_vec());
     }
     // The bar's strip, from what Hyprland reserves for it; the whole screen when nothing is.
     let g = bar_strip(&ob(&[b"hyprctl", b"-b", name, b"-j", b"monitors"]).out);
@@ -1796,7 +1756,7 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     if let Some(g) = &g {
         sh.extend([b"-g".as_slice(), g.as_bytes()]);
     } else {
-        notes.push(b"no bar reserves an edge: the shot is the whole screen".to_vec());
+        l.note(b"no bar reserves an edge: the shot is the whole screen".to_vec());
     }
     if let Some(o) = &a.out {
         sh.extend([b"-o".as_slice(), o]);
@@ -1805,7 +1765,7 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     let shot = if r.ok {
         last_line(&r.out)
     } else {
-        problems.push(cat!("shot: ", shell::subst(&r.err)));
+        l.problem(cat!("shot: ", shell::subst(&r.err)));
         None
     };
     // What the widget shows (#467): the bar's text items in its slot, from the shell's own geometry
@@ -1826,12 +1786,12 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     let on_bar = matches!(wt, Ok(WidgetText::Shown(..) | WidgetText::Hidden));
     let text = match wt {
         Err(why) => {
-            notes.push(cat!("the bar's text could not be read: ", why));
+            l.note(cat!("the bar's text could not be read: ", why));
             b"unknown".to_vec()
         }
         Ok(WidgetText::Shown(t, cut)) => {
             if cut {
-                notes.push(
+                l.note(
                     b"part of the widget's text is cut off (outside the bar, or clipped): the shot shows only some of it"
                         .to_vec(),
                 );
@@ -1839,14 +1799,14 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
             text_line(&t, PANEL_TEXT_MAX)
         }
         Ok(WidgetText::Hidden) => {
-            notes.push(cat!(
+            l.note(cat!(
                 id,
                 " is in the bar's layout but shows nothing now (hidden, or no width)"
             ));
             b"none".to_vec()
         }
         Ok(WidgetText::Absent) => {
-            notes.push(cat!(
+            l.note(cat!(
                 id,
                 " has no slot in the bar's layout (off the bar, or placed by another plugin): its text is not read"
             ));
@@ -1871,7 +1831,7 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
         ]);
         if !r.ok {
             let said = cat!(shell::subst(&r.err), shell::subst(&r.out));
-            problems.push(summon_problem(id, &said, on_bar, a.own.then_some(name)));
+            l.problem(summon_problem(id, &said, on_bar, a.own.then_some(name)));
         }
         ob(&still);
         // Its text: the layers the summon mapped (Omarchy's panels are layers of their own), else
@@ -1899,12 +1859,12 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
         }
         if items.is_empty() {
             for why in unread {
-                notes.push(cat!("the panel's text could not be read: ", why));
+                l.note(cat!("the panel's text could not be read: ", why));
             }
         }
         panel_text = Some(text_line(&items, PANEL_TEXT_MAX));
         if a.own {
-            notes.push(b"its panel is left open in the box".to_vec());
+            l.note(b"its panel is left open in the box".to_vec());
         }
         let out_p = a.out.as_ref().map(|o| suffixed(o, "panel"));
         let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name];
@@ -1915,7 +1875,7 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
         panel = if r.ok {
             last_line(&r.out)
         } else {
-            problems.push(cat!("shot: ", shell::subst(&r.err)));
+            l.problem(cat!("shot: ", shell::subst(&r.err)));
             None
         };
     }
@@ -1924,38 +1884,23 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     let log = ob(&[b"log", b"-b", name, b"shell", b"-n", b"all", b"--full"]);
     // (summon's failure is a warning in the shell's log, its exit 0: said what it means, #478)
     for w in plugin_warnings(&crate::plugins::shell_warnings_of(&log.out), id) {
-        problems.push(if crate::exit::contains(&w, b"no live bar widget") {
+        l.problem(if crate::exit::contains(&w, b"no live bar widget") {
             summon_problem(id, &w, on_bar, a.own.then_some(name))
         } else {
             w
         });
     }
-    let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
+    l.head("screenshot", shot.as_deref().unwrap_or(b"none"));
     if let Some(p) = &panel {
-        head.push(("panel", p));
+        l.head("panel", p);
     }
-    head.push(("plugin", &line));
-    head.push(("text", &text));
+    l.head("plugin", &line);
+    l.head("text", &text);
     if let Some(t) = &panel_text {
-        head.push(("panel text", t));
+        l.head("panel text", t);
     }
-    if a.own {
-        head.push(("box", name));
-        // (what this look reported is not new to the next one)
-        mark_write(ctx, &mark_now(ctx));
-    }
-    out(report(
-        &head,
-        &problems,
-        &notes,
-        None,
-        a.keep.then_some(name),
-    ))?;
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(Exit(1))
-    }
+    l.own_box(ctx, a.own, name);
+    l.finish()
 }
 
 /// The terminal look theme opens: the theme's 16 colours, as text and as blocks, on its background.
@@ -1996,8 +1941,7 @@ fn theme(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 }
 
 fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], me: u32) -> Res<()> {
-    let mut problems: Vec<Vec<u8>> = Vec::new();
-    let mut notes: Vec<Vec<u8>> = Vec::new();
+    let mut l = Look::new(a.keep.then_some(name));
     // Live from DIR (--theme-dir), applied before the session starts (--theme, by its folder's name);
     // an installed one by its NAME, checked by up itself (its notes).
     let tname = match dir {
@@ -2008,7 +1952,7 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
         Some(d) => vec![b"--theme-dir", d, b"--theme", &tname],
         None => vec![b"--theme", &tname],
     };
-    let up_err = start(ctx, a, name, me, &extra, &mut problems)?;
+    let up_err = start(ctx, a, name, me, &extra, &mut l)?;
     // In a box that was up: the theme set there, as `omarchy-theme-set` does on a desk, and said (the
     // box stays on it). A folder is live only in a box started with it (--theme-dir): any other box
     // would show an installed theme of that name, or none.
@@ -2053,7 +1997,7 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
                 "'"
             )));
         }
-        notes.push(cat!(
+        l.note(cat!(
             "the box is on theme ",
             tname,
             " from now on",
@@ -2080,7 +2024,7 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
     }
     let still: [&[u8]; 6] = [b"wait", b"-b", name, b"--timeout", b"8s", b"still"];
     if ob(&still).code == 124 {
-        notes.push(
+        l.note(
             b"still changing after 8s (an intro video?): the shot is of a moving screen".to_vec(),
         );
     }
@@ -2092,7 +2036,7 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
     let shot = if r.ok {
         last_line(&r.out)
     } else {
-        problems.push(cat!("shot: ", shell::subst(&r.err)));
+        l.problem(cat!("shot: ", shell::subst(&r.err)));
         None
     };
     // A terminal with its palette: the colours a theme is mostly looked at for.
@@ -2146,7 +2090,7 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
         let r = ob(&sh);
         term = if r.ok { last_line(&r.out) } else { None };
     } else {
-        notes.push(b"no terminal shot: foot did not open in the box".to_vec());
+        l.note(b"no terminal shot: foot did not open in the box".to_vec());
     }
     // The theme's checks (#462), on this box's screen.
     let mon: Value =
@@ -2164,20 +2108,20 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
         (1920, 1080)
     };
     match dir {
-        Some(d) => problems.extend(
+        Some(d) => l.problems.extend(
             crate::theme_check::check(d, screen)
                 .into_iter()
                 .map(String::into_bytes),
         ),
         None if a.own => {
             // An installed theme's checks, as up makes them for --theme NAME.
-            problems.extend(
+            l.problems.extend(
                 crate::theme_check::check_layered(&own_named, screen)
                     .into_iter()
                     .map(String::into_bytes),
             );
         }
-        None => problems.extend(theme_notes(&up_err)),
+        None => l.problems.extend(theme_notes(&up_err)),
     }
     // The palette terminal is the look's own: gone from a box that stays up.
     if a.own {
@@ -2185,28 +2129,13 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
             ob(&[b"stop", b"-b", name, &pid]);
         }
     }
-    let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
+    l.head("screenshot", shot.as_deref().unwrap_or(b"none"));
     if let Some(t) = &term {
-        head.push(("terminal", t));
+        l.head("terminal", t);
     }
-    head.push(("theme", &tname));
-    if a.own {
-        head.push(("box", name));
-        // (what this look reported is not new to the next one)
-        mark_write(ctx, &mark_now(ctx));
-    }
-    out(report(
-        &head,
-        &problems,
-        &notes,
-        None,
-        a.keep.then_some(name),
-    ))?;
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(Exit(1))
-    }
+    l.head("theme", &tname);
+    l.own_box(ctx, a.own, name);
+    l.finish()
 }
 
 /// A problem's LINE cut to WIDTH characters as cut_line cuts it, except the commands it ends with: a
@@ -2301,6 +2230,83 @@ pub fn report(
     // the shell's warnings, a step's error): every control character but newline and tab, and every
     // byte that is no UTF-8, as `?` (S7). The report itself has none of its own.
     crate::term::plain_cap(&r, usize::MAX)
+}
+
+/// One look's report as each kind gathers it: its HEAD lines in order, the problems, the notes, the
+/// program's output (none: no such part) and the box it keeps; `finish` prints it through `report`
+/// and ends with 1 when it found a problem.
+struct Look {
+    head: Vec<(&'static str, Vec<u8>)>,
+    problems: Vec<Vec<u8>>,
+    notes: Vec<Vec<u8>>,
+    output: Option<Vec<u8>>,
+    kept: Option<Vec<u8>>,
+    /// (plain's, after a look before: its problems said as new; one seen then is not gone, only not
+    /// repeated)
+    new: bool,
+}
+
+impl Look {
+    /// A look whose box is KEPT (--keep-box's name), or none.
+    fn new(kept: Option<&[u8]>) -> Self {
+        Look {
+            head: Vec::new(),
+            problems: Vec::new(),
+            notes: Vec::new(),
+            output: None,
+            kept: kept.map(<[u8]>::to_vec),
+            new: false,
+        }
+    }
+
+    fn head(&mut self, k: &'static str, v: impl AsRef<[u8]>) {
+        self.head.push((k, v.as_ref().to_vec()));
+    }
+
+    fn problem(&mut self, p: Vec<u8>) {
+        self.problems.push(p);
+    }
+
+    fn note(&mut self, n: Vec<u8>) {
+        self.notes.push(n);
+    }
+
+    /// In a box that was up (OWN): its name, and the mark that what this look reported is not new
+    /// to the next one.
+    fn own_box(&mut self, ctx: &Ctx, own: bool, name: &[u8]) {
+        if own {
+            self.head("box", name);
+            mark_write(ctx, &mark_now(ctx));
+        }
+    }
+
+    /// The report's bytes, as `report` makes them (plain on the terminal, S7).
+    fn text(&self) -> Vec<u8> {
+        let head: Vec<(&str, &[u8])> = self.head.iter().map(|(k, v)| (*k, v.as_slice())).collect();
+        let mut rep = report(
+            &head,
+            &self.problems,
+            &self.notes,
+            self.output.as_deref(),
+            self.kept.as_deref(),
+        );
+        if self.new {
+            if let Some(at) = rep.windows(10).position(|w| w == b"\nproblems:") {
+                rep.splice(at + 1..at + 1, b"new ".iter().copied());
+            }
+        }
+        rep
+    }
+
+    /// The report on stdout; exit 0 with no problem, 1 with any.
+    fn finish(self) -> Res<()> {
+        out(self.text())?;
+        if self.problems.is_empty() {
+            Ok(())
+        } else {
+            Err(Exit(1))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2906,5 +2912,37 @@ mod tests {
             r.ends_with("  l40\nbox: b kept (omabox -b b ...; omabox down b)\n"),
             "{r}"
         );
+    }
+
+    /// A Look's report is `report`'s, its parts in the order they were given; a plain look after
+    /// one before says its problems as new.
+    #[test]
+    fn a_look_is_its_report() {
+        let mut l = Look::new(Some(b"b"));
+        l.head("screenshot", b"none");
+        l.head("window", b"t\x1b]52;c;x\x07");
+        l.problem(b"one".to_vec());
+        l.note(b"two".to_vec());
+        l.output = Some(b"out\n".to_vec());
+        assert_eq!(
+            l.text(),
+            report(
+                &[("screenshot", b"none"), ("window", b"t\x1b]52;c;x\x07")],
+                &[b"one".to_vec()],
+                &[b"two".to_vec()],
+                Some(b"out\n"),
+                Some(b"b"),
+            )
+        );
+        l.new = true;
+        assert!(
+            String::from_utf8(l.text())
+                .unwrap()
+                .contains("?]52;c;x?\nnew problems:\n  one\n")
+        );
+        let mut l = Look::new(None);
+        l.new = true;
+        l.head("box", b"b");
+        assert_eq!(l.text(), b"box: b\nnew problems: none\n");
     }
 }
