@@ -567,12 +567,15 @@ struct LinkPass {
     files: u64,
     bytes: u64,
     left_out: Vec<(Vec<u8>, Vec<u8>)>,
+    /// where a walk stopped short (finding 752), and why
+    cut: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 static LINK_PASS: std::sync::Mutex<LinkPass> = std::sync::Mutex::new(LinkPass {
     files: 0,
     bytes: 0,
     left_out: Vec::new(),
+    cut: None,
 });
 
 /// home_links_out's caps: a picture, any other file, and all it copies in one up (deskcopy's IMAGES, and
@@ -581,9 +584,6 @@ const LINK_IMAGE_MAX: u64 = 32 << 20;
 const LINK_FILE_MAX: u64 = 1 << 20;
 const LINK_FILES: u64 = 64;
 const LINK_BYTES: u64 = 128 << 20;
-/// How deep and how wide home_links_out looks in one copied folder (path --home's own scan's bounds).
-const LINK_DEPTH: usize = 8;
-const LINK_ENTRIES: usize = 20_000;
 
 fn link_pass() -> std::sync::MutexGuard<'static, LinkPass> {
     LINK_PASS
@@ -603,102 +603,97 @@ fn home_links_out(ctx: &Ctx, h: &[u8], d: &Dest) -> Res<()> {
     home_links_under(ctx, h, d.rel())
 }
 
-/// home_links_out over REL in the box HOME H (empty: all of it, for a save restored there).
+/// home_links_out over REL in the box HOME H (empty: all of it, for a save restored there). A link is
+/// judged by where the host resolves it (homelinks, finding 752: into your HOME or a folder that holds
+/// it, or to a file you can write), never by its target's text; a loop leads nowhere and stays. When
+/// the walk stops short (homelinks' caps), seed_home says where.
 fn home_links_under(ctx: &Ctx, h: &[u8], rel: &[u8]) -> Res<()> {
-    use crate::bwrap::lexical;
-    let Ok(own) = std::fs::canonicalize(p(h)) else {
+    let Some(view) = crate::homelinks::View::new(h, &shell::env_or_empty("HOME")) else {
         return Ok(());
     };
-    let own = shell::bytes(&own).to_vec();
-    let home = lexical(&shell::env_or_empty("HOME"));
-    let home_r = readlink_f(&home).unwrap_or_else(|| home.clone());
-    let under =
-        |t: &[u8], r: &[u8]| !r.is_empty() && r != b"/" && (t == r || t.starts_with(&cat!(r, "/")));
     let writable = |t: &[u8]| {
         std::ffi::CString::new(t.to_vec())
             .is_ok_and(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
     };
-    let mut todo: Vec<(Vec<u8>, usize)> = vec![(rel.to_vec(), 0)];
-    let mut seen = 0usize;
-    while let Some((rel, depth)) = todo.pop() {
-        let at = if rel.is_empty() {
-            own.clone()
-        } else {
-            cat!(own, "/", rel)
+    // (each judged against the HOME as it is before any is taken out: `a -> r/home/USER/x` stays out
+    // after `r -> /` is gone)
+    let mut out: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
+    let cut = crate::homelinks::walk_links::<()>(&view.own, rel, |r, _| {
+        let e = cat!(view.own, "/", r);
+        let Some(to) = crate::homelinks::resolve(&e) else {
+            return Ok(());
         };
-        let Ok(rd) = std::fs::read_dir(p(&at)) else {
+        if view.inside(&to) || !(view.leads_home(&to) || writable(&to)) {
+            return Ok(());
+        }
+        let t = std::fs::canonicalize(p(&e))
+            .ok()
+            .map(|t| shell::bytes(&t).to_vec());
+        out.push((r.to_vec(), t));
+        Ok(())
+    })
+    .unwrap_or(None);
+    for (r, t) in out {
+        let r = r.as_slice();
+        let e = cat!(view.own, "/", r);
+        let why = match &t {
+            None => {
+                let raw = std::fs::read_link(p(&e))
+                    .map_or_else(|_| Vec::new(), |raw| shell::bytes(&raw).to_vec());
+                Some(cat!("it leads to ", raw, ", which is not there"))
+            }
+            Some(t) => link_copy_why(t, &view.home, &view.home_r),
+        };
+        let Some(dest) = Dest::new(r) else {
             continue;
         };
-        let mut names: Vec<Vec<u8>> = rd
-            .flatten()
-            .map(|e| shell::bytes(std::path::Path::new(&e.file_name())).to_vec())
-            .collect();
-        names.sort();
-        for name in names {
-            seen += 1;
-            if seen > LINK_ENTRIES {
-                return Ok(());
-            }
-            let r = if rel.is_empty() {
-                name
+        if why.is_none()
+            && let Some(t) = &t
+            && copy_file_in(ctx, h, &Src::desk_box(t.clone()), &dest)?
+        {
+            // (the copy is checked as the desk copy checks its own: no window between the check
+            // and the copy, finding 701)
+            let to = dest.on(h);
+            let image = crate::deskcopy::is_image(&to);
+            let max = if image { LINK_IMAGE_MAX } else { LINK_FILE_MAX };
+            let real = std::fs::metadata(p(&to)).map_or(u64::MAX, |m| m.len());
+            let refused = if image {
+                None
             } else {
-                cat!(rel, "/", name)
+                desk_content_refused(&to)
             };
-            let e = cat!(own, "/", r);
-            let Ok(m) = std::fs::symlink_metadata(p(&e)) else {
-                continue;
+            let after = match refused {
+                Some(w) => Some(cat!("it leads to ", t, ": ", w)),
+                None if real > max => Some(cat!(
+                    "it leads to ",
+                    t,
+                    ", over ",
+                    (max >> 20).to_string(),
+                    " MiB"
+                )),
+                None => None,
             };
-            if m.is_dir() {
-                if depth < LINK_DEPTH {
-                    todo.push((r, depth + 1));
-                }
-                continue;
-            }
-            if !m.file_type().is_symlink() {
-                continue;
-            }
-            let Ok(raw) = std::fs::read_link(p(&e)) else {
-                continue;
-            };
-            let raw = shell::bytes(&raw).to_vec();
-            let to = if raw.starts_with(b"/") {
-                lexical(&raw)
-            } else {
-                lexical(&cat!(at, "/", raw))
-            };
-            let t = std::fs::canonicalize(p(&e))
-                .ok()
-                .map(|t| shell::bytes(&t).to_vec());
-            if under(&to, &own) || t.as_deref().is_some_and(|t| under(t, &own)) {
-                continue;
-            }
-            let mine = |x: &[u8]| under(x, &home) || under(x, &home_r);
-            let out = mine(&to) || t.as_deref().is_some_and(|t| mine(t) || writable(t));
-            if !out {
-                continue;
-            }
-            let why = match &t {
-                None => Some(cat!("it leads to ", raw, ", which is not there")),
-                Some(t) => link_copy_why(t, &home, &home_r),
-            };
-            let Some(dest) = Dest::new(&r) else { continue };
-            if why.is_none()
-                && let Some(t) = &t
-                && copy_file_in(ctx, h, &Src::desk_box(t.clone()), &dest)?
-            {
+            let Some(after) = after else {
                 let mut lp = link_pass();
                 lp.files += 1;
-                lp.bytes += std::fs::metadata(p(t)).map_or(0, |m| m.len());
+                lp.bytes += real;
                 continue;
-            }
-            // (copy_file_in may have taken the link already)
-            if std::fs::symlink_metadata(p(&e)).is_ok() {
-                std::fs::remove_file(p(&e))
-                    .map_err(|er| failed(ctx, &cat!("remove the link ", e), &er))?;
-            }
-            let why = why.unwrap_or_else(|| b"it could not be copied".to_vec());
-            link_pass().left_out.push((r, why));
+            };
+            std::fs::remove_file(p(&to))
+                .map_err(|er| failed(ctx, &cat!("remove the copy ", to), &er))?;
+            link_pass().left_out.push((r.to_vec(), after));
+            continue;
         }
+        // (copy_file_in may have taken the link already)
+        if std::fs::symlink_metadata(p(&e)).is_ok() {
+            std::fs::remove_file(p(&e))
+                .map_err(|er| failed(ctx, &cat!("remove the link ", e), &er))?;
+        }
+        let why = why.unwrap_or_else(|| b"it could not be copied".to_vec());
+        link_pass().left_out.push((r.to_vec(), why));
+    }
+    if let Some(c) = cut {
+        link_pass().cut.get_or_insert((c.rel, c.why));
     }
     Ok(())
 }
@@ -749,7 +744,20 @@ fn link_copy_why(t: &[u8], home: &[u8], home_r: &[u8]) -> Option<Vec<u8>> {
 /// What home_links_out left out in this up, said once (#448): the first by its path in the box
 /// HOME, and how many more.
 fn home_links_note() {
-    let left = std::mem::take(&mut link_pass().left_out);
+    let (left, cut) = {
+        let mut lp = link_pass();
+        (std::mem::take(&mut lp.left_out), lp.cut.take())
+    };
+    // (finding 752: a walk cut short is said, not passed over)
+    if let Some((at, why)) = cut {
+        say(cat!(
+            "up: note: the check for links out of the box HOME stopped at ~/",
+            at,
+            " (",
+            why,
+            "): links past it were not checked. `omabox path --home` warns of those into your HOME it finds"
+        ));
+    }
     let Some((first, why)) = left.first() else {
         return;
     };
@@ -1146,9 +1154,17 @@ pub fn seed_extensions(ctx: &Ctx, look: &Look, plan: &SeedPlan, h: &[u8]) -> Res
     };
     let d = Dest::of(".config/omarchy/extensions");
     // (what looks like a key, token or password stays on the desk, said by its name: finding 458)
-    let held = extensions_held_back(src.path());
+    let mut held = extensions_held_back(src.path());
     let skip: Vec<Vec<u8>> = held.iter().map(|(r, _)| r.clone()).collect();
     seed_copy(ctx, &src, h, &d, &skip)?;
+    // (and the copy, as the desk copy checks its own: a file rewritten since it was read, finding 752)
+    for (r, why) in extensions_held_back(&d.on(h)) {
+        let f = cat!(d.on(h), "/", r);
+        std::fs::remove_file(p(&f)).map_err(|e| failed(ctx, &cat!("remove ", f), &e))?;
+        if !held.iter().any(|(x, _)| *x == r) {
+            held.push((r, why));
+        }
+    }
     let held_shown = if src.path()
         == cat!(shell::env_or_empty("HOME"), "/.config/omarchy/extensions").as_slice()
     {
@@ -1797,7 +1813,8 @@ pub fn seed_blocked<'a>(
 /// links on the way cleared first (finding 168). A folder's contents go into DEST, whose links are
 /// never written through (finding 228: tar replaces a link at a folder it makes and unlinks one at a
 /// file). Read from inside SRC (its folder, for a file) held open and checked to be the path checked
-/// when the option was read (finding 257): a part swapped for a link since is not followed.
+/// when the option was read (finding 257): a part swapped for a link since is not followed. Its links
+/// then go through home_links_out's pass (finding 752).
 pub fn seed_copy_in(ctx: &Ctx, h: &[u8], src: &Src, d: &Dest) -> Res<()> {
     home_unlink(ctx, h, d)?;
     let to = d.on(h);
@@ -1832,7 +1849,10 @@ pub fn seed_copy_in(ctx: &Ctx, h: &[u8], src: &Src, d: &Dest) -> Res<()> {
             " in the box (gone, or not what it was when checked)"
         )));
     }
-    Ok(())
+    // (a folder's links came as they were: the same pass as seed_copy's, said at once; finding 752)
+    let r = home_links_under(ctx, h, d.rel());
+    home_links_note();
+    r
 }
 
 /// `cp -a --reflink=auto -- NAME TO`, run from the folder FD holds.
@@ -1977,10 +1997,12 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
         files: 0,
         bytes: 0,
         left_out: Vec::new(),
+        cut: None,
     };
-    // A save made before #448 may hold links into your HOME: the same pass over all of it, but a
-    // desk box's, whose links to your HOME's path lead to its own files in the box.
-    let r = if plan.from && !plan.desk_box {
+    // A save made before #448, or with a link planted in it, may hold links into your HOME: the same
+    // pass over all of it, whatever box it is restored in (finding 752: an Omarchy box's save in a
+    // desk box too; omabox's own links in a desk HOME are relative, finding 710, and stay).
+    let r = if plan.from {
         home_links_under(ctx, h, b"").and_then(|()| seed_home_look(ctx, plan, h))
     } else {
         seed_home_look(ctx, plan, h)
@@ -2530,6 +2552,9 @@ mod tests {
 
     #[test]
     fn seed_copies_as_bash() {
+        let _l = LINK_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !crate::exec::tools_or_skip("seed_copies_as_bash", &["tar"]) {
             return;
         }
@@ -2754,8 +2779,13 @@ mod tests {
             "seed: the other order"
         );
         assert!(
-            sc_is_ln(&h("b2/home/.cfg/f")),
-            "...the link in place of the file, as copied"
+            !sc_is_ln(&h("b2/home/.cfg/f")) && sc_read(&h("b2/home/.cfg/f")) == "victim",
+            "...the link's file (one you can write) copied in its place by the link pass (finding 752)"
+        );
+        assert_eq!(
+            sc_read(&format!("{v}/file")),
+            "victim",
+            "...the file untouched"
         );
         let said = seed_said("b4", &[format!("{sd}/B"), format!("{sd}/A")]);
         assert!(
@@ -2833,6 +2863,9 @@ mod tests {
         if !crate::exec::tools_or_skip("seed_copy_links_out", &["tar", "grep"]) {
             return;
         }
+        let _l = LINK_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let s = sc_tmp("links-out");
         let c = sc_cx();
         let h = |x: &str| format!("{s}/{x}");
@@ -2853,6 +2886,7 @@ mod tests {
             files: 0,
             bytes: 0,
             left_out: Vec::new(),
+            cut: None,
         };
         seed_copy(
             &c,
@@ -2896,6 +2930,76 @@ mod tests {
             "plain words",
             "...its targets untouched"
         );
+        std::fs::remove_dir_all(&s).unwrap();
+    }
+
+    /// (the link pass's tests share up's one list)
+    static LINK_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Finding 752: a restored HOME's link to `/`, one through it by a relative target that reads as
+    /// inside the box HOME, and a dangling one into your HOME go; a relative chain inside and a loop
+    /// stay; a walk cut short is said. A --seed folder's links get the same pass.
+    #[test]
+    fn home_links_by_resolution() {
+        if !crate::exec::tools_or_skip("home_links_by_resolution", &["tar"]) {
+            return;
+        }
+        let _l = LINK_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let s = sc_tmp("links-resolve");
+        let c = sc_cx();
+        let h = |x: &str| format!("{s}/{x}");
+        let home = shell::env_or_empty("HOME");
+        let home = String::from_utf8_lossy(&home).into_owned();
+        let none = format!("{home}/.omabox-test-none-{}", std::process::id());
+        sc_mk(&h("box/x/y"));
+        sc_ln("/", &h("box/r"));
+        // (named after r: judged before r is taken out)
+        sc_ln(&format!("r{none}"), &h("box/z"));
+        sc_ln(&none, &h("box/x/abs"));
+        sc_ln("y/../y", &h("box/x/in"));
+        sc_ln("x/in", &h("box/chain"));
+        sc_ln("loop2", &h("box/loop1"));
+        sc_ln("loop1", &h("box/loop2"));
+        *link_pass() = LinkPass {
+            files: 0,
+            bytes: 0,
+            left_out: Vec::new(),
+            cut: None,
+        };
+        home_links_under(&c, h("box").as_bytes(), b"").unwrap();
+        assert!(!sc_there(&h("box/r")), "a link to /: gone");
+        assert!(!sc_there(&h("box/z")), "through r -> /: gone");
+        assert!(!sc_there(&h("box/x/abs")), "dangling into your HOME: gone");
+        assert!(sc_is_ln(&h("box/chain")), "a chain inside: kept");
+        assert!(sc_is_ln(&h("box/loop1")), "a loop: kept");
+        link_pass().cut = Some((b"code/app".to_vec(), b"after 200000 entries".to_vec()));
+        let (_, said) = crate::exit::heard(home_links_note);
+        assert!(
+            said.contains("stopped at ~/code/app (after 200000 entries)")
+                && said.contains("is a link out of the box HOME and is left out"),
+            "{said}"
+        );
+        // --seed of a folder holding such links
+        sc_mk(&h("src/conf"));
+        sc_put(&h("src/conf/ok"), "fine");
+        sc_ln(&none, &h("src/conf/creds"));
+        sc_ln("/", &h("src/root"));
+        seed_copy_in(
+            &c,
+            h("box").as_bytes(),
+            &sc_src(&h("src")),
+            &sc_dest("proj"),
+        )
+        .unwrap();
+        assert!(
+            !sc_there(&h("box/proj/conf/creds")),
+            "--seed: into your HOME, gone"
+        );
+        assert!(!sc_there(&h("box/proj/root")), "--seed: to /, gone");
+        assert_eq!(sc_read(&h("box/proj/conf/ok")), "fine");
+        assert!(sc_is_ln(&h("src/root")), "...the source untouched");
         std::fs::remove_dir_all(&s).unwrap();
     }
 
@@ -3221,6 +3325,9 @@ mod tests {
 
     #[test]
     fn copies_keep_links_and_leave_hidden_out() {
+        let _l = LINK_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !crate::exec::tools_or_skip("copies_keep_links_and_leave_hidden_out", &["tar"]) {
             return;
         }
@@ -3594,6 +3701,9 @@ mod tests {
     /// user's Omarchy look (no skel, bar, theme, terminal configs), whatever the desk has.
     #[test]
     fn plain_home_has_no_omarchy() {
+        let _l = LINK_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !crate::exec::tools_or_skip("plain_home_has_no_omarchy", &["git"]) {
             return;
         }
