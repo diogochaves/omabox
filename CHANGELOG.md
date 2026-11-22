@@ -5,6 +5,43 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+Security and hardening from a review of the whole codebase. A process in a box could make omabox
+read a host file through a link in the box HOME, overwrite one through a link at a recording's
+name, or keep a link that leads into your real HOME across a save; a desk box could get a key set
+in Hyprland's own env syntax. All fixed, each with a test that plants the link, FIFO or key. Update.
+
+### Security
+- **What a box writes in its HOME is read by an fd opened beneath it, never through a link**:
+  `look`'s job log, the plugin check, the shell's warnings, `run`'s failed-runs copy and every other
+  read of a box HOME file; a FIFO there no longer hangs `up`, `plugin add` or `restart-shell`.
+- **`record` writes its video, marks, captions and contact sheet through no link**, as `shot` does;
+  so does `look --shots`' contact sheet.
+- **A desk box's content check catches Hyprland's env forms** (`hl.env("API_KEY", ...)`,
+  `env = NAME,VALUE`) and more token shapes (Google, Hugging Face, Groq, xAI, Stripe, npm, URLs
+  with a password); more credential stores stay out of every box (`.npmrc`, `.pypirc`, cargo,
+  rclone, Vault, sops/age, Copilot, Cursor and others).
+- **Links in a box HOME are judged by where they resolve**: a link to `/` or `/home`, or one through
+  it, is removed; every restored save and every `--seed` folder is checked; a check cut short says
+  where it stopped.
+- **The ai-jail broker trusts only an ai-jail in its own namespaces**, and only folders the jail
+  really has; `peek` connects through the box's socket link, as `omabox env` does.
+
+### Changed
+- **The agent guard refuses Omarchy's theme, wallpaper and font commands** (`omarchy-theme-set`,
+  `omarchy-theme-bg-set`, `omarchy-theme-bg-next`, `omarchy-font-set`), which changed your real
+  desktop without a display; the docs say exactly what the guard stops, and what Codex's does not.
+  `guard on codex` makes the guard's runtime file itself.
+- **`look`'s report is said plain**: a window title's or page's terminal escapes come out as `?`.
+- **Every edit of a box's `box.json` holds the box's lock** and writes a temp file of its own, so
+  concurrent commands no longer lose an edit or leave broken JSON.
+- **Error lines**: a box that is not up, a program that cannot run, and io errors are said in
+  omabox's words with the command that fixes them, never Rust's "(os error N)"
+  ([#480](https://github.com/diogochaves/omabox/issues/480): a path no box may mount is no longer
+  offered as a copy).
+- **A TERM to `run` or `look` reaches the box they are starting**, which goes down at once.
+- **`check run --json` survives a tab in `--base` or `-o`**; an `--only` glob holding a comma is no
+  longer split.
+
 ## 1.5.1 — 2026-11-21
 
 `omabox shot --layer SEL`: a shot of the bar, a panel or a menu by the selector `tree`, `click` and
