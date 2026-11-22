@@ -1,0 +1,3 @@
+#!/bin/sh
+# The guard's omarchy-theme-bg-set: omarchy-theme-set beside it says why, under this name.
+OMABOX_GUARD_AS=omarchy-theme-bg-set exec "${0%/*}/omarchy-theme-set" "$@"

@@ -19346,8 +19346,9 @@ t_unit_host_session() {
 # per change, a link stays a link, a file that is not JSON is left alone.
 t_unit_guard_settings() {
   local h=$TMP/gh s out
-  mkdir -p "$h/.claude"; s=$h/.claude/settings.json
-  g() { HOME=$h "$CLI" guard "$@" 2>&1; }
+  mkdir -p "$h/.claude" "$h/rt"; s=$h/.claude/settings.json
+  # (a runtime dir of its own: `guard on codex` makes the guard's file there, finding 750)
+  g() { HOME=$h XDG_RUNTIME_DIR=$h/rt "$CLI" guard "$@" 2>&1; }
   # #152: Codex's config is read with the system's python, not PATH's (Omarchy's mise puts its shims
   # first, and one can fail: an untrusted config once the XDG dirs change).
   local ph=$TMP/gh-py; mkdir -p "$ph/.codex" "$TMP/badpy"
@@ -19404,7 +19405,7 @@ t_unit_guard_settings() {
   # gh_hooks: the three texts, a line between the last two, after `guard on` and `guard on codex`.
   gh_hooks() {
     local hh; hh=$(mktemp -d "$TMP/gh.XXXX")
-    HOME=$hh "$co/bin/omabox" guard on >/dev/null 2>&1; HOME=$hh "$co/bin/omabox" guard on codex >/dev/null 2>&1
+    HOME=$hh XDG_RUNTIME_DIR=$hh "$co/bin/omabox" guard on >/dev/null 2>&1; HOME=$hh XDG_RUNTIME_DIR=$hh "$co/bin/omabox" guard on codex >/dev/null 2>&1
     local q='.hooks.SessionStart[].hooks[] | select(.command | contains("omabox-guard")) | .command'
     jq -r "$q" "$hh/.claude/settings.json"; printf '\0'
     jq -r "$q" "$hh/.codex/hooks.json"; printf '\0'
@@ -19484,14 +19485,26 @@ $chook")"
   mkdir -p "$h/.codex"; printf 'model = "x"\n\n[features]\nhooks = true\n' > "$c"; orig=$(cat "$c"; echo .)
   local hj=$h/.codex/hooks.json
   jq -n '{hooks: {SessionStart: [{hooks: [{type: "command", command: "herdr.sh session", timeout: 10}]}]}}' > "$hj"
-  out=$(g on codex)
+  rm -f "$h/rt/omabox-guard"
+  # (from a shell outside the guard: under it, any omabox command makes the file)
+  out=$(WAYLAND_DISPLAY=wayland-750 g on codex)
   check_eq "Codex: on sets the variables for its commands" omabox-guard \
     "$(python3 -c 'import tomllib, sys; print(tomllib.load(open(sys.argv[1], "rb"))["shell_environment_policy"]["set"]["WAYLAND_DISPLAY"])' "$c")"
   check_eq "...adds its hook (issue #51), keeping the others" "herdr.sh session|omabox" \
     "$(jq -r '[.hooks.SessionStart[].hooks[].command | if contains("omabox-guard") then "omabox" else . end] | join("|")' "$hj")"
   check_match "...says Codex asks you to trust it" "trust its new hook once: /hooks" "$out"
+  # Finding 750: until that trust nothing of Codex's makes the guard's file, which keeps Omarchy 4.5's
+  # omarchy-shell off the user's shell (403): on makes it, says so, and says what Codex lacks.
+  check "...makes the guard's file in the runtime dir (finding 750)" test -f "$h/rt/omabox-guard"
+  check_eq "...an empty one" 0 "$(stat -c %s "$h/rt/omabox-guard" 2>/dev/null)"
+  check_match "...says it was made, and that a reboot takes it" "the guard's file in your runtime dir \(made now\) is not made again after a reboot" "$out"
+  check_match "...and that Codex has no stand-ins, naming guard exec" "Codex gets the guard's variables only.*omarchy restart shell.*hyprctl -i.*omabox guard exec -- codex" "$(tr '\n' ' ' <<<"$out")"
   check_match "...and reads on" "Codex .*: on$" "$(g | grep '^Codex')"
   check_fails "...on again: no trust to ask for" grep -q trust <<<"$(g on codex)"
+  rm -f "$h/rt/omabox-guard"; ln -s "$h/rt/elsewhere" "$h/rt/omabox-guard"
+  check_match "...a link in its place is left, and said (no file made through it)" "could not make the guard's file" "$(WAYLAND_DISPLAY=wayland-750 g on codex)"
+  check_fails "...nothing made where it points" test -e "$h/rt/elsewhere"
+  rm -f "$h/rt/omabox-guard"
   jq '.hooks.SessionStart |= map(select(any(.hooks[]; .command | contains("omabox-guard")) | not))' "$hj" > "$hj.new" && mv "$hj.new" "$hj"
   check_match "Codex: the block without its hook (an install from before #51) reads outdated" "Codex .*: outdated \(its hook in .*hooks.json: off\)" "$(g | grep '^Codex')"
   g on codex >/dev/null
@@ -19539,8 +19552,8 @@ $chook")"
 # merged there by hand, as omabox once told people to, read as on.
 t_unit_guard_codex_merge() {
   local h=$TMP/gcm c keys out orig
-  c=$h/.codex/config.toml; mkdir -p "$h/.codex"
-  g() { HOME=$h CODEX_HOME=$h/.codex "$CLI" guard "$@" 2>&1; }
+  c=$h/.codex/config.toml; mkdir -p "$h/.codex" "$h/rt"
+  g() { HOME=$h CODEX_HOME=$h/.codex XDG_RUNTIME_DIR=$h/rt "$CLI" guard "$@" 2>&1; }
   st() { g | sed -n 's/^Codex (.*): //p'; }
   val() { python3 -c 'import tomllib, sys; p = tomllib.load(open(sys.argv[1], "rb"))["shell_environment_policy"]; print(" ".join(str(p["set"].get(k)) for k in sys.argv[2:]))' "$c" "$@"; }
   : > "$c"; g on codex >/dev/null   # the guard's keys, as a table of its own gives them
@@ -19735,6 +19748,8 @@ rc=4$" "$ho"
   check_fails "...not the guard's" grep -q share/guard <<<"$open"
   check_fails "host: the real quickshell and qs, not the guard's (#141)" grep -q share/guard \
     <<<"$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v quickshell; command -v qs' 2>/dev/null)"
+  check_fails "host: not the guard's omarchy-theme-set, -bg-set, -bg-next or font-set (finding 750)" grep -q share/guard \
+    <<<"$("${GUARDED[@]}" "$CLI" host -- sh -c 'for n in omarchy-theme-set omarchy-theme-bg-set omarchy-theme-bg-next omarchy-font-set; do command -v $n; done; echo ok' 2>/dev/null)"
   check_fails "...nor another checkout's" grep -q elsewhere <<<"$("${GUARDED[@]}" PATH="/elsewhere/share/guard:$PATH" BROWSER=/elsewhere/share/guard/xdg-open "$CLI" host -- sh -c 'echo "$PATH ${BROWSER-}"' 2>/dev/null)"
   # (...nor one written with a trailing slash, up and run leaving it out too: exec.rs
   # caller_path_as_bash; #324 wave 6-suite.)
@@ -19835,6 +19850,57 @@ PY
   "${env[@]}" WAYLAND_DISPLAY=wayland-1 "$CLI" --version >/dev/null 2>&1 || true
   check_fails "...not one outside it" test -e "$d/rt/omabox-guard"
   kill "$L" 2>/dev/null; wait "$L" 2>/dev/null || true
+}
+
+# Finding 750: Omarchy's theme, wallpaper and font commands need no display. omarchy-theme-set has no
+# `set -e` and only its hyprctl and omarchy-shell calls fail under the guard, so from a guarded shell it
+# still switched the user's real theme, terminals, GTK and browser colours. The guard's stand-ins refuse
+# them by name while the display names no socket, saying what to run instead; stubs after them on PATH
+# stand in for the real ones (a refusal that failed reaches a stub, never Omarchy's). In a runtime dir
+# and HOME of its own.
+t_unit_guard_theme_set() {
+  local d=$TMP/g750 n o=${OMABOX_TEST_OMARCHY:-/usr/share/omarchy}
+  mkdir -p "$d/rt" "$d/home" "$d/stub"; chmod 700 "$d/rt"
+  for n in omarchy-theme-set omarchy-theme-bg-set omarchy-theme-bg-next omarchy-font-set omarchy-shell; do
+    printf '#!/bin/sh\necho "real %s reached: $*" >> %s/stub.log\n' "$n" "$d" > "$d/stub/$n"; chmod +x "$d/stub/$n"
+  done
+  local env=(env HOME="$d/home" XDG_RUNTIME_DIR="$d/rt" PATH="$d/stub:$PATH")
+  local gx=("${env[@]}" "$CLI" guard exec --)
+  # The control: Omarchy's own omarchy-theme-bg-set, by its path, under the guard: the wallpaper link in
+  # HOME changes all the same (its omarchy-shell call is best effort), which is why the stand-in is there.
+  if [ -x "$o/bin/omarchy-theme-bg-set" ]; then
+    mkdir -p "$d/home/.local/state/omarchy/current"; : > "$d/pic.png"
+    "${gx[@]}" "$o/bin/omarchy-theme-bg-set" "$d/pic.png" >/dev/null 2>&1 || true
+    check_eq "control: Omarchy's omarchy-theme-bg-set by its path, under the guard, still repoints the wallpaper" \
+      "$d/pic.png" "$(readlink "$d/home/.local/state/omarchy/current/background")"
+  else
+    skip "control: omarchy-theme-bg-set under the guard" "no $o/bin/omarchy-theme-bg-set"
+  fi
+  : > "$d/stub.log"
+  for n in omarchy-theme-set omarchy-theme-bg-set omarchy-theme-bg-next omarchy-font-set; do
+    check_eq "guard exec: $n is the guard's" "$ROOT/share/guard/$n" "$("${gx[@]}" sh -c "command -v $n")"
+    check_eq "...refused with exit 4" 4 "$("${gx[@]}" "$n" x >/dev/null 2>&1; echo $?)"
+  done
+  check_match "...omarchy-theme-set: says what it would change and names the box's ways, and host's" \
+    "^omabox guard: not running omarchy-theme-set here: it switches the user's real theme .*For a box: omabox up --theme lupine, or omabox look theme lupine; in a box that is up: omabox run -- omarchy-theme-set lupine\. Only when the user asked for their real desktop: omabox host -- omarchy-theme-set lupine$" \
+    "$("${gx[@]}" omarchy-theme-set lupine 2>&1)"
+  check_match "...omarchy-theme-bg-next: the wallpaper, under its own name" \
+    "^omabox guard: not running omarchy-theme-bg-next here: it changes the user's real wallpaper .*For a box: omabox run -- omarchy-theme-bg-next\. Only when .*omabox host -- omarchy-theme-bg-next$" \
+    "$("${gx[@]}" omarchy-theme-bg-next 2>&1)"
+  check_match "...omarchy-font-set: the fonts" "^omabox guard: not running omarchy-font-set here: it rewrites the user's real font settings .*omabox run -- omarchy-font-set Hack" \
+    "$("${gx[@]}" omarchy-font-set Hack 2>&1)"
+  # (one of Omarchy's commands that runs it by name, as omarchy-theme-refresh does: named)
+  printf '#!/bin/bash\nomarchy-theme-set "Tokyo Night"\n' > "$d/stub/omarchy-theme-refresh"; chmod +x "$d/stub/omarchy-theme-refresh"
+  check_match "...run by another Omarchy command: that one named too" "^omabox guard: not running omarchy-theme-set \(run by omarchy-theme-refresh\) here" \
+    "$("${gx[@]}" omarchy-theme-refresh 2>&1)"
+  check_eq "...nothing got past them" "" "$(cat "$d/stub.log")"
+  # A display that is a socket (one named on purpose) goes on to the next one on PATH, words whole and
+  # the guard's own variable gone.
+  python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$d/rt/wayland-1"
+  check_eq "a display that is a socket goes on to the next omarchy-font-set, its words whole" "real omarchy-font-set reached: Jet Brains" \
+    "$("${env[@]}" WAYLAND_DISPLAY=wayland-1 "$ROOT/share/guard/omarchy-font-set" "Jet Brains" >/dev/null 2>&1; cat "$d/stub.log")"
+  check_eq "...without the name it was run under" unset \
+    "$("${env[@]}" WAYLAND_DISPLAY=wayland-1 PATH="$ROOT/share/guard:$TMP/g750env:$PATH" sh -c 'mkdir -p "$1"; printf "#!/bin/sh\necho \${OMABOX_GUARD_AS-unset}\n" > "$1/omarchy-theme-bg-set"; chmod +x "$1/omarchy-theme-bg-set"; omarchy-theme-bg-set x' _ "$TMP/g750env")"
 }
 
 # Under the guard, with a box standing in for the host (finding 26): box commands work, an app run
@@ -24928,7 +24994,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch t_unit_bench_checks
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_guard_theme_set t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch t_unit_bench_checks
   t_unit_aquamarine t_unit_aq_runpath t_unit_theme_check t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_shot_layer t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
