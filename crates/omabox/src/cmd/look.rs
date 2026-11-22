@@ -368,9 +368,8 @@ struct App {
     /// plugin's DIR, and --open.
     dir: Option<Vec<u8>>,
     open: bool,
-    /// page: its shots over --after (a contact sheet), and whether this is a page.
+    /// page: its shots over --after (a contact sheet).
     shots: u32,
-    page: bool,
     /// -b NAME; --fresh (a throwaway box even when one is up); and what pick found: a box that was
     /// up already, the caller's own, where nothing is started or taken down.
     boxname: Option<Vec<u8>>,
@@ -1053,7 +1052,6 @@ fn app(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 /// (the box's missing system bus and the like) is not shown. A file's folder is bound read-only.
 fn page(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut a = parse(ctx, args, "page")?;
-    a.page = true;
     let what = a.dir.take().unwrap_or_default();
     let mut bind = None;
     let url = if Re::new("^(https?|file)://").is_some_and(|r| r.is_match(&what)) {
@@ -1099,7 +1097,7 @@ fn page(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
         }
     }
-    let r = app_in(ctx, &a, &name, me);
+    let r = page_in(ctx, &a, &name, me);
     if let Some(g) = guard {
         g.finish();
     }
@@ -1143,19 +1141,83 @@ pub fn console_problems(lines: &[Vec<u8>]) -> Vec<Vec<u8>> {
 
 fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     let mut l = Look::new(a.keep.then_some(name));
-    let mut sheet = None;
     start(ctx, a, name, me, &[], &mut l)?;
-    // The program, a job of the box's: its log is its output.
-    // In a box that was up: the same program still running from the last look is stopped first, and
-    // its window is the job's, else one that was not there before it (never another program's).
+    let Some(j) = launch(ctx, a, name, &mut l, || {})? else {
+        return l.finish();
+    };
+    let mut seen = Seen::default();
+    if let Some(w) = &j.win {
+        let sel = address(w).as_bytes();
+        settle(a, name, sel, b"5s");
+        seen.shot = one_shot(a, name, sel, b"5s", true, &mut l);
+        seen.window = window_end(name, &j, w, false, &mut l);
+    }
+    job_report(ctx, a, name, &j, l, seen, |output, l| {
+        l.problems.extend(problem_lines(&output));
+        output
+    })
+}
+
+/// A page's look: as an app's, its earlier Chromium stopped first in a box that was up, the keys
+/// sent while --shots' shots are taken (a contact sheet), and its console (console_lines) as its
+/// output, the console's errors as its problems.
+fn page_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
+    let mut l = Look::new(a.keep.then_some(name));
+    start(ctx, a, name, me, &[], &mut l)?;
+    let prep = || {
+        if a.own {
+            stop_pages(name);
+        }
+    };
+    let Some(j) = launch(ctx, a, name, &mut l, prep)? else {
+        return l.finish();
+    };
+    let mut seen = Seen::default();
+    if let Some(w) = &j.win {
+        let sel = address(w).as_bytes();
+        settle(a, name, sel, b"2s");
+        if a.shots > 1 {
+            (seen.shot, seen.sheet) = sheet_shots(a, name, sel, &mut l);
+        } else {
+            seen.shot = one_shot(a, name, sel, b"2s", false, &mut l);
+        }
+        seen.window = window_end(name, &j, w, true, &mut l);
+    }
+    job_report(ctx, a, name, &j, l, seen, |output, l| {
+        let c = console_lines(&output);
+        l.problems.extend(console_problems(&c));
+        c.iter().flat_map(|l| cat!(l, "\n")).collect()
+    })
+}
+
+/// A look's program, a job of the box's: its log (its output), its pid while `jobs` listed it, and
+/// its window (None: it ended, or none came within --timeout, which the look's problems say).
+struct Job {
+    log: Vec<u8>,
+    pid: Option<i64>,
+    win: Option<Value>,
+}
+
+/// What a look saw of its program's window: its shot, a page's contact sheet, its line.
+#[derive(Default)]
+struct Seen {
+    shot: Option<Vec<u8>>,
+    sheet: Option<Vec<u8>>,
+    window: Vec<u8>,
+}
+
+/// The program, a job of the box's (its log is its output), then its window, or its end, or the
+/// timeout. In a box that was up: the same program still running from the last look is stopped first
+/// (--replace; PREP runs before that start, after the windows there were read), and its window is the
+/// job's, else one that was not there before it (never another program's). None: it ended at once,
+/// and L holds its report.
+fn launch(ctx: &Ctx, a: &App, name: &[u8], l: &mut Look, prep: impl FnOnce()) -> Res<Option<Job>> {
     let before: Vec<String> = if a.own {
         addresses(&ob(&[b"windows", b"-b", name, b"--json"]).out)
     } else {
         Vec::new()
     };
-    if a.own && a.page {
-        stop_pages(name);
-    }
+    prep();
     let mut run: Vec<&[u8]> = vec![b"run", b"-b", name, b"-d", b"-q", b"--print-log"];
     if a.own {
         run.push(b"--replace");
@@ -1182,14 +1244,13 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             ));
             l.head("screenshot", b"none");
             l.output = Some(output);
-            return l.finish();
+            return Ok(None);
         }
         let _ = std::io::Write::write_all(&mut std::io::stderr(), &r.err);
         return Err(ctx.die("look: the program could not be started in the box"));
     }
     let log = shell::subst(&r.out);
     let pid = job_pid(name, &log);
-    // Its window, or its end, or the timeout.
     let start = Instant::now();
     let mut win = None;
     // (one that ended before its pid was read, as a script does at once, has ended: its end now,
@@ -1210,146 +1271,191 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
         }
         std::thread::sleep(Duration::from_millis(150));
     }
-    let mut shot = None;
-    let mut window_line = Vec::new();
-    match &win {
-        None => {
-            let why = match &ended {
-                Some(e) => cat!("it ", e, " before opening a window"),
-                None => cat!(
-                    "no window within ",
-                    format!("{:.0}s", a.timeout.as_secs_f64()),
-                    " (--timeout for a slower one)"
-                ),
-            };
-            l.problem(why);
-            // A script not executable (126) or named without ./ (127): the look that runs it (#471).
-            if let Some(e) = &ended {
-                let tail = job_log(&log);
-                l.notes
-                    .extend(look_exit_notes(e, cwd.as_ref(), a.own, name, &a.cmd, &tail));
-            }
-        }
-        Some(w) => {
-            let addr = w.get("address").and_then(Value::as_str).unwrap_or("active");
-            let sel = addr.as_bytes();
-            // (its first frames drawn before a key: a shell still starting drops what it is sent)
-            let wait_for: &[u8] = if a.page { b"2s" } else { b"5s" };
-            let still = [
-                b"wait".as_slice(),
-                b"-b",
-                name,
-                b"--timeout",
-                wait_for,
-                b"still",
-                b"--window",
-                sel,
-            ];
-            if !a.keys.is_empty() {
-                ob(&still);
-            }
-            let mut keys: Vec<&[u8]> = vec![b"keys", b"-b", name, b"--window", sel, b"--wait"];
-            keys.extend(a.keys.iter().map(Vec::as_slice));
-            let keys_done = |r: Ran, problems: &mut Vec<Vec<u8>>| {
-                if !r.ok && r.code != 124 {
-                    problems.push(cat!("keys: ", shell::subst(&r.err)));
-                }
-                warnings(&r.err, problems);
-            };
-            if a.shots > 1 {
-                // A contact sheet: the keys (a held one too) sent while N shots are taken over
-                // --after (2 s by default), on real time and real frames.
-                let span = a
-                    .after
-                    .as_deref()
-                    .and_then(ms_duration)
-                    .and_then(|v| u64::try_from(v).ok())
-                    .unwrap_or(2000);
-                let step = Duration::from_millis(span / u64::from(a.shots));
-                let mut paths: Vec<Vec<u8>> = Vec::new();
-                std::thread::scope(|sc| {
-                    let k = (!a.keys.is_empty()).then(|| sc.spawn(|| ob(&keys)));
-                    for n in 0..a.shots {
-                        std::thread::sleep(step);
-                        let o = a.out.as_ref().map(|o| suffixed(o, &format!("{}", n + 1)));
-                        let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name, b"--window", sel];
-                        if let Some(o) = &o {
-                            sh.extend([b"-o".as_slice(), o]);
-                        }
-                        if let Some(p) = last_line(&ob(&sh).out) {
-                            paths.push(p);
-                        }
-                    }
-                    if let Some(k) = k {
-                        if let Ok(r) = k.join() {
-                            keys_done(r, &mut l.problems);
-                        }
-                    }
-                });
-                shot = paths.last().cloned();
-                let out_s = a.out.as_ref().map_or_else(
-                    || cat!(shot.clone().unwrap_or_default(), "-sheet.png"),
-                    |o| suffixed(o, "sheet"),
-                );
-                match contact_sheet(&paths, a.shots.min(4), &out_s) {
-                    Ok(p) => sheet = Some(p),
-                    Err(why) => {
-                        l.note(cat!(
-                            "no contact sheet (",
-                            why,
-                            "): the shots are each named in order"
-                        ));
-                        for (n, p) in paths.iter().enumerate() {
-                            l.note(cat!(format!("shot {}: ", n + 1), p));
-                        }
-                    }
-                }
-            } else {
-                if !a.keys.is_empty() {
-                    let r = ob(&keys);
-                    keys_done(r, &mut l.problems);
-                }
-                if let Some(d) = &a.after {
-                    ob(&[b"wait", b"--json", b"for", d]);
-                }
-                let r = ob(&still);
-                if r.code == 124 && !a.page {
-                    l.note(b"still changing after 5s: the shot is of a moving window".to_vec());
-                }
-                let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name, b"--window", sel];
-                if let Some(o) = &a.out {
-                    sh.extend([b"-o".as_slice(), o]);
-                }
-                let r = ob(&sh);
-                if r.ok {
-                    shot = last_line(&r.out);
-                } else {
-                    l.problem(cat!("shot: ", shell::subst(&r.err)));
-                }
-            }
-            let s = |k: &str| w.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-            let size = w
-                .get("size")
-                .and_then(Value::as_array)
-                .map(|v| format!("{}x{}", v[0], v.get(1).unwrap_or(&Value::Null)))
-                .unwrap_or_default();
-            let layout = if w.get("floating").and_then(Value::as_bool) == Some(true) {
-                "floating"
-            } else {
-                "tiled"
-            };
-            window_line = report_window_line(a.page, &s("class"), &s("title"), &size, layout, addr);
-            // Ended meanwhile (a crash after its first frame).
-            if pid.is_some() && job_pid(name, &log).is_none() {
-                if let Some(e) = pid.and_then(|p| job_end(name, Some(p))) {
-                    l.problem(cat!("it ", e, " after opening its window"));
-                }
-            }
+    if win.is_none() {
+        l.problem(match &ended {
+            Some(e) => cat!("it ", e, " before opening a window"),
+            None => cat!(
+                "no window within ",
+                format!("{:.0}s", a.timeout.as_secs_f64()),
+                " (--timeout for a slower one)"
+            ),
+        });
+        // A script not executable (126) or named without ./ (127): the look that runs it (#471).
+        if let Some(e) = &ended {
+            let tail = job_log(&log);
+            l.notes
+                .extend(look_exit_notes(e, cwd.as_ref(), a.own, name, &a.cmd, &tail));
         }
     }
-    // In a box that stays up the program does too: said, with what stops it.
+    Ok(Some(Job { log, pid, win }))
+}
+
+/// A window's selector: its address (`active` without one).
+fn address(w: &Value) -> &str {
+    w.get("address").and_then(Value::as_str).unwrap_or("active")
+}
+
+/// `wait still` on the window SEL, for WAIT at most.
+fn still_cmd<'a>(name: &'a [u8], sel: &'a [u8], wait: &'a [u8]) -> [&'a [u8]; 8] {
+    [
+        b"wait",
+        b"-b",
+        name,
+        b"--timeout",
+        wait,
+        b"still",
+        b"--window",
+        sel,
+    ]
+}
+
+/// Before keys: the window's first frames drawn (a shell still starting drops what it is sent).
+fn settle(a: &App, name: &[u8], sel: &[u8], wait: &[u8]) {
+    if !a.keys.is_empty() {
+        ob(&still_cmd(name, sel, wait));
+    }
+}
+
+/// `keys` with the look's keys to the window SEL.
+fn keys_cmd<'a>(a: &'a App, name: &'a [u8], sel: &'a [u8]) -> Vec<&'a [u8]> {
+    let mut keys: Vec<&[u8]> = vec![b"keys", b"-b", name, b"--window", sel, b"--wait"];
+    keys.extend(a.keys.iter().map(Vec::as_slice));
+    keys
+}
+
+/// How the keys went: a failure but their --wait's timeout is a problem, and their warnings.
+fn keys_done(r: Ran, problems: &mut Vec<Vec<u8>>) {
+    if !r.ok && r.code != 124 {
+        problems.push(cat!("keys: ", shell::subst(&r.err)));
+    }
+    warnings(&r.err, problems);
+}
+
+/// The keys, --after, the window still (for WAIT; MOVING: one still moving said), then its shot.
+fn one_shot(
+    a: &App,
+    name: &[u8],
+    sel: &[u8],
+    wait: &[u8],
+    moving: bool,
+    l: &mut Look,
+) -> Option<Vec<u8>> {
+    if !a.keys.is_empty() {
+        keys_done(ob(&keys_cmd(a, name, sel)), &mut l.problems);
+    }
+    if let Some(d) = &a.after {
+        ob(&[b"wait", b"--json", b"for", d]);
+    }
+    let r = ob(&still_cmd(name, sel, wait));
+    if r.code == 124 && moving {
+        l.note(b"still changing after 5s: the shot is of a moving window".to_vec());
+    }
+    let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name, b"--window", sel];
+    if let Some(o) = &a.out {
+        sh.extend([b"-o".as_slice(), o]);
+    }
+    let r = ob(&sh);
+    if r.ok {
+        last_line(&r.out)
+    } else {
+        l.problem(cat!("shot: ", shell::subst(&r.err)));
+        None
+    }
+}
+
+/// A contact sheet: the keys (a held one too) sent while --shots' shots are taken over --after (2 s
+/// by default), on real time and real frames. The last shot, and the sheet (None: each shot named
+/// in the notes, in order).
+fn sheet_shots(
+    a: &App,
+    name: &[u8],
+    sel: &[u8],
+    l: &mut Look,
+) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let keys = keys_cmd(a, name, sel);
+    let span = a
+        .after
+        .as_deref()
+        .and_then(ms_duration)
+        .and_then(|v| u64::try_from(v).ok())
+        .unwrap_or(2000);
+    let step = Duration::from_millis(span / u64::from(a.shots));
+    let mut paths: Vec<Vec<u8>> = Vec::new();
+    std::thread::scope(|sc| {
+        let k = (!a.keys.is_empty()).then(|| sc.spawn(|| ob(&keys)));
+        for n in 0..a.shots {
+            std::thread::sleep(step);
+            let o = a.out.as_ref().map(|o| suffixed(o, &format!("{}", n + 1)));
+            let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name, b"--window", sel];
+            if let Some(o) = &o {
+                sh.extend([b"-o".as_slice(), o]);
+            }
+            if let Some(p) = last_line(&ob(&sh).out) {
+                paths.push(p);
+            }
+        }
+        if let Some(Ok(r)) = k.map(|k| k.join()) {
+            keys_done(r, &mut l.problems);
+        }
+    });
+    let shot = paths.last().cloned();
+    let out_s = a.out.as_ref().map_or_else(
+        || cat!(shot.clone().unwrap_or_default(), "-sheet.png"),
+        |o| suffixed(o, "sheet"),
+    );
+    match contact_sheet(&paths, a.shots.min(4), &out_s) {
+        Ok(p) => (shot, Some(p)),
+        Err(why) => {
+            l.note(cat!(
+                "no contact sheet (",
+                why,
+                "): the shots are each named in order"
+            ));
+            for (n, p) in paths.iter().enumerate() {
+                l.note(cat!(format!("shot {}: ", n + 1), p));
+            }
+            (shot, None)
+        }
+    }
+}
+
+/// The window W's line (a PAGE's names its selector), and the job's end once it opened (a crash
+/// after its first frame): a problem.
+fn window_end(name: &[u8], j: &Job, w: &Value, page: bool, l: &mut Look) -> Vec<u8> {
+    let s = |k: &str| w.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let size = w
+        .get("size")
+        .and_then(Value::as_array)
+        .map(|v| format!("{}x{}", v[0], v.get(1).unwrap_or(&Value::Null)))
+        .unwrap_or_default();
+    let layout = if w.get("floating").and_then(Value::as_bool) == Some(true) {
+        "floating"
+    } else {
+        "tiled"
+    };
+    let line = report_window_line(page, &s("class"), &s("title"), &size, layout, address(w));
+    if j.pid.is_some() && job_pid(name, &j.log).is_none() {
+        if let Some(e) = j.pid.and_then(|p| job_end(name, Some(p))) {
+            l.problem(cat!("it ", e, " after opening its window"));
+        }
+    }
+    line
+}
+
+/// The end of an app's or a page's look: in a box that stays up the program does too (said, with
+/// what stops it); its log read (job_log), made the report's output by OUTPUT; what was SEEN; the
+/// report.
+fn job_report(
+    ctx: &Ctx,
+    a: &App,
+    name: &[u8],
+    j: &Job,
+    mut l: Look,
+    seen: Seen,
+    output: impl FnOnce(Vec<u8>, &mut Look) -> Vec<u8>,
+) -> Res<()> {
     if a.own {
-        if let Some(p) = pid.filter(|_| job_pid(name, &log).is_some()) {
+        if let Some(p) = j.pid.filter(|_| job_pid(name, &j.log).is_some()) {
             l.note(cat!(
                 "left running in the box: omabox stop -b ",
                 name,
@@ -1358,20 +1464,13 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             ));
         }
     }
-    let mut output = job_log(&log);
-    if a.page {
-        let c = console_lines(&output);
-        l.problems.extend(console_problems(&c));
-        output = c.iter().flat_map(|l| cat!(l, "\n")).collect();
-    } else {
-        l.problems.extend(problem_lines(&output));
-    }
-    l.head("screenshot", shot.as_deref().unwrap_or(b"none"));
-    if let Some(sh) = &sheet {
+    let output = output(job_log(&j.log), &mut l);
+    l.head("screenshot", seen.shot.as_deref().unwrap_or(b"none"));
+    if let Some(sh) = &seen.sheet {
         l.head("sheet", sh);
     }
-    if !window_line.is_empty() {
-        l.head("window", &window_line);
+    if !seen.window.is_empty() {
+        l.head("window", &seen.window);
     }
     l.own_box(ctx, a.own, name);
     l.output = Some(output);
