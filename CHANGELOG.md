@@ -3,7 +3,11 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.6.0 — 2026-11-26
+
+What a night of about twenty agents measuring a shell's animations asked for: a known desk in one
+command, the times of a box's frames, a recording that says which frame each of its frames holds,
+and less noise from `up`.
 
 ### Added
 - **`omabox scene FILE`** (or `-`, on stdin): the windows a JSON file lists, each opened by its
