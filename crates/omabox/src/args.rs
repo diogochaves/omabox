@@ -11,7 +11,7 @@ use crate::shell::strip_nl;
 pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
     match cmd {
         b"up" => Some(concat!(
-            "-b= --box= --json --workspace= --new --confirm-close --no-confirm-close --interactive ",
+            "-b= --box= --json --workspace= --new --confirm-close --no-confirm-close --interactive --scene= ",
             "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
             "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
             "--omarchy= --keep= --stock-bar --stock --clean --desk-shell --systemd --audio --polkit --xwayland ",
@@ -58,8 +58,9 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"windows" | b"jobs" => Some("-b= --box= --json"),
         b"stop" => Some("-b= --box= --all"),
         b"window" => Some(
-            "-b= --box= -w= --window= --active --size= --float --tile --fullscreen? --maximize? --json",
+            "-b= --box= -w= --window= --active --size= --float --tile --fullscreen? --maximize? --pin? --json",
         ),
+        b"scene" => Some("-b= --box= --timeout= --json"),
         b"tree" => Some("-b= --box= -w= --window= --active -l= --layer= --find= --json --all"),
         b"tray" => Some("-b= --box= --json --all --secondary --index="),
         b"pixel" => Some("-b= --box= -w= --window= --active --in= --json"),

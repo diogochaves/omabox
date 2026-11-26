@@ -18,6 +18,7 @@ pub const BOX_CMDS: &[&[u8]] = &[
     b"calibrate",
     b"windows",
     b"window",
+    b"scene",
     b"jobs",
     b"stop",
     b"tree",

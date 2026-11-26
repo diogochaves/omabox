@@ -124,6 +124,8 @@ pub struct Up {
     pub omarchy_given: Vec<u8>,
     pub omarchy_bind: bool,
     pub owner: Vec<u8>,
+    /// --scene FILE (#489): the windows the box starts with, read and checked before any box.
+    pub scene: Option<Vec<crate::cmd::scene::Entry>>,
     pub agent: Vec<u8>,
     pub stock_bar: bool,
     /// --stock (#265): a new Omarchy user's desktop; --clean sets it too (a stock box with freezes).
@@ -262,10 +264,26 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if parse(ctx, args, &mut u)? {
         return Ok(());
     }
-    if !checks(ctx, &mut u)? {
+    // --scene (#489): on the box this up started, or on the one it found up (the same scene
+    // again opens nothing twice). Nothing of it on stdout, which is up's own.
+    let scene = u.scene.take();
+    if checks(ctx, &mut u)? {
+        crate::cmd::up_box::make(ctx, u)?;
+    }
+    let Some(scene) = scene else {
+        return Ok(());
+    };
+    if crate::cmd::scene::apply(ctx, &scene, crate::cmd::scene::TIMEOUT_MS, None)? {
         return Ok(());
     }
-    crate::cmd::up_box::make(ctx, u)
+    say(cat!(
+        "up: box '",
+        ctx.name,
+        "' is up, its scene not as asked (again, once fixed: omabox scene -b ",
+        shell::quote_q(&ctx.name),
+        " FILE)"
+    ));
+    Err(Exit(1))
 }
 
 /// `--hyprland PATH` (or OMABOX_HYPRLAND's PATH) into U: a binary or a folder (install::hypr_target).
@@ -497,6 +515,10 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
                     return Err(ctx.die(cat!("up: --owner is a pid, got ", val)));
                 }
                 u.owner = val;
+            }
+            b"--scene" => {
+                optarg(ctx, a, v)?;
+                u.scene = Some(crate::cmd::scene::load(ctx, "up: --scene", &val)?);
             }
             b"--keep" => {
                 optarg(ctx, a, v)?;

@@ -48,6 +48,7 @@ pub mod reload;
 pub mod restart_shell;
 pub mod run;
 pub mod save;
+pub mod scene;
 pub mod setup;
 pub mod shot;
 pub mod snapshot;

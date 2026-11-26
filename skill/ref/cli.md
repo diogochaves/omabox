@@ -41,7 +41,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 |---|---|
 | `up --json`, `ls --json` | a box (an array of them for `ls`): `name, state, mode, size, scale, created, dir, net, allowed, addrs, idle, plugins, plugin_status, bar, theme, render, monitors, hyprland_version, quickshell_version, omarchy_version, aquamarine, clean, starter, hung, peeking, keys_to_box, shell_state, shell_crashes, orphan` and more |
 | `jobs --json` | an array, oldest first: `pid, age` (seconds), `processes, log, argv` |
-| `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, fullscreenMode, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them; `fullscreen` is true when fullscreen or maximized, `fullscreenMode` says which: `none`, `maximized`, `fullscreen`); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, monitor, certain, span` (`certain` false: a layer spanning the screen, which may take input only where its items are, so it may not cover the window at all; `span` then says how: `screen`, or the edge a full-height or full-width strip is at, `right`, `left`, `top`, `bottom`, else `height` or `width`; null on a certain one) |
+| `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, pinned, fullscreen, fullscreenMode, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them; `fullscreen` is true when fullscreen or maximized, `fullscreenMode` says which: `none`, `maximized`, `fullscreen`); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, monitor, certain, span` (`certain` false: a layer spanning the screen, which may take input only where its items are, so it may not cover the window at all; `span` then says how: `screen`, or the edge a full-height or full-width strip is at, `right`, `left`, `top`, `bottom`, else `height` or `width`; null on a certain one) |
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `tray --json` | an array of items: `id, title, status, category, service, path, menu` (null: none), `item_is_menu, rows` (each `id, label, role, enabled, visible, toggle, checked, rows`); `tray menu --json`: one item |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
@@ -57,6 +57,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `record status --json` | `recording, stopped, monitors, fps, file, audio, started` |
 | `mode --json` | `name, mode, scale` |
 | `window --json` | the window, as an element of `windows --json` |
+| `scene --json` | `ok`, `windows` (the file's order: `name, address, opened` (false: its window was there already), `ok, problem` (null, or what it is instead), `workspace, floating, pinned, at, size`) |
 | `dock --json` | `enabled, position, autohide, monitors` (each `name, workspace, layout, fullscreen, layer` (`at, size`, or null), `state` (shown, tucked, hidden, off, none), `input` (icons, edge, none)) |
 | `monitor list --json` | an array: `name, mode, scale, x, y, workspace` (`dropped` for one `output drop` took) |
 | `gpu --json` | `box, seconds, source, render, percent, engines` and more |

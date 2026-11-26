@@ -162,6 +162,7 @@ fn main() -> ExitCode {
         Some("wait") => Some(cmd::wait::run),
         Some("windows") => Some(cmd::windows::run),
         Some("window") => Some(cmd::window::run),
+        Some("scene") => Some(cmd::scene::run),
         Some("jobs") => Some(cmd::jobs::run),
         Some("stop") => Some(cmd::jobs::stop),
         Some("tray") => Some(cmd::tray::run),
