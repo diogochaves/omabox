@@ -1,6 +1,6 @@
 pkgbase = omabox
 	pkgdesc = Contained, invisible Hyprland desktops where agents run, drive and screenshot apps
-	pkgver = 1.6.0
+	pkgver = 1.6.1
 	pkgrel = 1
 	url = https://github.com/diogochaves/omabox
 	install = omabox.install
@@ -60,7 +60,7 @@ pkgbase = omabox
 	optdepends = base-devel: omabox setup --aquamarine
 	optdepends = github-cli: the opt-in omabox-feedback skill (setup --feedback-skill) files issues with gh
 	optdepends = nftables: protect-ports (host ports no connected box reaches)
-	source = https://github.com/diogochaves/omabox/releases/download/v1.6.0/omabox-1.6.0.tar.gz
-	sha256sums = 3bec7a1eb78a15e41eb880ca179d9d00e1e4ab9984af9e3730280cd0065a69f7
+	source = https://github.com/diogochaves/omabox/releases/download/v1.6.1/omabox-1.6.1.tar.gz
+	sha256sums = d1214e1e5c3660ebb097b11a7a872f55f3b2f4b9de6c5298aedb4d6bc85abf04
 
 pkgname = omabox
