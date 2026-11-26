@@ -44,6 +44,48 @@ const PLACERS_JQ: &str = r#". as $c
 const STATUS_JQ: &str = r#".[$i] = ({state: $s} + (if $h != "" then {host: $h} else {} end) + (if $c != "" then {commit: $c} else {} end) + (if $w != "" then {log: $w} else {} end)
         + (if $v != "" then {validate: $v} else {} end))"#;
 const PLUGIN_STATUS_JQ: &str = ".plugin_status = $s";
+/// The plugins the last check recorded as off the bar.
+const WAS_OFF_JQ: &str = r#"[(.plugin_status // {}) | to_entries[] | select(.value.state == "off the bar") | .key] | join(" ")"#;
+
+/// The note for widgets off the bar that PLACERS ("A or B") may place themselves (#326), one line
+/// for all of IDS (#493: it was one each, 5 to 7 lines on every up and restart-shell of a desk whose
+/// bar hosts its widgets, which agents then filtered out with the notes that matter). In full the
+/// first time; short when every one of IDS was already off the bar at the last check (WAS).
+fn off_bar_note(name: &[u8], placers: &[u8], ids: &[Vec<u8>], was: &[Vec<u8>]) -> Vec<u8> {
+    let list = ids.join(&b", "[..]);
+    let (head, it, one): (Vec<u8>, &str, &[u8]) = match ids {
+        [id] => (cat!("plugin ", id, " is"), "it", id),
+        _ => (
+            cat!(ids.len().to_string(), " plugins (", list, ") are"),
+            "them",
+            b"ID",
+        ),
+    };
+    if ids.iter().all(|i| was.contains(i)) {
+        return cat!(
+            head,
+            " still not in the bar's layout (as said before: fine if ",
+            placers,
+            " places ",
+            it,
+            ")"
+        );
+    }
+    cat!(
+        head,
+        " not in the bar's layout: if ",
+        placers,
+        " places ",
+        it,
+        " itself, ignore this (check with its IPC or a shot); to put ",
+        if ids.len() == 1 { "it" } else { "one" },
+        " there: omabox -b ",
+        name,
+        " run -- omarchy-shell shell putBarWidget ",
+        one,
+        " '{}'"
+    )
+}
 
 /// A plugin a box mounts: its manifest's id and its dir, resolved (bash's "id<TAB>dir").
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -460,6 +502,15 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
     );
     let mut status = b"{}".to_vec();
     let mut bad = false;
+    // Widgets off the bar that a mounted plugin may place itself: (the placers, the widgets) each.
+    let mut off_bar: Vec<(Vec<u8>, Vec<Vec<u8>>)> = Vec::new();
+    // What the last check recorded (up's, an earlier restart-shell's): a note said then is short now.
+    let was_off: Vec<Vec<u8>> = shell::words(
+        &Args::new(&["-r", WAS_OFF_JQ])
+            .arg(&bjs)
+            .run_file(jq::Err::Null)
+            .text(),
+    );
     for id in &id_list {
         let dr = Args::new(&["-r", "--arg", "i"])
             .arg(id)
@@ -564,19 +615,13 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
                     if placers.is_empty() {
                         state = "disabled";
                     } else {
-                        // omabox cannot see a widget another plugin places itself: said, not warned.
+                        // omabox cannot see a widget another plugin places itself: said, not warned,
+                        // once for all of them after the loop (#493).
                         state = "off the bar";
-                        say(cat!(
-                            "plugin ",
-                            id,
-                            " is not in the bar's layout: if ",
-                            placers,
-                            " places it itself, ignore this (check with its IPC or a shot); to put it there: omabox -b ",
-                            ctx.name,
-                            " run -- omarchy-shell shell putBarWidget ",
-                            id,
-                            " '{}'"
-                        ));
+                        match off_bar.iter_mut().find(|(p, _)| *p == placers) {
+                            Some((_, ids)) => ids.push(id.clone()),
+                            None => off_bar.push((placers, vec![id.clone()])),
+                        }
                     }
                 } else {
                     state = "disabled";
@@ -654,6 +699,9 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
             STATUS_JQ.as_bytes(),
         ];
         status = jq::jq(&args, Some(&status), jq::Err::Inherit).text();
+    }
+    for (placers, ids) in &off_bar {
+        say(off_bar_note(&ctx.name, placers, ids, &was_off));
     }
     if bad {
         say(cat!("the shell's log: omabox log -b ", ctx.name, " shell"));
@@ -804,6 +852,29 @@ pub fn theme_folders(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #493: the off-the-bar note is one line for all the widgets, one's words unchanged (#326),
+    /// and short once the last check had already said it of each.
+    #[test]
+    fn off_bar_note_once() {
+        let ids = |l: &[&str]| l.iter().map(|x| x.as_bytes().to_vec()).collect::<Vec<_>>();
+        assert_eq!(
+            off_bar_note(b"b", b"h.d", &ids(&["p.c"]), &[]),
+            b"plugin p.c is not in the bar's layout: if h.d places it itself, ignore this (check with its IPC or a shot); to put it there: omabox -b b run -- omarchy-shell shell putBarWidget p.c '{}'"
+        );
+        assert_eq!(
+            off_bar_note(b"b", b"h.d or h.e", &ids(&["p.a", "p.c"]), &ids(&["p.a"])),
+            b"2 plugins (p.a, p.c) are not in the bar's layout: if h.d or h.e places them itself, ignore this (check with its IPC or a shot); to put one there: omabox -b b run -- omarchy-shell shell putBarWidget ID '{}'"
+        );
+        assert_eq!(
+            off_bar_note(b"b", b"h.d", &ids(&["p.a", "p.c"]), &ids(&["p.c", "x", "p.a"])),
+            b"2 plugins (p.a, p.c) are still not in the bar's layout (as said before: fine if h.d places them)"
+        );
+        assert_eq!(
+            off_bar_note(b"b", b"h.d", &ids(&["p.c"]), &ids(&["p.c"])),
+            b"plugin p.c is still not in the bar's layout (as said before: fine if h.d places it)"
+        );
+    }
 
     /// Finding 754: a validator that is not there, in omabox's words (not "(os error 2)").
     #[test]

@@ -13,7 +13,7 @@ use crate::exec::{ExecOpts, Redir, box_exec, dup_hi, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::jail::in_jail;
 use crate::jq::{self, Args};
-use crate::num::ms_duration;
+use crate::num::{ms_duration, ms_position};
 use crate::recprog as P;
 use crate::select::select_box;
 use crate::shell::{self, strip_nl};
@@ -546,11 +546,12 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<Opts> {
             // A range of the video, a region of it, every frame, the frames where it changes (#260).
             b"--from" | b"--to" => {
                 let t = val(ctx)?;
-                let ms = ms_duration(&t).filter(|&m| m <= 360_000_000).ok_or_else(|| {
+                // (a position, not a duration: 0 is the first frame, #492)
+                let ms = ms_position(&t).filter(|&m| m <= 360_000_000).ok_or_else(|| {
                     ctx.die(cat!(
                         "record: ",
                         a,
-                        " takes a time in the video, like 1.5s or 900ms (a bare number is seconds), got ",
+                        " takes a time in the video, like 0, 1.5s or 900ms (a bare number is seconds), got ",
                         t
                     ))
                 })?;

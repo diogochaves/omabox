@@ -26,7 +26,8 @@ report has `box: NAME` when it was a box that stays. In such a box:
   folder (`look theme DIR`) only in a box started with `--theme-dir DIR`; else refused, naming
   `--fresh`.
 - `look page FILE` only for a file the box has (in a folder it was started with); else refused,
-  naming `--fresh`. The last look's Chromium is stopped first.
+  naming `--fresh`. A `file://` URL is that file, the same rule. The last look's Chromium is
+  stopped first.
 
 `omabox look [-b NAME] [-o FILE]`, no kind: the box as it is now, nothing started or changed.
 
@@ -134,8 +135,12 @@ with yours of the same name copied over it.
 
 `omabox look page FILE|URL [--keys "K..."] [--hold KEY DURATION] [--shots N] [--after 2s] [-o FILE]
 [--keep-box] [UP OPTIONS]` (#463): Chromium in the box on it, an app window with its own profile
-in the box HOME, its sandbox kept (a FILE's folder is bound read-only; an `http://` URL is reached
-as the box's network allows: `--net isolated --allow PORT` for a local server only).
+in the box HOME, its sandbox kept (a FILE's folder is bound read-only, written as a path or a
+`file://` URL, with the `#fragment` or `?query` the page reads: `look page design/x.html#state=2`;
+a page that loads files from outside its folder needs `--ro-bind` of the folder above; an `http://`
+URL is reached as the box's network allows: `--net isolated --allow PORT` for a local server only,
+and a server that does not answer is shot as Chromium's error page with no problem named: check the
+shot).
 
 - **Real frames.** Headless Chrome under `--virtual-time-budget` runs `requestAnimationFrame` two or
   three times a run; a box's Chromium draws every frame on a real (headless) output, so a loop that

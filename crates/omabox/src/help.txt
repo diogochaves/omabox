@@ -599,7 +599,7 @@ one of any video (ffmpeg reads it in the box; with no box named and none up, her
 watching, --frames N (15) from the first to the last or one each --every DURATION, each labelled with
 its time and the marks since the frame before it ("> 4.20s TEXT"), 5 a row, 320 px tiles or --fit N
 (shot-fit's by default) for the whole sheet. An agent checks a take from it and fixes its script.
-Frame by frame (#260): `--from T --to T` (times in the video) keeps the sheet to that stretch (--frames
+Frame by frame (#260): `--from T --to T` (times in the video, 0 its first frame) keeps the sheet to that stretch (--frames
 and --every spread over it), `--every-frame` takes each of its frames (100 at most), `-g "X,Y WxH"`
 shows only that region of each (in the video's pixels; a small one enlarged pixel for pixel, up to 8
 times), and `--changed` its first frame, then each frame where the region (without -g, the whole

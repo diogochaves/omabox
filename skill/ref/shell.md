@@ -83,7 +83,9 @@ most people will. Then:
   `plugins[]` entry, is `loaded` even with its widget off the bar. `plugin X is not in the bar's
   layout: if Y places it itself, ignore this`: a widget in no layout of the box's shell.json while
   another mounted plugin runs (`off the bar`); if Y puts it in its own lanes through its config or
-  IPC, that is fine. `warning: plugin X disabled: not in the bar's layout`: no mounted plugin could
+  IPC, that is fine. Several such are one line (`7 plugins (X, ...) are not in the bar's layout`),
+  and a later `restart-shell` says it in a few words (`still not in the bar's layout`): never filter
+  omabox's notes out with grep or tail, the ones that matter go with them. `warning: plugin X disabled: not in the bar's layout`: no mounted plugin could
   place it; the line gives the `putBarWidget` command that puts it there.
 - **What it shows, as text** (no shot, no OCR): `omabox tree --layer omarchy-bar --find TEXT` finds a
   widget's text on the bar, `text "cups 391" @1845,5 58x16` (the screen's coordinates: `click X Y` at

@@ -3,6 +3,21 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+- **`record --from 0`** (and `0s`, `0ms`) is the video's first frame; it was refused as "not a
+  time" (#492).
+- **`look page file:///...`** is the file it names: its folder is mounted for the look's own box
+  (or the look refused in a box that lacks it), with a `#fragment` or `?query` kept, on a path
+  too. It was opened as a URL the box could not see, and Chromium's error page was shot with
+  "problems: none" (#491).
+
+### Changed
+- **`up` and `restart-shell` say less**: the widgets a hosting plugin places itself are one note
+  naming them, not one each, and short the next time; the files `--desk-shell` leaves out are one
+  line with each reason and its count (#493).
+
 ## 1.5.3 — 2026-11-22
 
 Fixes and a cleanup of the code behind them, with no change to what commands do or print otherwise:

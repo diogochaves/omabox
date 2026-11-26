@@ -15490,6 +15490,34 @@ from them.
     TOP itself is "in the repo" by `at_or_under` too. Real callers pass git's `--show-toplevel` (no
     trailing slash), so only `_probe repo_link_out` could reach it. Test: `t_unit_link_out` (TOP
     `/r/` and `/r//`).
+761. **`record --from 0`; `look page file://...`; one note for many plugins or skipped files**
+    (2026-11-26, #492, #491, #493: three things a night of about twenty agents' boxes ran into).
+    - `--from` and `--to` went through `ms_duration`, a duration's grammar (at least 1 ms), so the
+      first frame could not be named. They are positions: `num::ms_position` lets zero in, in any
+      unit (`--to 0` is the first frame alone). Tests: `num`'s durations test, `t_unit_record`,
+      `t_record_sheet_frames` (`--from 0 --to 0.2`: 7 frames).
+    - `look page` took anything starting `file://` as a URL: no folder bound for its own box, no
+      check in a box that was up, so a file outside the box's mounts was shot as Chromium's
+      ERR_FILE_NOT_FOUND page with "problems: none". `page_file` reads a path or a `file://` URL
+      (`%XX`, `file://localhost`), with a `#fragment` or `?query` kept for the page, as the file it
+      is; none there is refused before any box. Not done: telling Chromium's error page from a
+      loaded one for an `http://` URL nothing answers at. Chromium's log has no line for a failed
+      navigation, and DevTools' `/json/list` gives the asked URL for an error page too (tried in a
+      box: `file:///nonexistent`, a refused port); only a DevTools session would say. Tests:
+      `a_pages_file_however_written`, `look_page_checks`.
+    - `plugin_check` said one line for each widget off the bar that a mounted plugin may place
+      itself (finding 567's note), and `--desk-shell` one for each file it did not copy: 28 on a
+      desk with its `shell.json.bak-*`, on every `up`. Agents cut them with `tail` and `grep -v`,
+      which cut the real notes too. Now one line per group of placers, naming the widgets, short
+      (`still not in the bar's layout`) when box.json's `plugin_status` already had each as `off
+      the bar`; and one `--desk-shell: N files of DESK not copied (WHY: FILE or how many; ...)`,
+      box.json's `desk_shell.skipped` having each as before. The issue's third note, `path
+      --home`'s warning for the link `--plugin` makes, did not reproduce: a plugin in the repo, in
+      a linked worktree, under an `--overlay` or a same-path `--ro-bind`, and one put in by `plugin
+      add`, all pass `plugin_own`. What does warn in a `--desktop desk` box is the theme selector's
+      preview links to a theme whose background is itself a link out of the desk's folder (a true
+      link out). Tests: `off_bar_note_once`, `desk_skipped_one_line`, `t_desk_shell`,
+      `t_plugin_hosted`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

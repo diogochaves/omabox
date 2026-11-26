@@ -1017,7 +1017,8 @@ t_unit_record() {
   check_match "record sheet --changed --every" "--changed picks its own frames: not with --frames, --every or --every-frame" "$(ob record sheet x.mp4 --changed --every 1s 2>&1)"
   check_match "...--every-frame --frames" "--every-frame, --frames or --every, one of them" "$(ob record sheet x.mp4 --every-frame --frames 3 2>&1)"
   check_match "...--from after --to" "record: --from is after --to" "$(ob record sheet x.mp4 --from 2s --to 1s 2>&1)"
-  check_match "...--from x" "--from takes a time in the video, like 1.5s or 900ms .*got x" "$(ob record sheet x.mp4 --from x 2>&1)"
+  check_match "...--from x" "--from takes a time in the video, like 0, 1.5s or 900ms .*got x" "$(ob record sheet x.mp4 --from x 2>&1)"
+  check_match "...--from 0 is the first frame, in any unit (#492): read, so the video is looked for" "record sheet: no video $TMP/none.mp4" "$(ob record sheet "$TMP/none.mp4" --from 0 --to 0ms 2>&1)"
   check_match "...-g of no size" "-g takes a region of the video, in its pixels, like \"100,200 640x80\", got 1,1 0x5" "$(ob record sheet x.mp4 -g "1,1 0x5" 2>&1)"
   check_match "...start --changed" "record start: --sheet, --frames, --every and --fit go with stop, sheet" "$(ob record start --changed 2>&1)"
   check_match "record sheet without a video" "record sheet: the video, like" "$(ob record sheet 2>&1)"
@@ -9486,6 +9487,8 @@ t_plugin_hosted() {
   check_match "a widget off the bar, with a mounted service running that may place it: a note naming it (#326)" \
     "plugin $P.hc is not in the bar's layout: if $P.hd places it itself, ignore this" "$out"
   check_fails "...not a warning" grep -qE "warning: plugin $P.hc|the shell's log" <<<"$out"
+  check_match "...said again at the next restart in a few words (#493)" \
+    "(^|"$'\n'")omabox: plugin $P.hc is still not in the bar's layout \(as said before: fine if $P.hd places it\)($|"$'\n'")" "$(ob restart-shell -b "$B" 2>&1)"
   check_eq "...ls --json: off the bar" "off the bar" \
     "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.hc" '.[] | select(.name == $n) | .plugin_status[$i].state')"
   # D out of its entry too: nothing mounted runs that could place C, nor D.
@@ -9509,8 +9512,11 @@ t_desk_shell() {
   check_match "...a note: it is part of --desktop desk now (#321, kept a release)" \
     "(^|"$'\n'")omabox: note: --desk-shell is now part of --desktop desk \(your Omarchy, mods and all\)($|"$'\n'")" "$out"
   check_match "...says what it mounted and copied" "--desk-shell: 3 plugins of $d/desk/plugins, its shell.json \(idle held off\), and 4 files copied into the box's ~/.config/omarchy: alias.json hostfix.json profiles/deep/two.json profiles/one.json" "$out"
-  check_match "...and what it did not, and why" "not copied: $d/desk/api-keys.env \(a secret's name\)" "$out"
-  check_match "...a link out of the folder" "not copied: $d/desk/out.json \(a link out of the folder \(not followed\)\)" "$out"
+  check_match "...and what it did not, and why, in one line: a reason once, with its file or how many (#493)" \
+    "(^|"$'\n'")omabox: --desk-shell: 15 files of $d/desk not copied \(a secret's name: 5; over 1 MiB: big\.json; .*; a backup: shell\.json\.bak-1; .*\): box\.json's desk_shell\.skipped names each($|"$'\n'")" "$out"
+  check_match "...a link out of the folder" "; a link out of the folder \(not followed\): out\.json; " "$out"
+  check_eq "...no line of its own for any of them" 1 "$(grep -c "not copied" <<<"$out")"
+  check_eq "...box.json has each" "15 api-keys.env" "$(jq -r '.desk_shell.skipped | "\(length) \(.[0].path)"' "$(ob path "$B")/box.json")"
   check_fails "...a plugin the desk has off: no warning" grep -q "$P.doff" <<<"$out"
   check_match "...omabox's own widget left out, said (#304)" "not mounting plugins/omabox: omabox's own widget" "$out"
   check_fails "...and out of the box's shell.json: bar, a plugin's list, its settings" grep -q chaves.omabox "$H/.config/omarchy/shell.json"
@@ -18511,6 +18517,8 @@ t_record_sheet_frames() {
   check_match "record sheet --from 1.3s --to 1.5s --every-frame -g: frames 39 to 45" "of 7 frames \(1\.300s to 1\.500s\)" "$out"
   check_match "...the region 3.2 times (320x192 tiles), black in frame 39, white in 40 to 42, black in 43" "^1630 0[0-3]0[0-3]0[0-3]( F[A-F]F[A-F]F[A-F]){3} 0[0-3]0[0-3]0[0-3]$" \
     "$(magick "$o-ef.png" -alpha off -format '%w %[hex:p{163,99}] %[hex:p{489,99}] %[hex:p{815,99}] %[hex:p{1141,99}] %[hex:p{1467,99}]' info: 2>&1)"
+  rsf z0 --from 0 --to 0.2 --every-frame -g "30,30 100x60"
+  check_match "...--from 0 (#492): the first frame on" "of 7 frames \\(0\\.000s to 0\\.200s\\)" "$out"
   rsf ev --from 1s --to 2s --every 100ms
   check_match "...--every 100ms from 1 s to 2 s: 11 frames" "of 11 frames \(1\.000s to 2\.000s\)" "$out"
   rsf fr --from 1s --to 2s --frames 3
@@ -24751,6 +24759,13 @@ HTML
   check_eq "...--window chromium does not" 2 "$(ob shot -b "${kb:-look-1}" --window chromium -o "$TMP/$P-lookg-no.png" >/dev/null 2>&1; echo $?)"
   [ -z "$kb" ] || ob down "$kb" >/dev/null 2>&1
   check_match "...no such file: refused" "look page: no such file" "$(ob look page "$d/nope.html" 2>&1)"
+  # #491: a file:// URL (or a path with what the page reads after it) is that file: its folder is
+  # mounted for the look's box as a path's is (it was opened as a URL the box could not see: Chromium's
+  # error page shot, "problems: none"); one of no file is refused before any box.
+  out=$(cd "$TMP" && ob look page "file://$d/game.html#level=2" --net isolated --after 1s 2>&1); rc=$?
+  check_match "look page file://FILE#fragment: the page itself, loaded (its title)" '^0 .*'$'\n''window: chromium "game" ' "$rc $out"
+  rc=0; out=$(ob look page "file://$d/nope.html#x" 2>&1) || rc=$?
+  check_eq "...of no file: refused, no box" "2 omabox: look page: no such file: file://$d/nope.html#x (a FILE, or an http:// or file:// URL) (omabox help look)" "$rc $out"
   left=$(ob ls --json | jq -r '.[].name' | grep -c '^look-' || true)
   check_eq "no look box left" 0 "$left"
 }

@@ -36,6 +36,15 @@ pub fn ms_duration(v: &[u8]) -> Option<i64> {
     (ms >= 1.0).then_some(ms as i64)
 }
 
+/// ms_position: a time in a video or a log, ms_duration's grammar with zero let in (0, 0s, 0ms,
+/// 0.0: the start; #492).
+pub fn ms_position(v: &[u8]) -> Option<i64> {
+    if crate::shell::re_match(r"^0+(\.0+)?(ms|s|m|h)?$", v) {
+        return Some(0);
+    }
+    ms_duration(v)
+}
+
 /// s_duration V [zero]: a duration (ms_duration's) as seconds, decimals only where it has them
 /// (1.5s, 1500ms: 1.5; 5: 5); ZERO lets 0 in, in any unit.
 pub fn s_duration(v: &[u8], zero: bool) -> Option<String> {
@@ -250,6 +259,13 @@ mod tests {
 
     #[test]
     fn durations() {
+        // A position lets zero in, in any unit (#492); a duration does not.
+        for z in ["0", "0s", "0ms", "0.0", "00.000s"] {
+            assert_eq!(ms_position(z.as_bytes()), Some(0), "{z}");
+            assert_eq!(ms_duration(z.as_bytes()), None, "{z}");
+        }
+        assert_eq!(ms_position(b"0.7"), Some(700));
+        assert_eq!(ms_position(b"-0"), None);
         assert_eq!(ms_duration(b"500ms"), Some(500));
         assert_eq!(ms_duration(b"1.5s"), Some(1500));
         assert_eq!(ms_duration(b"1.5"), Some(1500));

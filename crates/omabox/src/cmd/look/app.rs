@@ -223,22 +223,23 @@ pub(super) fn app(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 pub(super) fn page(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut a = parse(ctx, args, "page")?;
     let what = a.dir.take().unwrap_or_default();
-    let mut bind = None;
-    let url = if Re::new("^(https?|file)://").is_some_and(|r| r.is_match(&what)) {
-        what
+    // A file, however it is written (#491): a path, a file:// URL, either with a #fragment or a
+    // ?query the page reads. Its folder is what the box must have, so a URL is no way around that.
+    let (url, file) = if Re::new("^https?://").is_some_and(|r| r.is_match(&what)) {
+        (what, None)
     } else {
-        let f = crate::repo::readlink_f(&what).unwrap_or_default();
-        if f.is_empty() || !shell::path(&f).is_file() {
+        let Some((f, tail)) = page_file(&what) else {
             return Err(ctx.die(cat!(
                 "look page: no such file: ",
                 what,
                 " (a FILE, or an http:// or file:// URL)"
             )));
-        }
-        let dirn = f[..f.iter().rposition(|&c| c == b'/').unwrap_or(0)].to_vec();
-        bind = Some(dirn);
-        cat!("file://", f)
+        };
+        (cat!("file://", f, tail), Some(f))
     };
+    let bind = file
+        .as_ref()
+        .map(|f| f[..f.iter().rposition(|&c| c == b'/').unwrap_or(0)].to_vec());
     a.cmd = vec![
         b"sh".to_vec(),
         b"-c".to_vec(),
@@ -253,7 +254,7 @@ pub(super) fn page(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         a.up.extend([b"--ro-bind".to_vec(), d]);
     }
     if a.own {
-        if let Some(f) = a.cmd.last().and_then(|u| u.strip_prefix(b"file://")) {
+        if let Some(f) = &file {
             if !ob(&[b"run", b"-b", &name, b"--", b"test", b"-r", f]).ok {
                 return Err(ctx.die(cat!(
                     "look page: box '",
@@ -272,6 +273,56 @@ pub(super) fn page(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         g.finish();
     }
     r
+}
+
+/// look page's FILE as a file here: its real path and what follows it for the page (a `#fragment`
+/// or a `?query`, kept as written). WHAT is a path or a `file://` URL (`file://localhost/` too, its
+/// `%XX` read); the whole of it first, a file's name may hold `#` or `?`. None: no such file.
+pub(super) fn page_file(what: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (path, url) = match what.strip_prefix(b"file://") {
+        Some(p) => (p.strip_prefix(b"localhost").unwrap_or(p), true),
+        None => (what, false),
+    };
+    if url && !path.starts_with(b"/") {
+        return None;
+    }
+    let cut = path.iter().position(|&c| c == b'#' || c == b'?');
+    let mut tries = vec![(path, &b""[..])];
+    if let Some(i) = cut {
+        tries.push((&path[..i], &path[i..]));
+    }
+    for (p, tail) in tries {
+        let p = if url { percent_decode(p) } else { p.to_vec() };
+        let f = crate::repo::readlink_f(&p).unwrap_or_default();
+        if !f.is_empty() && shell::path(&f).is_file() {
+            return Some((f, tail.to_vec()));
+        }
+    }
+    None
+}
+
+/// A URL path's `%XX` as bytes; anything else as written.
+fn percent_decode(p: &[u8]) -> Vec<u8> {
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(p.len());
+    let mut i = 0;
+    while i < p.len() {
+        match (
+            p[i],
+            p.get(i + 1).copied().and_then(hex),
+            p.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(h), Some(l)) => {
+                out.push(h * 16 + l);
+                i += 3;
+            }
+            (c, _, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Chromium on $1 as an app window: the first of chromium, google-chrome-stable, chrome on the box's

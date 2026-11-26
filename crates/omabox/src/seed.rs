@@ -2345,22 +2345,17 @@ fn seed_home_look(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
     }
     let out = desk_files(ctx, &plan.desk, Some(h))?;
     let mut copied: Vec<&[u8]> = Vec::new();
+    let mut skipped: Vec<(&[u8], &[u8])> = Vec::new();
     for line in out.split(|&c| c == b'\n') {
         if let Some(r) = line.strip_prefix(b"copied ") {
             copied.push(r);
         } else if let Some(s) = line.strip_prefix(b"skipped ") {
             let i = s.iter().position(|&c| c == b'\t').unwrap_or(s.len());
-            let why = s.get(i + 1..).unwrap_or(s);
-            say(cat!(
-                "--desk-shell: not copied: ",
-                plan.desk_shown,
-                "/",
-                &s[..i],
-                " (",
-                why,
-                ")"
-            ));
+            skipped.push((&s[..i], s.get(i + 1..).unwrap_or(s)));
         }
+    }
+    if let Some(m) = desk_skipped_note(&plan.desk_shown, &skipped) {
+        say(m);
     }
     let list = if copied.is_empty() {
         Vec::new()
@@ -2380,9 +2375,68 @@ fn seed_home_look(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
     Ok(out)
 }
 
+/// --desk-shell's files left out, (path, why) each, as one line (#493: it was one each, 28 on a
+/// desk with its backups, on every up): each reason once, in the order first met, with its file
+/// when it left out one and their number when more. box.json's desk_shell.skipped has each.
+fn desk_skipped_note(desk: &[u8], skipped: &[(&[u8], &[u8])]) -> Option<Vec<u8>> {
+    let mut by: Vec<(&[u8], Vec<&[u8]>)> = Vec::new();
+    for (path, why) in skipped {
+        match by.iter_mut().find(|(w, _)| w == why) {
+            Some((_, l)) => l.push(path),
+            None => by.push((why, vec![path])),
+        }
+    }
+    let parts: Vec<Vec<u8>> = by
+        .iter()
+        .map(|(why, l)| match l.as_slice() {
+            [one] => cat!(why, ": ", one),
+            _ => cat!(why, ": ", l.len().to_string()),
+        })
+        .collect();
+    let n = skipped.len();
+    (n > 0).then(|| {
+        cat!(
+            "--desk-shell: ",
+            n.to_string(),
+            if n == 1 { " file of " } else { " files of " },
+            desk,
+            " not copied (",
+            parts.join(&b"; "[..]),
+            ")",
+            if by.iter().any(|(_, l)| l.len() > 1) {
+                ": box.json's desk_shell.skipped names each"
+            } else {
+                ""
+            }
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #493: what --desk-shell left out is one line, a reason once with its file or its count.
+    #[test]
+    fn desk_skipped_one_line() {
+        assert_eq!(desk_skipped_note(b"~/d", &[]), None);
+        assert_eq!(
+            desk_skipped_note(b"~/d", &[(b"api-keys.env", b"a secret's name")]).unwrap(),
+            b"--desk-shell: 1 file of ~/d not copied (a secret's name: api-keys.env)"
+        );
+        assert_eq!(
+            desk_skipped_note(
+                b"~/d",
+                &[
+                    (b"a.bak", b"a backup"),
+                    (b"api-keys.env", b"a secret's name"),
+                    (b"b.bak", b"a backup"),
+                ]
+            )
+            .unwrap(),
+            b"--desk-shell: 3 files of ~/d not copied (a backup: 2; a secret's name: api-keys.env): box.json's desk_shell.skipped names each"
+        );
+    }
 
     /// t_unit_theme_dir's and t_unit_plugin_link's home_link cases (finding 241): a link in place of
     /// what is at REL (seed_home's copy, a save's dir); a link on the way cleared, never followed.
