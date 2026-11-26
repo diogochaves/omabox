@@ -25,7 +25,8 @@ Act
   click           at X Y, --find TEXT or --image; --wait
   scroll, drag    a wheel; a press, move and release
   pointer         raw pointer steps; hide, show
-  window          size, float, tile, fullscreen, maximize
+  window          size, float, tile, fullscreen, maximize, pin
+  scene           windows on workspaces from a file; up --scene
   clip            your clipboard in or out (interactive)
   keys-to-box     SUPER keys to the box (interactive)
 Wait

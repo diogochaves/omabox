@@ -2,7 +2,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
 
   omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...|host]
-            [--env KEY=VAL]...
+            [--env KEY=VAL]... [--scene FILE|-]
             [--no-seed extensions,fonts]                 your plugins' settings files, your fonts left on the desk
             [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/
             [--theme NAME]                               start on that theme, not your desktop's current one
@@ -53,7 +53,8 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..." [--json]   where you see each mark: 1:1, or the --fit N that maps it
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
-  omabox window [-b NAME] [--window SEL] (--size WxH | --float | --tile | --fullscreen [off] | --maximize [off]) [--json]   one window floated at that size, tiled, fullscreen or maximized
+  omabox window [-b NAME] [--window SEL] (--size WxH | --float | --tile | --fullscreen [off] | --maximize [off] | --pin [off]) [--json]   one window floated at that size, tiled, fullscreen, maximized or pinned
+  omabox scene [-b NAME] (FILE | -) [--timeout 10s] [--json]   the windows a scene file lists, opened and put on their workspaces
   omabox jobs [-b NAME] [--json]                         the box's run -d jobs: pid, age, processes, log, command
   omabox stop [-b NAME] (JOB... | --all)                 stop run -d jobs (JOB: a pid jobs lists), their windows gone
   omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text
@@ -171,7 +172,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run look shot record pixel find calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin dnd dock reload mode output monitor gpu cpu audio polkit ports env path down save snapshot diff clip brief
+@+ up run look shot record pixel find calibrate windows window scene jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin dnd dock reload mode output monitor gpu cpu audio polkit ports env path down save snapshot diff clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -455,7 +456,57 @@ area, the bar kept); each sets the state, never toggles it: again changes nothin
 --fullscreen off (--maximize off) takes it out of that state only (a maximized window stays so
 after --fullscreen off). The line says the state after the place: `tiled, fullscreen at 0,0
 1920x1080`; `windows --json` has it as fullscreenMode (none, maximized, fullscreen). The app
-redraws at its new size a moment later: `wait still` before a shot of it.
+redraws at its new size a moment later: `wait still` before a shot of it. --pin pins a floating
+window (it shows on every workspace of its monitor; `windows --json` has `pinned`, the line says
+`floating, pinned`), --pin off unpins it; set, never toggled, as the two above. A tiled,
+fullscreen or maximized window is not pinned: exit 1, saying to float it first.
+@short scene
+The file (or -, on stdin) is JSON; each window opens by its command and goes where it says:
+  {"windows": [{"name": "editor", "run": ["foot", "-T", "editor"], "workspace": 1},
+               {"name": "calc", "run": "foot -T calc", "workspace": 3, "size": "600x400", "at": "100,80"},
+               {"name": "notes", "run": ["foot"], "workspace": "special:notes", "floating": true},
+               {"name": "clock", "run": ["foot"], "pinned": true}]}
+name, run (its words, or a string for bash) and workspace (a number, or special:NAME); optional
+floating, size "WxH", at "X,Y", pinned (no workspace then). It returns when every window is mapped
+as asked, a line each; one that is not is named, exit 1. The box stays on its workspace and the
+focused window keeps the focus. Again, nothing opens twice: a name's window still mapped is only
+put back in place. omabox up --scene FILE starts a box with it.
+@ scene
+`scene FILE` (or `scene -`, the file on stdin) makes the box's desk the one a test needs: several
+workspaces with windows, a special workspace, a floating window, a pinned one. The file is JSON:
+  {"windows": [
+    {"name": "editor", "run": ["foot", "-T", "editor"], "workspace": 1},
+    {"name": "web",    "run": "foot -T web", "workspace": 2},
+    {"name": "calc",   "run": ["foot", "-T", "calc"], "workspace": 3, "size": "600x400", "at": "100,80"},
+    {"name": "notes",  "run": ["foot", "-T", "notes"], "workspace": "special:notes", "floating": true},
+    {"name": "clock",  "run": ["foot", "-T", "clock"], "pinned": true, "size": "300x200"}
+  ]}
+Each window has a name (letters, digits, `.`, `_`, `-`; what the scene knows its window by), `run`
+(the command that opens it: its words, or one string for bash), and `workspace` (a number from 1,
+or `special:NAME`). Optional: `floating` (true or false; left out, the window stays as its app
+made it), `size` ("WxH") and `at` ("X,Y"), in layout pixels as `windows` gives them (a size with no
+place is centred), and `pinned` (true: on every workspace, so it has no `workspace`). A size, a
+place or a pin floats the window. An unknown key, a name used twice or a value of another form is
+exit 2 before any box is asked, naming the window.
+The windows open one after another, in the file's order, each as a `run -d` job (`jobs`, `stop`,
+`log run`): a window is the first new one after its command starts (its job's own when two come at
+once). It opens on the workspace the screen shows and is moved to its own at once, without
+following it: the box stays on the workspace it was showing, and a special workspace is not
+opened. The window that had the focus has it again at the end (the pointer is not moved); if none
+had, the focus is where Hyprland left it: the last scene window opened on the shown workspace,
+often a pinned one. The command returns once every window is mapped as asked, printing a line
+each, `NAME 0x... opened|kept workspace WS tiled|floating[, pinned] at X,Y WxH` (--json: `ok` and
+`windows`, each `name, address, opened, ok, problem, workspace, floating, pinned, at, size`). A
+window that did not open within --timeout (10s each; 100ms to 10m), that Hyprland refused to place,
+or that is not where or what the file says (a size its app does not take, a window rule) is named
+on stderr with what it is instead, the others still placed: exit 1.
+The same scene again opens nothing twice: the box remembers the window each name opened
+(`<box dir>/scene.json`), and while that window is mapped the name's command is not run, the
+window only put back as the file says (moved by hand, unpinned). A name whose window was closed
+is opened again; a name with another command keeps its old window until that is closed (`stop`
+its job). Windows the scene does not name are left alone.
+`up --scene FILE` starts the box and applies the scene (to a box already up as well), printing
+nothing of it on stdout; a scene not as asked is exit 1 with the box left up.
 @ keys
 `keys --window` focuses the window (the active one again), then types; while a layer holds the
 keyboard against any window (Omarchy's launcher, a menu) it refuses, exit 1, before sending or
