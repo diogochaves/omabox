@@ -15626,8 +15626,8 @@ from them.
       align.
     - Dead ends. The watch's first frame as a `copy_with_damage` (Hyprland draws a frame for a
       new session): on an idle screen, a watch begun right after another ended never got it,
-      once in three back to back ("no frame in 10 s"); a plain copy first, none in thirteen
-      since. A box just up is not idle (its first frames): the test waits for `still` first.
+      once in three back to back ("no frame in 10 s"); a plain copy first, none in eight by hand
+      since (the test repeats it five times). A box just up is not idle (its first frames): the test waits for `still` first.
       The frames' own `ready` times from WAYLAND_DEBUG, as record's first-frame reader takes
       them, would give the captures' times without ffmpeg but not which of them the video kept.
       Timing a client's own frames (frame callbacks, presentation feedback on a surface of the
