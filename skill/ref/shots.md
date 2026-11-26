@@ -165,6 +165,26 @@ Sections:
   `,maximized` in STATE, `windows --json` has `fullscreenMode` (`none`, `maximized`,
   `fullscreen`). A Hyprland whose `hl.dsp.window.fullscreen` takes other arguments is exit 1,
   naming that dispatcher. `wait still` before the shot: the app redraws at the new size.
+- **A desk to test against** (an overview, a workspace list, a window switcher: several
+  workspaces with windows, a special one, a floating and a pinned window): one scene file, not a
+  script of `run`, `window` and `lua` calls.
+  ```
+  omabox scene - <<'EOF'
+  {"windows": [
+    {"name": "editor", "run": ["foot", "-T", "editor"], "workspace": 1},
+    {"name": "web",    "run": ["foot", "-T", "web"], "workspace": 2},
+    {"name": "calc",   "run": ["foot", "-T", "calc"], "workspace": 3, "size": "600x400", "at": "100,80"},
+    {"name": "notes",  "run": ["foot", "-T", "notes"], "workspace": "special:notes"},
+    {"name": "clock",  "run": ["foot", "-T", "clock"], "pinned": true, "size": "300x200"}
+  ]}
+  EOF
+  ```
+  It returns when every window is mapped where the file says (a line each; `--json`), or exit 1
+  naming each that is not. The box stays on the workspace it showed and the window that had the
+  focus keeps it. Run it again and nothing opens twice: a name's window still mapped is only put
+  back in place. `omabox up --scene FILE` starts a box in that state. One window pinned by hand:
+  `omabox window --window SEL --pin` (a floating one; `--pin off` unpins), `pinned` in `windows
+  --json`. All of it: `omabox help scene`.
 - **More monitors** (a bar on each, windows between them, portrait, ultrawide, mixed scale, an
   unplug): `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below` (SPEC
   `WxH[@HZ][,scale=S][,right|below|X,Y]`, right of the last made by default, moving with it), or

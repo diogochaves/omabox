@@ -5,6 +5,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+- **`omabox scene FILE`** (or `-`, on stdin): the windows a JSON file lists, each opened by its
+  command and put on its workspace (a number or `special:NAME`), floating, sized, placed or pinned
+  as the file says, in one command that returns when every one is mapped as asked or names each
+  that is not (exit 1). The box stays on the workspace it showed. Applied again it opens nothing
+  twice: a window is known by its entry's name. `up --scene FILE` starts a box in that state
+  (#489).
+- **`window --pin`** pins a floating window (shown on every workspace), `--pin off` unpins it;
+  `windows --json` has `pinned` (#489).
+
 ### Fixed
 - **`record --from 0`** (and `0s`, `0ms`) is the video's first frame; it was refused as "not a
   time" (#492).

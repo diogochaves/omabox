@@ -13,6 +13,7 @@ omabox jobs                            # the box's run -d jobs; omabox stop PID 
 omabox wait log 'listening on'         # until a line in the latest job's log; wait job: until it ends
 omabox shot                            # screenshot; prints the PNG path (--fit 2000: scaled down)
 omabox windows                         # the box's windows, where they are, what covers them
+omabox scene desk.json                 # the windows a file lists, each on its workspace, floating or pinned (omabox help scene)
 omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
 omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … --zoom 8: 1 px detail
 omabox tree --find 'dark mode'         # text, not a shot: check box "Dark mode" [checked] @12,148 1872x26
@@ -63,6 +64,18 @@ omabox brief -b box-3                  # ~15 lines for a subagent's prompt: the 
   the per-session names off. Two repos with the same directory name need `-b`.
 - **Screen**: `--size 3440x1440`, `3440x1440@144`, or `host` for your focused monitor;
   `omabox mode` changes it live; `omabox window --size 760x600` floats one window at that size.
+- **A known desk** (to test an overview, a workspace list, a window switcher): a scene file, applied
+  by `omabox scene FILE` or at `omabox up --scene FILE`; again, it opens nothing twice.
+  ```json
+  {"windows": [
+    {"name": "editor", "run": ["foot", "-T", "editor"], "workspace": 1},
+    {"name": "web",    "run": ["foot", "-T", "web"], "workspace": 2},
+    {"name": "calc",   "run": ["foot", "-T", "calc"], "workspace": 3, "size": "600x400", "at": "100,80"},
+    {"name": "notes",  "run": ["foot", "-T", "notes"], "workspace": "special:notes"},
+    {"name": "clock",  "run": ["foot", "-T", "clock"], "pinned": true, "size": "300x200"}
+  ]}
+  ```
+  `omabox window --pin` pins one floating window by hand (`--pin off` unpins).
 - **Idle**: a headless box goes down after 2 hours with no `omabox` command, peek or `omabox run`
   against it (`--idle 30m`, `--idle 0` for never, or `OMABOX_IDLE`). A `run -d` job does not count.
   A box at `--idle 0` that goes with no agent stays up until `omabox down`: once what started it (a

@@ -15518,6 +15518,48 @@ from them.
       preview links to a theme whose background is itself a link out of the desk's folder (a true
       link out). Tests: `off_bar_note_once`, `desk_skipped_one_line`, `t_desk_shell`,
       `t_plugin_hosted`.
+762. **`scene`: a box's windows from a file; `window --pin`** (2026-11-26, #489: testing a
+    shell's overview, a workspace list or a window switcher needs a known desk, which was a script
+    of `run`, `window` and `lua` calls written again in each project, with no command to pin).
+    - `scene FILE|-` reads `{"windows": [{name, run, workspace, floating, pinned, size, at}]}`
+      (JSON: serde_json is the crate's own, no new dependency), checked whole before any box is
+      asked (`scene::parse`: an unknown key, a name twice, a pinned window with a workspace, a
+      size with `"floating": false`; exit 2 naming the window). Each window is its command as a
+      `run -d` job (omabox's own `run`, so `jobs`, `stop` and its log are as any other's), opened
+      one at a time: its window is the first address the box did not have (its job's pid first
+      when two come), so a launcher that hands over to another process still counts. Placement is
+      one `hyprctl eval` chunk a window, only of what differs (`place_lua`): float, a silent move
+      (`hl.dsp.window.move({ workspace, follow = false })`), resize, move or centre, pin last
+      (Hyprland pins only a floating window). Then every window is read back (`problem`), 3 s at
+      most; one not as asked is named with what it is instead, the rest still placed, exit 1.
+    - Focus: a window opens on the shown workspace and takes the focus there for a moment; the
+      box's workspace never changes (the moves do not follow, a special workspace is not toggled),
+      and the window that had the focus is focused again at the end with `cursor.no_warps` held,
+      as `win_refocus` does. With none before, the focus stays where Hyprland left it (the last
+      scene window on the shown workspace). Not done: opening a window straight on its workspace
+      (a window rule by pid would do it only for a process Hyprland started itself, and a box's
+      jobs are started by `run`), so a tiled window on the shown workspace is resized for a
+      moment by each one that opens beside it.
+    - Twice: `<box dir>/scene.json` keeps `{name: address}`. A name whose address is still mapped
+      is not run again, only placed again (moved or unpinned by hand, it goes back); one closed is
+      opened again. A file of its own, not a key of box.json: nothing else rewrites it, and
+      `BoxMeta` stays what `up` wrote. A jailed caller's scene comes on stdin only (`scene::load`):
+      a path would be read on the user's side of the jail.
+    - `up --scene FILE|-` reads the file while it reads its options and applies it after the box
+      is up (or found up), stdout left to `up`; a scene not as asked is exit 1, the box left up.
+    - `window --pin [off]`: `hl.dsp.window.pin({ action = 'enable'|'disable' })`, set and never
+      toggled as --fullscreen is (a window already so gets no dispatch); a tiled, fullscreen or
+      maximized window is refused before Hyprland is asked, with the way there. `windows --json`
+      (and `window --json`) gained `pinned`.
+    - Verified in a real box (Hyprland 0.57.2, the AMD iGPU): five windows on workspaces 1, 2, 3,
+      `special:notes` and one pinned, in 1.8 s, the box still on workspace 1; `windows --json`
+      as the file says; the scene again: no new window, the same addresses, 0.05 s; a window
+      unpinned and one pinned by hand put back; `["true"]` named as opening no window and a
+      terminal asked 5x5 named with the 9x20 it took, exit 1; the focus back on the window that
+      had it; `up --scene`. Not run: a jailed caller's `scene -` through the broker, Hyprland
+      0.56.2 (its `hl.dsp.window.pin` is not checked), a box with several monitors.
+    - Tests: `a_scene_read`, `scenes_refused`, `places_and_timeouts`, `placement_only_what_differs`,
+      `pin_set_not_toggled`, `t_unit_scene`, `t_scene`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
