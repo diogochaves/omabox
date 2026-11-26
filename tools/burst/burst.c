@@ -24,6 +24,25 @@
 // first and drops it, then waits MS: a window off screen draws on being captured, and its first frame
 // can be one from long before (finding 81).
 //
+//   omabox-burst frames [--output NAME] [--for MS] [--tied] [--whole]
+//
+// The other thing it does (#488, finding 763): no pictures, the times of the compositor's frames on one
+// output (NAME, as wl_output names it; else the first), for `omabox frames`. One wlr-screencopy
+// copy_with_damage after another of that output: each completes when the compositor next commits a frame
+// of it, which it does only when something changed, and carries the time of that commit (Hyprland:
+// its steady clock, CLOCK_MONOTONIC, taken as it hands the frame to the backend, not a page flip's).
+// Lines on stdout, times in ns:
+//   watch NAME WxH MHZ HOW the output, its mode and refresh (mHz); HOW: corner or whole, what it copies
+//   ready TS RECV          the first frame, which Hyprland draws for a new capture whatever the screen
+//                          does: where the watch starts, not a frame of it
+//   f TS RECV              a frame: the compositor's time, and this tool's clock when it heard of it
+//                          (it asks for the next one then: a RECV near the next refresh may have missed one)
+//   end NOW                the watch is over: --for MS after `ready`, or with --tied once stdin closes
+// Exit 0 with `end`; 1 with a line on stderr (no first frame in 10 s: a hidden interactive box's window
+// is not drawn; the output or the compositor gone); 2 usage. The pixels are copied (the protocol has no
+// frame without them) into one buffer, never read: 8x8 of the output's corner at scale 1, else (or
+// with --whole) the whole output, which costs the compositor a read-back each frame (fw_capture).
+//
 // The image is made as grim 1.5 makes it (its render and PNG writer below), so a frame is a grim shot
 // of the same moment. Those parts are grim's, under its licence:
 //   Copyright (c) 2018 emersion. MIT License: permission is hereby granted, free of charge, to any
@@ -80,7 +99,8 @@ struct output {
     struct wl_output *wl;
     struct zxdg_output_v1 *xdg;
     uint32_t name;
-    int32_t fallback_x, fallback_y, mode_width, mode_height, scale;
+    int32_t fallback_x, fallback_y, mode_width, mode_height, scale, refresh;
+    char oname[64];
     enum wl_output_transform transform;
     struct gbox logical;
     double logical_scale;
@@ -101,6 +121,7 @@ static struct wl_display *display;
 static struct wl_shm *shm;
 static struct zxdg_output_manager_v1 *xdg_manager;
 static struct zwlr_screencopy_manager_v1 *screencopy;
+static uint32_t screencopy_version;
 static struct ext_image_copy_capture_manager_v1 *copy_manager;
 static struct ext_foreign_toplevel_image_capture_source_manager_v1 *toplevel_sources;
 static struct ext_foreign_toplevel_list_v1 *toplevel_list;
@@ -121,7 +142,8 @@ static struct {
 } win;
 
 static void usage(void) {
-    fprintf(stderr, "usage: omabox-burst -n N [-e MS] [--prime MS] [-g \"X,Y WxH\"] [-T ID] [-s SCALE] [-l LEVEL]\n");
+    fprintf(stderr, "usage: omabox-burst -n N [-e MS] [--prime MS] [-g \"X,Y WxH\"] [-T ID] [-s SCALE] [-l LEVEL]\n"
+                    "       omabox-burst frames [--output NAME] [--for MS] [--tied]\n");
     exit(2);
 }
 
@@ -381,13 +403,17 @@ static void out_geometry(void *data, struct wl_output *o, int32_t x, int32_t y, 
     out->fallback_x = x; out->fallback_y = y; out->transform = transform;
 }
 static void out_mode(void *data, struct wl_output *o, uint32_t flags, int32_t w, int32_t h, int32_t r) {
-    (void)o; (void)r;
+    (void)o;
     struct output *out = data;
-    if (flags & WL_OUTPUT_MODE_CURRENT) { out->mode_width = w; out->mode_height = h; }
+    if (flags & WL_OUTPUT_MODE_CURRENT) { out->mode_width = w; out->mode_height = h; out->refresh = r; }
 }
 static void out_done(void *d, struct wl_output *o) { (void)d; (void)o; }
 static void out_scale(void *data, struct wl_output *o, int32_t f) { (void)o; ((struct output *)data)->scale = f; }
-static void out_name(void *d, struct wl_output *o, const char *n) { (void)d; (void)o; (void)n; }
+static void out_name(void *data, struct wl_output *o, const char *n) {
+    (void)o;
+    struct output *out = data;
+    snprintf(out->oname, sizeof(out->oname), "%s", n);
+}
 static void out_description(void *d, struct wl_output *o, const char *s) { (void)d; (void)o; (void)s; }
 static const struct wl_output_listener output_listener = {out_geometry, out_mode, out_done, out_scale, out_name, out_description};
 
@@ -547,7 +573,8 @@ static void global(void *data, struct wl_registry *reg, uint32_t name, const cha
         o->wl = wl_registry_bind(reg, name, &wl_output_interface, version >= 4 ? 4 : 3);
         wl_output_add_listener(o->wl, &output_listener, o);
     } else if (!strcmp(iface, zwlr_screencopy_manager_v1_interface.name)) {
-        screencopy = wl_registry_bind(reg, name, &zwlr_screencopy_manager_v1_interface, 1);
+        screencopy_version = version >= 2 ? 2 : 1;   // 2: copy_with_damage (frames)
+        screencopy = wl_registry_bind(reg, name, &zwlr_screencopy_manager_v1_interface, screencopy_version);
     } else if (!strcmp(iface, ext_image_copy_capture_manager_v1_interface.name)) {
         copy_manager = wl_registry_bind(reg, name, &ext_image_copy_capture_manager_v1_interface, 1);
     } else if (!strcmp(iface, ext_foreign_toplevel_image_capture_source_manager_v1_interface.name)) {
@@ -671,6 +698,155 @@ static void put(const void *p, size_t n) {
     }
 }
 
+// ---- frames: the times of one output's frames (#488) -------------------------------------------------
+
+static int64_t now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+static struct {
+    struct output *o;
+    struct zwlr_screencopy_frame_v1 *frame;
+    int64_t ts, recv;
+    int done, failed, corner;
+} fw;
+
+static void fw_buffer(void *data, struct zwlr_screencopy_frame_v1 *f, uint32_t fmt, uint32_t w, uint32_t h, uint32_t s) {
+    (void)data;
+    if (w > 16384 || h > 16384 || s > 65536 * 4) fail("a frame it cannot hold (%ux%u)", w, h);
+    buffer_fit(&fw.o->buf, fmt, (int32_t)w, (int32_t)h, (int32_t)s);
+    zwlr_screencopy_frame_v1_copy_with_damage(f, fw.o->buf.wl);   // the next frame the compositor draws
+}
+static void fw_ready(void *data, struct zwlr_screencopy_frame_v1 *f, uint32_t hi, uint32_t lo, uint32_t nsec) {
+    (void)data;
+    fw.recv = now_ns();
+    fw.ts = (int64_t)(((uint64_t)hi << 32) | lo) * 1000000000 + nsec;
+    zwlr_screencopy_frame_v1_destroy(f);
+    fw.frame = NULL;
+    fw.done = 1;
+}
+static void fw_failed(void *data, struct zwlr_screencopy_frame_v1 *f) {
+    (void)data;
+    zwlr_screencopy_frame_v1_destroy(f);
+    fw.frame = NULL;
+    fw.failed = 1;
+}
+static void fw_flags(void *d, struct zwlr_screencopy_frame_v1 *f, uint32_t flags) { (void)d; (void)f; (void)flags; }
+static const struct zwlr_screencopy_frame_v1_listener fw_listener = {fw_buffer, fw_flags, fw_ready, fw_failed, sc_damage, sc_dmabuf, sc_buffer_done};
+
+// What is copied: a corner of the output where that costs the compositor nothing to speak of, CORNER px
+// a side (a whole 1920x1080 output read back each frame was 5 ms of every 16.7 on an integrated GPU,
+// time the frames watched then lacked). A corner's frame completes at the output's next commit like a
+// whole one's, whatever part of it changed (Hyprland 0.56 and 0.57: its screen share copies pending
+// frames by monitor). Only at scale 1, unturned: Hyprland keeps a region's capture session only there
+// (it compares the box asked with the one it scaled), and a new session each frame draws a frame for
+// itself each time: the screen would never be idle. Elsewhere the whole output (`watch`'s last word).
+#define CORNER 8
+static void fw_capture(void) {
+    fw.done = fw.failed = 0;
+    fw.frame = fw.corner ? zwlr_screencopy_manager_v1_capture_output_region(screencopy, 0, fw.o->wl, 0, 0, CORNER, CORNER)
+                         : zwlr_screencopy_manager_v1_capture_output(screencopy, 0, fw.o->wl);
+    zwlr_screencopy_frame_v1_add_listener(fw.frame, &fw_listener, NULL);
+}
+
+// Dispatch what arrives, up to ms. 1 when the watch is to end: --tied and stdin closed. Ends the tool
+// when the compositor goes or nobody reads its stdout (as pump).
+static int fw_pump(int ms, int tied) {
+    struct pollfd fds[3] = {{.fd = wl_display_get_fd(display), .events = POLLIN}, {.fd = 1, .events = 0}, {.fd = tied ? 0 : -1, .events = POLLIN}};
+    while (wl_display_prepare_read(display) != 0)
+        if (wl_display_dispatch_pending(display) < 0) fail("the compositor went away");
+    if (wl_display_flush(display) < 0 && errno != EAGAIN) { wl_display_cancel_read(display); fail("the compositor went away"); }
+    int n = poll(fds, 3, ms < 0 ? 0 : ms);
+    if (n > 0 && (fds[0].revents & POLLIN)) {
+        if (wl_display_read_events(display) < 0) fail("the compositor went away");
+    } else {
+        wl_display_cancel_read(display);
+    }
+    if (fds[0].revents & (POLLERR | POLLHUP)) fail("the compositor went away");
+    if (fds[1].revents & (POLLERR | POLLHUP)) exit(1);
+    if (wl_display_dispatch_pending(display) < 0) fail("the compositor went away");
+    if (tied && fds[2].revents) {
+        char c[64];
+        ssize_t r = read(0, c, sizeof(c));
+        if (r == 0 || (r < 0 && errno != EINTR && errno != EAGAIN)) return 1;
+    }
+    return 0;
+}
+
+static int frames_main(int argc, char **argv) {
+    const char *want = NULL;
+    long for_ms = -1;
+    int tied = 0, whole = 0;
+    for (int i = 2; i < argc; i++) {
+        const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
+        if (!strcmp(a, "--tied")) { tied = 1; continue; }
+        if (!strcmp(a, "--whole")) { whole = 1; continue; }   // (to compare the two ways)
+        if (!v) usage();
+        if (!strcmp(a, "--output")) want = v;
+        else if (!strcmp(a, "--for")) for_ms = num(v, 1, 3600000);
+        else usage();
+        i++;
+    }
+    if (for_ms < 0 && !tied) usage();
+    display = wl_display_connect(NULL);
+    if (!display) fail("cannot connect to $WAYLAND_DISPLAY");
+    wl_registry_add_listener(wl_display_get_registry(display), &registry_listener, NULL);
+    for (int round = 0; round < 2; round++) {   // the globals, then the outputs' names and modes
+        int r = omabox_roundtrip(display, FRAME_MS);
+        if (r == -2) fail("the compositor did not answer in %d s", FRAME_MS / 1000);
+        if (r < 0) fail("the compositor went away");
+        if (round == 0 && xdg_manager)
+            for (int i = 0; i < nouts; i++) {
+                outs[i].xdg = zxdg_output_manager_v1_get_xdg_output(xdg_manager, outs[i].wl);
+                zxdg_output_v1_add_listener(outs[i].xdg, &xdg_listener, &outs[i]);
+            }
+    }
+    started = 1;
+    if (!shm || !screencopy) fail("the compositor offers no wl_shm or wlr-screencopy");
+    if (screencopy_version < 2) fail("the compositor's wlr-screencopy has no copy_with_damage (version 1)");
+    for (int i = 0; i < nouts && !fw.o; i++)
+        if (!want || !strcmp(outs[i].oname, want)) fw.o = &outs[i];
+    if (!fw.o) fail("no output named %s", want ? want : "at all");
+    fw.corner = !whole && fw.o->logical_scale == 1.0 && fw.o->transform == WL_OUTPUT_TRANSFORM_NORMAL &&
+                fw.o->mode_width >= CORNER && fw.o->mode_height >= CORNER;
+
+    // The first frame: drawn for the capture itself.
+    int fails = 0;
+    fw_capture();
+    for (int64_t deadline = omabox_now_ms() + FRAME_MS; !fw.done;) {
+        if (fw.o->gone) fail("the output is gone");
+        if (fw.failed) { if (++fails > 3) fail("the compositor could not copy the output"); fw_capture(); }
+        if (omabox_now_ms() >= deadline) fail("no frame in %d s (a hidden interactive box's window is not drawn)", FRAME_MS / 1000);
+        fw_pump((int)(deadline - omabox_now_ms()), 0);
+    }
+    printf("watch %s %dx%d %d %s\n", fw.o->oname[0] ? fw.o->oname : "-", fw.o->mode_width, fw.o->mode_height, fw.o->refresh,
+           fw.corner ? "corner" : "whole");
+    printf("ready %lld %lld\n", (long long)fw.ts, (long long)fw.recv);
+    fflush(stdout);
+    const int64_t end = for_ms < 0 ? INT64_MAX : omabox_now_ms() + for_ms;
+    fails = 0;
+    fw_capture();
+    for (;;) {
+        if (fw.done) {
+            printf("f %lld %lld\n", (long long)fw.ts, (long long)fw.recv);
+            fflush(stdout);
+            fails = 0;
+            fw_capture();
+        } else if (fw.failed) {   // a mode change: the next one takes the new size
+            if (++fails > 3 || fw.o->gone) fail("the compositor could not copy the output");
+            fw_capture();
+        }
+        int64_t left = end == INT64_MAX ? 1000 : end - omabox_now_ms();
+        if (left <= 0) break;
+        if (fw_pump((int)(left > 1000 ? 1000 : left), tied)) break;
+    }
+    printf("end %lld\n", (long long)now_ns());
+    fflush(stdout);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     // Only ever inside a box (omabox runs it there): from a host shell it would take the real desktop.
     if (!omabox_inside_box()) {
@@ -678,6 +854,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     unsetenv("WAYLAND_SOCKET");
+    if (argc > 1 && !strcmp(argv[1], "frames")) return frames_main(argc, argv);
     long n = 0, every = 0, prime = -1, level = 6;
     double scale = 1.0;
     int greatest = 1;

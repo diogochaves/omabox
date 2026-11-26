@@ -531,6 +531,7 @@ pub fn refusal(cmd: &[u8], args: &[Vec<u8>]) -> Option<Vec<u8>> {
         | b"tree" | b"tray" | b"keys" | b"click" | b"scroll" | b"pointer" | b"drag" | b"wait"
         | b"hyprctl" | b"lua" | b"log" | b"logs" | b"gdb" | b"pid" | b"events"
         | b"restart-shell" | b"reload" | b"mode" | b"output" | b"monitor" | b"gpu" | b"cpu"
+        | b"frames"
         | b"audio" | b"polkit" | b"env" | b"path" | b"down" | b"ls" | b"list" | b"brief"
         | b"jobs" | b"stop" | b"dnd" | b"dock" => None,
         // scene (#489): its file read on stdin only (scene::load), its windows the jail's box's.

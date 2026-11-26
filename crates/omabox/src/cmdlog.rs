@@ -313,6 +313,7 @@ pub fn is_read(cmd: &[u8], r: &Redacted) -> bool {
     match cmd {
         b"shot" | b"screenshot" | b"windows" | b"tree" | b"pixel" | b"find" | b"jobs" | b"log"
         | b"logs" | b"events" | b"path" | b"env" | b"pid" | b"brief" | b"gpu" | b"cpu"
+        | b"frames"
         | b"audio" | b"ports" | b"peek" | b"wait" | b"gdb" => true,
         // (#446: they read the box HOME; a snapshot's record is on the host side, not in the box)
         b"snapshot" | b"diff" => true,

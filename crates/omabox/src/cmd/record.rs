@@ -647,6 +647,11 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<Opts> {
 
 /// record_action_check: -- ACTION's action, one that acts, on the recorded box.
 pub fn action_check(ctx: &Ctx, ract: &[Vec<u8>]) -> Res<()> {
+    action_check_as(ctx, "record", ract)
+}
+
+/// action_check for WHAT's own `-- ACTION` (frames'): the same actions, said in its name.
+pub fn action_check_as(ctx: &Ctx, what: &str, ract: &[Vec<u8>]) -> Res<()> {
     let first = ract.first().cloned().unwrap_or_default();
     match first.as_slice() {
         b"keys" | b"click" | b"scroll" | b"drag" | b"pointer" | b"run" | b"hyprctl" | b"lua"
@@ -661,7 +666,8 @@ pub fn action_check(ctx: &Ctx, ract: &[Vec<u8>]) -> Res<()> {
                 first
             };
             return Err(ctx.die(cat!(
-                "record -- ACTION: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, window, tray menu|activate|click, restart-shell, wait), got ",
+                what,
+                " -- ACTION: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, window, tray menu|activate|click, restart-shell, wait), got ",
                 got
             )));
         }
@@ -676,7 +682,12 @@ pub fn action_check(ctx: &Ctx, ract: &[Vec<u8>]) -> Res<()> {
         " "
     );
     if crate::exit::contains(&joined, b" -b ") || crate::exit::contains(&joined, b" --box ") {
-        return Err(ctx.die("record -- ACTION: the action runs on the recorded box (no -b)"));
+        return Err(ctx.die(cat!(
+            what,
+            " -- ACTION: the action runs on the ",
+            if what == "record" { "recorded" } else { "watched" },
+            " box (no -b)"
+        )));
     }
     Ok(())
 }

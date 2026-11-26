@@ -18,6 +18,7 @@ pub mod env;
 pub mod events;
 pub mod find;
 pub mod gdb;
+pub mod frames;
 pub mod gpu;
 pub mod guard;
 pub mod host;

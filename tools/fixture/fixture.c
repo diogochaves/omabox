@@ -3,7 +3,7 @@
 // or zenity seemed to do (findings 14 and 41 needed WAYLAND_DEBUG for it).
 //
 //   omabox-fixture [--windows N] [--first-frame MS] [--for MS] [--exit CODE] [--title T] [--app-id ID]
-//                  [--size WxH] [--dnd] [--log FILE]
+//                  [--size WxH] [--dnd] [--animate [--stall EVERY:MS]] [--log FILE]
 //
 // N xdg toplevels (default 1), window i titled "T i" (just T when there is one; T defaults to
 // omabox-fixture, ID too), each one solid colour of its own (COLOURS[i]) with a corner marker at its
@@ -36,6 +36,11 @@
 //            dnd-enter {win, x, y}  dnd-motion {win, x, y}  dnd-leave {win}
 //            dnd-drop {win, x, y}: where the last enter or motion put it (where a toolkit drops)
 //            dnd-source {what: cancelled|performed|finished}: what the compositor told the source
+//
+// --animate (#488): each window draws again on every frame callback, a white bar 16 px wide moving 8 px
+// a frame under its marker: something for the compositor to draw at each refresh, for as long as it
+// runs. --stall EVERY:MS: every EVERYth of those frames is drawn MS late (a client that stutters: the
+// compositor has nothing new for that long). Only a window's first draw is logged.
 //
 // --first-frame MS: each window draws its first frame MS after its first configure (an app slow to
 // show; it maps then). --for MS: ends MS after every window drew its first frame. Otherwise it ends
@@ -119,6 +124,8 @@ struct win {
     int scale, told_scale;   // told_scale: the compositor said one (preferred_buffer_scale)
     int64_t configured_at;   // its first configure; 0 before
     int drawn, ready, dirty;
+    long anim_frame;         // --animate: frames drawn since the first
+    int64_t anim_due;        // ...and when the next one may be drawn (a stall)
 };
 
 static struct {
@@ -139,6 +146,7 @@ static struct {
     int def_w, def_h;
     int first_frame_ms;
     int dnd;
+    int animate, stall_every, stall_ms;
     struct wl_data_device_manager *ddm;
     uint32_t ddm_version;
     struct wl_data_device *dd;
@@ -163,6 +171,11 @@ static void frame_done(void *data, struct wl_callback *cb, uint32_t t) {
     struct win *w = data;
     wl_callback_destroy(cb);
     if (!w->ready) { w->ready = 1; say("ready", ",\"win\":%d", w->i); }
+    if (app.animate) {
+        w->anim_frame++;
+        w->anim_due = app.stall_every && w->anim_frame % app.stall_every == 0 ? now_ms() + app.stall_ms : 0;
+        w->dirty = 1;
+    }
 }
 static const struct wl_callback_listener frame_listener = {frame_done};
 
@@ -177,9 +190,11 @@ static int draw(struct win *w) {
     if (px == MAP_FAILED) { close(fd); return 0; }
     uint32_t bg = COLOURS[w->i % NCOLOURS];
     int m = MARK * s, q = MARK / 2 * s;
+    int bar = app.animate ? (int)(w->anim_frame * 8 * s % bw) : -1, bar_w = 16 * s;   // --animate's bar
     for (int y = 0; y < bh; y++)
         for (int x = 0; x < bw; x++)
-            px[y * bw + x] = (x >= m || y >= m) ? bg : (x < q && y < q) ? 0xff000000 : x == m - 1 ? 0xffff0000 : 0xffffffff;
+            px[y * bw + x] = (x >= m || y >= m) ? (bar >= 0 && y >= m && x >= bar && x < bar + bar_w ? 0xffffffff : bg)
+                           : (x < q && y < q) ? 0xff000000 : x == m - 1 ? 0xffff0000 : 0xffffffff;
     struct wl_shm_pool *pool = wl_shm_create_pool(app.shm, fd, (int32_t)size);
     struct wl_buffer *b = wl_shm_pool_create_buffer(pool, 0, bw, bh, stride, WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool);
@@ -189,9 +204,9 @@ static int draw(struct win *w) {
     wl_surface_set_buffer_scale(w->surface, s);
     wl_surface_attach(w->surface, b, 0, 0);
     wl_surface_damage_buffer(w->surface, 0, 0, bw, bh);
-    if (!w->ready) wl_callback_add_listener(wl_surface_frame(w->surface), &frame_listener, w);
+    if (!w->ready || app.animate) wl_callback_add_listener(wl_surface_frame(w->surface), &frame_listener, w);
     wl_surface_commit(w->surface);
-    say("draw", ",\"win\":%d,\"w\":%d,\"h\":%d,\"scale\":%d", w->i, w->w, w->h, s);
+    if (!app.animate || !w->drawn) say("draw", ",\"win\":%d,\"w\":%d,\"h\":%d,\"scale\":%d", w->i, w->w, w->h, s);
     w->drawn = 1;
     w->dirty = 0;
     return 1;
@@ -575,7 +590,8 @@ static void on_signal(int s) { (void)s; signalled = 1; }
 
 static int usage(void) {
     fprintf(stderr, "usage: omabox-fixture [--windows N] [--first-frame MS] [--for MS] [--exit CODE] [--title T]\n"
-                    "                      [--app-id ID] [--size WxH] [--dnd] [--log FILE]\n");
+                    "                      [--app-id ID] [--size WxH] [--dnd] [--animate [--stall EVERY:MS]]\n"
+                    "                      [--log FILE]\n");
     return 2;
 }
 
@@ -596,6 +612,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(a, "--dnd")) { app.dnd = 1; continue; }
+        if (!strcmp(a, "--animate")) { app.animate = 1; continue; }
         if (!v) return usage();
         i++;
         if (!strcmp(a, "--windows")) { if ((n = (int)num(v, 1, MAX_WINDOWS)) < 0) return usage(); }
@@ -605,6 +622,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--title")) title = v;
         else if (!strcmp(a, "--app-id")) app_id = v;
         else if (!strcmp(a, "--log")) log = v;
+        else if (!strcmp(a, "--stall")) {
+            char tail;
+            if (sscanf(v, "%d:%d%c", &app.stall_every, &app.stall_ms, &tail) != 2 || app.stall_every < 1 ||
+                app.stall_every > 100000 || app.stall_ms < 1 || app.stall_ms > 60000) return usage();
+        }
         else if (!strcmp(a, "--size")) {
             if (sscanf(v, "%dx%d", &app.def_w, &app.def_h) != 2 || app.def_w < 1 || app.def_h < 1 ||
                 app.def_w > 8192 || app.def_h > 8192) return usage();
@@ -670,7 +692,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < n; i++) {
             struct win *w = &app.wins[i];
             if (w->dirty && w->configured_at) {
-                int64_t at = w->drawn ? now : w->configured_at + app.first_frame_ms;
+                int64_t at = !w->drawn ? w->configured_at + app.first_frame_ms : w->anim_due > now ? w->anim_due : now;
                 if (at <= now) { if (!draw(w)) { fprintf(stderr, "omabox-fixture: no buffer\n"); return 1; } }
                 else if (wake < 0 || at < wake) wake = at;
             }
