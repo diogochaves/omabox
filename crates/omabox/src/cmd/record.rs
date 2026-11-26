@@ -370,6 +370,7 @@ struct Opts {
     show: bool,
     caps: bool,
     cut: Option<i64>,
+    flog: Vec<u8>,
     as_: Vec<u8>,
     tofd: Vec<u8>,
     mfd: Vec<u8>,
@@ -488,6 +489,10 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<Opts> {
                 i += 1;
             }
             // --crf N (#278): the video's quality, for footage that will be edited.
+            b"--frames-log" => {
+                o.flog = val(ctx)?;
+                i += 1;
+            }
             b"--crf" => {
                 let c = val(ctx)?;
                 o.crf = Some(crf_arg(ctx, &c)?);
@@ -685,7 +690,11 @@ pub fn action_check_as(ctx: &Ctx, what: &str, ract: &[Vec<u8>]) -> Res<()> {
         return Err(ctx.die(cat!(
             what,
             " -- ACTION: the action runs on the ",
-            if what == "record" { "recorded" } else { "watched" },
+            if what == "record" {
+                "recorded"
+            } else {
+                "watched"
+            },
             " box (no -b)"
         )));
     }
@@ -794,6 +803,29 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             sub,
             ": --show-input, --captions and --cut-idle go with stop, -- ACTION or --for"
         )));
+    }
+    // --frames-log (#488): made with the video, from one monitor's raw stream as it was recorded.
+    if !o.flog.is_empty() {
+        if any(&[b"start", b"status", b"mark", b"sheet", b"hold"]) {
+            return Err(ctx.die(cat!(
+                "record ",
+                sub,
+                ": --frames-log goes with stop, -- ACTION or --for (it is made with the video)"
+            )));
+        }
+        if o.cut.is_some() {
+            return Err(ctx.die(
+                "record: --frames-log or --cut-idle, not both (a cut video's frames are no longer the recording's, one after the other)",
+            ));
+        }
+        if in_jail() {
+            return Err(ctx.die(
+                "record: --frames-log is not for a jailed agent yet (its file would need to be one of the jail's)",
+            ));
+        }
+        if let Err(m) = crate::shots::OutFile::resolved(&o.flog, false) {
+            return Err(ctx.die(cat!("record: --frames-log: ", m)));
+        }
     }
     if any(&[b"start", b"status", b"mark", b"hold"]) && o.sheet {
         return Err(ctx.die(cat!(
@@ -1092,6 +1124,7 @@ pub struct StopOpts {
     pub show: bool,
     pub caps: bool,
     pub cut: Option<i64>,
+    pub flog: Vec<u8>,
     pub tofd: Vec<u8>,
     pub mfd: Vec<u8>,
     pub vfd: Vec<u8>,
@@ -1108,6 +1141,7 @@ fn o_stop(o: &Opts) -> StopOpts {
         show: o.show,
         caps: o.caps,
         cut: o.cut,
+        flog: o.flog.clone(),
         tofd: o.tofd.clone(),
         mfd: o.mfd.clone(),
         vfd: o.vfd.clone(),

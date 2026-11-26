@@ -15561,6 +15561,95 @@ from them.
     - Tests: `a_scene_read`, `scenes_refused`, `places_and_timeouts`, `placement_only_what_differs`,
       `pin_set_not_toggled`, `t_unit_scene`, `t_scene`.
 
+763. **`frames`: how a box's screen ran; `record --frames-log`** (2026-11-26, #488: `gpu` says
+    GPU time per process, nothing said the time of each frame or how many came late, which a
+    shell with heavy animation needs to decide what it can afford on each GPU; and a lag read
+    from a recording could not tell "one frame behind" from a frame the video repeated or left
+    out).
+    - `frames [DURATION | -- ACTION...]`: tools/burst has a second mode, `omabox-burst frames`
+      (no new tool: burst already was "one capture client in the box", with the outputs and the
+      loop). One wlr-screencopy `copy_with_damage` after another on one output; each completes
+      at the output's next commit and carries its time, which in Hyprland is its steady clock
+      (CLOCK_MONOTONIC) taken as the frame is handed to the backend (its own comment: not the
+      page flip). The tool prints each frame's time and its own clock on hearing of it; the CLI
+      (`cmd/frames.rs`) reads them as they come, runs an action beside as `record -- ACTION`
+      does (`record::action_check_as`), and reports the time between frames (median, p95, p99,
+      max, nearest rank), frames a second while it drew, and the late ones.
+    - The rules, said in the help. Late: over 1.5 refreshes after the frame before, and the
+      refreshes without a frame are the interval in refreshes, rounded, less one (one at least).
+      A compositor draws only what changes, so an interval longer than a refresh is a late frame
+      or a moment with nothing to draw, and the frames cannot say which: up to `--idle` (250 ms)
+      it is late, past that a pause, counted apart and out of the figures. An idle screen: "no
+      frame". The first frame of a watch is one the watcher asks for (a plain copy): where the
+      watch starts, not counted.
+    - What the watcher may miss: it hears of a frame some ms after it was drawn (2.5 to 2.7 ms on
+      average here, 6 to 10 at worst on a quiet machine, up to 18 under load) and asks for the
+      next one then; a request that reaches the compositor after its next commit sees the one
+      after. A late frame following one heard of over half a refresh late is counted `unsure`.
+    - What it copies: the protocol has no frame without pixels. An 8x8 corner
+      (`capture_output_region`) where the output's scale is 1 and it is not turned: Hyprland
+      0.56.2 and 0.57.2 copy every pending frame of a monitor at its commit, whatever region was
+      asked (read in their source), but keep a region's capture session only at scale 1 (they
+      compare the box asked with the one they scaled), and a new session each frame draws a
+      frame for itself: elsewhere the whole output. Measured on a quiet machine (1920x1080@60,
+      the AMD iGPU, an animation drawing every refresh, three 5 s watches each): the frame times
+      were the same both ways (299 intervals, mean 16.667 ms, none late), the whole output heard
+      of 3.7 to 3.9 ms after the frame against 2.5 to 2.7 for the corner. With other suites
+      loading the machine the whole-output watches looked worse (mean 18.3 to 19.3 ms against
+      17.1 to 17.8) but two runs each overlapped: not settled there. The corner stays: it costs
+      less and gives the same times.
+    - It says which GPU drew the box (`gpu`'s lines, `render` in --json), "software rendering
+      (llvmpipe): these are the CPU's frame times" when the box's `client_render` is software,
+      and for an interactive box that it draws at your compositor's pace (about 15 frames a
+      second hidden). `frames -- ACTION` is refused to a jailed caller (the broker runs no
+      action for a jail; record's own way, its omabox running start, action, stop, is not built
+      for it).
+    - `record --frames-log FILE` (stop, -- ACTION, --for). What the pipeline knows: wf-recorder
+      (run with -D: a plain copy as soon as it has the last, each one a commit the copy itself
+      asks for) writes every frame it captured into raw.mkv at the compositor's time, in ms;
+      `record stop` makes the video with ffmpeg's `fps=N`, which is what repeats and leaves out.
+      So the identity exists, and ffmpeg can say it itself: a second pass over raw.mkv with each
+      frame scaled to 32x4 and its pixels replaced by its number and its time as bits
+      (`geq`, N and T), through the same `fps=N` and the same `-t`, gives one 128-byte frame a
+      video frame, read back (`record_frames::stamps`). No rule of the filter is guessed (it is
+      not the obvious one: 60 captures a second into 30 fps came out as captures 1, 3, 6, 7, 9,
+      12, the raw times being whole ms). The log: a row a video frame (frame, ms, holds,
+      drawn_ms, new or repeated, skipped before it), and one line, "92 frames: 61 new, 0
+      repeated, 30 skipped". Not written (said) for `--monitor all` (several recordings
+      composed) nor when the encode fell back to a copy; refused with --cut-idle and to a jailed
+      caller.
+    - What the log cannot say: a frame the compositor drew between two captures was never in
+      raw.mkv. The captures' own times are in the log (`drawn_ms`), so a gap longer than a
+      refresh shows where. "new" is a new capture: the recorder takes one whether the picture
+      changed or not. `shot --burst` has no log: each of its frames is a plain copy the
+      compositor draws for it, so every frame is "new" by construction and there is nothing to
+      align.
+    - Dead ends. The watch's first frame as a `copy_with_damage` (Hyprland draws a frame for a
+      new session): on an idle screen, a watch begun right after another ended never got it,
+      once in three back to back ("no frame in 10 s"); a plain copy first, none in thirteen
+      since. A box just up is not idle (its first frames): the test waits for `still` first.
+      The frames' own `ready` times from WAYLAND_DEBUG, as record's first-frame reader takes
+      them, would give the captures' times without ffmpeg but not which of them the video kept.
+      Timing a client's own frames (frame callbacks, presentation feedback on a surface of the
+      watcher's) would make the compositor draw every refresh: the measure would be the rate,
+      not the screen.
+    - Verified in a real box (Hyprland 0.57.2, the AMD iGPU renderD128, 1920x1080@60, no
+      shell): an idle screen, 0 frames; the fixture's `--animate`, 59 to 60 frames a second,
+      median 16.7 ms, none late on a quiet machine (up to 5% under load); `--animate --stall
+      2:70`, over a quarter of the frames late and a p95 over 60 ms; `-- ACTION`, `--idle`,
+      `--monitor` of no output, --json; `record --fps 30/60/120 --frames-log`: as many rows as
+      ffprobe counts frames in the video, captures left out at 30, repeats at 120. Not run:
+      NVIDIA (the card was given to a VM: the path is the same protocol, unchecked), Hyprland
+      0.56.2 (read, not run), an interactive box and a software-rendered one (their notes are
+      unit-tested words), a scaled or turned output's whole-output copy beyond the `--whole`
+      runs above, `record --frames-log` with --show-input or --audio.
+    - Tests: `watch_lines`, `percentiles_nearest_rank`, `smooth_has_no_late_frame`,
+      `late_frames_and_the_refreshes_they_skipped`, `a_late_frame_after_one_heard_late_is_unsure`,
+      `pauses_are_not_late_frames_nor_in_the_figures`, `nothing_drawn`, `report_words`,
+      `notes_say_what_the_numbers_are_not`, `stamps_read_back`,
+      `log_says_new_repeated_and_skipped`, `log_refuses_what_is_no_video`, `filter_words`,
+      `t_unit_frames`, `t_frames`, `t_record_frames_log`.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -342,14 +342,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         i += 1;
     }
     if act.is_some() && dur.is_some() {
-        return Err(ctx.die(
-            "frames: DURATION or -- ACTION, not both (after an action: --hold DURATION)",
-        ));
+        return Err(
+            ctx.die("frames: DURATION or -- ACTION, not both (after an action: --hold DURATION)")
+        );
     }
     if act.is_none() && hold.is_some() {
-        return Err(ctx.die(
-            "frames: --hold goes with -- ACTION (how long it watches on after the action)",
-        ));
+        return Err(
+            ctx.die("frames: --hold goes with -- ACTION (how long it watches on after the action)")
+        );
     }
     if let Some(a) = &act {
         crate::cmd::record::action_check_as(ctx, "frames", a)?;
@@ -462,11 +462,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
         )));
     }
-    let refresh = if w.mhz > 0 {
-        1e6 / w.mhz as f64
-    } else {
-        0.0
-    };
+    let refresh = if w.mhz > 0 { 1e6 / w.mhz as f64 } else { 0.0 };
     let s = stats(&w.frames, refresh, idle as f64);
     let watched = (w.end.unwrap_or(0) - w.ready.map_or(0, |r| r.1)) as f64 / 1e6;
     let cost = cost_context(ctx)?;
@@ -553,7 +549,10 @@ mod tests {
         assert_eq!(w.frames, vec![(200, 260), (400, 410)]);
         assert_eq!(w.end, Some(500));
         // (cut short: no end)
-        assert_eq!(parse_watch(b"watch A 1x1 0 whole\nready 1 2\nf 3").end, None);
+        assert_eq!(
+            parse_watch(b"watch A 1x1 0 whole\nready 1 2\nf 3").end,
+            None
+        );
     }
 
     #[test]

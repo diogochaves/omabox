@@ -33,8 +33,8 @@
 // its steady clock, CLOCK_MONOTONIC, taken as it hands the frame to the backend, not a page flip's).
 // Lines on stdout, times in ns:
 //   watch NAME WxH MHZ HOW the output, its mode and refresh (mHz); HOW: corner or whole, what it copies
-//   ready TS RECV          the first frame, which Hyprland draws for a new capture whatever the screen
-//                          does: where the watch starts, not a frame of it
+//   ready TS RECV          the first frame, a plain copy's, which the compositor draws whatever the
+//                          screen does: where the watch starts, not a frame of it
 //   f TS RECV              a frame: the compositor's time, and this tool's clock when it heard of it
 //                          (it asks for the next one then: a RECV near the next refresh may have missed one)
 //   end NOW                the watch is over: --for MS after `ready`, or with --tied once stdin closes
@@ -710,14 +710,18 @@ static struct {
     struct output *o;
     struct zwlr_screencopy_frame_v1 *frame;
     int64_t ts, recv;
-    int done, failed, corner;
+    int done, failed, corner, plain;
 } fw;
 
 static void fw_buffer(void *data, struct zwlr_screencopy_frame_v1 *f, uint32_t fmt, uint32_t w, uint32_t h, uint32_t s) {
     (void)data;
     if (w > 16384 || h > 16384 || s > 65536 * 4) fail("a frame it cannot hold (%ux%u)", w, h);
     buffer_fit(&fw.o->buf, fmt, (int32_t)w, (int32_t)h, (int32_t)s);
-    zwlr_screencopy_frame_v1_copy_with_damage(f, fw.o->buf.wl);   // the next frame the compositor draws
+    // The first: a plain copy, which makes the compositor draw one. (copy_with_damage's first frame of a
+    // session is drawn for it too, but on an idle screen, a watch begun within half a second of
+    // another's end, it sometimes never came: one watch in three, Hyprland 0.57.2.)
+    if (fw.plain) zwlr_screencopy_frame_v1_copy(f, fw.o->buf.wl);
+    else zwlr_screencopy_frame_v1_copy_with_damage(f, fw.o->buf.wl);   // the next frame the compositor draws
 }
 static void fw_ready(void *data, struct zwlr_screencopy_frame_v1 *f, uint32_t hi, uint32_t lo, uint32_t nsec) {
     (void)data;
@@ -814,6 +818,7 @@ static int frames_main(int argc, char **argv) {
 
     // The first frame: drawn for the capture itself.
     int fails = 0;
+    fw.plain = 1;
     fw_capture();
     for (int64_t deadline = omabox_now_ms() + FRAME_MS; !fw.done;) {
         if (fw.o->gone) fail("the output is gone");
@@ -827,6 +832,7 @@ static int frames_main(int argc, char **argv) {
     fflush(stdout);
     const int64_t end = for_ms < 0 ? INT64_MAX : omabox_now_ms() + for_ms;
     fails = 0;
+    fw.plain = 0;
     fw_capture();
     for (;;) {
         if (fw.done) {

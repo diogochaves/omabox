@@ -49,6 +49,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
               SHEET: --sheet [FRAMES] [--fit N]   the recording's contact sheet, FILE.sheet.png
               FRAMES: [--from T] [--to T] [--frames 15 | --every DURATION | --every-frame | --changed] [-g "X,Y WxH"]
               POLISH: [--show-input] [--captions] [--cut-idle [1s]]   clicks, pointer, keys and marks drawn in; still stretches cut
+              stop, -- ACTION and --for take [--frames-log FILE]: which captured frame each video frame holds
   omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb
   omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..." [--json]   where you see each mark: 1:1, or the --fit N that maps it
@@ -113,6 +114,10 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back
   omabox gpu [-b NAME] [DURATION] [--json]               GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
+  omabox frames [-b NAME] [--monitor NAME] [DURATION] [--idle 250ms] [--json]
+                                                         how the screen ran for DURATION (5s): frame times, late frames
+  omabox frames [-b NAME] [--monitor NAME] [--hold 500ms] [--idle 250ms] [--json] -- ACTION...
+                                                         the same around one action (an omabox command) and --hold after it
   omabox audio [-b NAME] [DURATION] [--json]             an up --audio box's sound for DURATION (3s): when, how loud
   omabox polkit [-b NAME] ask [--action ID] [--message TEXT] [--icon NAME] [--prompt TEXT] [--accept PASSWORD]
                 [--detail KEY=VALUE]... [--timeout 60s] [--delay DURATION] [--json]
@@ -172,7 +177,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run look shot record pixel find calibrate windows window scene jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin dnd dock reload mode output monitor gpu cpu audio polkit ports env path down save snapshot diff clip brief
+@+ up run look shot record pixel find calibrate windows window scene jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin dnd dock reload mode output monitor gpu frames cpu audio polkit ports env path down save snapshot diff clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -645,6 +650,21 @@ shortens the pause the viewer sees (the time before the call is in the video too
 ("held 4.210s to 6.210s"). `record mark TEXT --hold 2s` is the mark, then that hold from it (60s at
 most; --for and hold 60m). A bare number is seconds. `wait still` is no hold: it returns at once
 on a still screen and runs to its timeout under a clock or a spinner.
+`--frames-log FILE` (with stop, -- ACTION or --for; #488) writes which captured frame each frame of
+the video holds, and says the count ("92 frames: 61 new, 0 repeated, 30 skipped"). The recorder
+captures the screen's frames as they come, each with the compositor's time; the video is those
+frames at a steady --fps, so a video frame with no new capture in its time repeats the one before,
+and captures that fell between two video frames are left out (a 60 Hz screen at --fps 30: every
+other one). The log is a TSV, a row a video frame: frame (from 1), ms (its time in the video), holds
+(the captured frame it shows, counted from 1), drawn_ms (when the compositor drew that one, ms from
+the first), what (new, or repeated: the same as the frame before), skipped (captured frames left out
+just before it). These are counts, not estimates: ffmpeg's own fps filter is run again over the same
+recording with each frame replaced by its number. Read lag from a video with it: two things that
+moved in the same `holds` moved in the same frame of the screen. What it cannot see: a frame the
+compositor drew between two captures was never recorded (a gap in drawn_ms longer than a refresh
+shows where; `omabox frames` beside a take says how the screen ran). "new" is a new capture, which
+the recorder takes whether the picture changed or not. One monitor's recording only (not --monitor
+all), not with --cut-idle, not for a jailed agent yet.
 `record stop --sheet` (or `record --sheet -- ACTION`) adds FILE.sheet.png, and `record sheet VIDEO` makes
 one of any video (ffmpeg reads it in the box; with no box named and none up, here, sandboxed): a contact sheet to read instead of
 watching, --frames N (15) from the first to the last or one each --every DURATION, each labelled with
@@ -1201,6 +1221,35 @@ Resizing a window changes its view's scale, not the monitor (a window of another
 smaller along one side); closing one unplugs it. They need aquamarine's fix, as NVIDIA boxes do, and
 omabox's build of it puts your pointer on the monitor whose window it is in and keeps your cursor
 shown from one window to the next (`monitor add` says when a box's aquamarine does neither).
+@ frames
+`frames` says how the box's screen ran (#488): the time of each frame the compositor drew on one
+output (the main screen, or --monitor NAME) for DURATION (5s; 100ms to 10m), or around one action as
+`record -- ACTION` runs it (keys, click, run -d ...; watched from before it starts until --hold,
+500ms, after it ends). It reports the frames, how many a second while it drew, the time between
+frames (median, p95, p99, max) and the late ones: a frame that came more than 1.5 refreshes after
+the one before (25 ms at 60 Hz), with the refreshes that went without a frame. Under it, the GPU
+that drew the box (as `gpu` names it). --json: the same as fields (frame_ms, late, pauses, render,
+notes) and times_ms, each frame's time from the start of the watch. Exit 0 whatever it measured;
+with an action, the action's status.
+What is measured: the compositor's frames of the whole output, not one client's. A compositor draws
+only when something changed, so the time between two frames is a frame time only while something
+keeps changing (an animation, a video, a drag). A longer one is a frame that came late or a moment
+with nothing to draw, and the frames alone cannot say which: up to --idle (250ms) it counts as late,
+past that as a pause, listed apart ("pauses: 2 ...") and left out of the figures, so an idle screen
+is "no frame" and not one long late frame, and a stall is not hidden either. Measure one animation
+at a time, and read late frames as "the screen showed nothing new for that long".
+What the numbers do not mean: a frame's time is when the compositor handed it to its output (in a
+headless box there is no monitor: no page flip is timed), and a headless box draws at its mode's
+rate (`omabox mode`), so set the mode to the monitor you mean. An interactive box draws when your
+compositor lets it: hidden, about 15 frames a second whatever it shows, which is your compositor's
+pace and not the box's cost (said under the report). On software rendering (a box whose apps or
+compositor have no GPU) they are the CPU's times, said too. Other boxes on the same GPU slow the
+frames; the report does not list them. The watcher is one screen-capture client in the box: Hyprland
+posts its screencast events once, and it copies 8x8 pixels a frame (the whole output on a scaled or
+turned one, a read-back each frame that costs the compositor some time). It hears of a frame a few
+ms after it was drawn and asks for the next then; a late frame after one it heard of over half a
+refresh late is counted "unsure" (it may have missed a frame between). `frames -- ACTION` is not for
+a jailed agent yet (start the action, then `frames DURATION`).
 @ gpu
 `gpu release GPU` (a PCI slot, or nvidia, amd, intel: `omabox config gpu` lists them) takes down every
 headless box rendering on that GPU, naming each, so it can be handed elsewhere (a VM: a box holds its

@@ -150,6 +150,44 @@ pub(super) fn rec_ff_with(
     Ok((rc, printed))
 }
 
+/// frames_log FPS LIM: the frames log of the take's one raw stream, at the video's FPS and length
+/// (LIM, the encode's own -t); None when ffmpeg or its stamps fail.
+fn frames_log(
+    ctx: &mut Ctx,
+    fps: &[u8],
+    lim: Option<&[u8]>,
+) -> Res<Option<(Vec<u8>, crate::cmd::record_frames::Counts)>> {
+    use crate::cmd::record_frames as rf;
+    let mut a = w(&[
+        "/usr/bin/ffmpeg",
+        "-v",
+        "error",
+        "-nostdin",
+        "-i",
+        &format!("{}/raw.mkv", rec_dir(&ctx.d)),
+        "-an",
+        "-vf",
+    ]);
+    a.push(rf::stamp_filter("", fps));
+    if let Some(l) = lim {
+        a.push(b"-t".to_vec());
+        a.push(l.to_vec());
+    }
+    a.extend(w(&["-f", "rawvideo", "-pix_fmt", "gray", "-"]));
+    let (rc, raw) = rec_ff(ctx, Ff::Out, &a)?;
+    if rc != 0 || raw.len() >= rf::STAMP_MAX {
+        return Ok(None);
+    }
+    let fps: f64 = std::str::from_utf8(fps)
+        .ok()
+        .and_then(|f| f.trim().parse().ok())
+        .unwrap_or(0.0);
+    if fps <= 0.0 {
+        return Ok(None);
+    }
+    Ok(rf::stamps(&raw).and_then(|s| rf::log(&s, fps)))
+}
+
 /// `$(rec_ff -o ARGV...)`.
 fn rec_ff_subst(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
     rec_ff(ctx, Ff::Out, argv)
@@ -822,6 +860,28 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             )
         }));
     }
+    // --frames-log (#488): which captured frame each video frame holds, as ffmpeg's own `fps`
+    // says it of the same raw stream (record_frames). Not of a layout's video (several recordings
+    // composed), nor of a copy (the raw frames as they came, no steady fps).
+    let mut flog: Option<(Vec<u8>, crate::cmd::record_frames::Counts)> = None;
+    if !so.flog.is_empty() {
+        if rec.n > 1 {
+            say(
+                "record --frames-log: not for --monitor all's video (several recordings composed into one): no log written",
+            );
+        } else if copied {
+            say(
+                "record --frames-log: the video is the raw recording copied, not at a steady fps: no log written",
+            );
+        } else {
+            flog = frames_log(ctx, &take.fps, lim.as_deref())?;
+            if flog.is_none() {
+                say(
+                    "record --frames-log: could not read the recording's frames back: no log written",
+                );
+            }
+        }
+    }
     if rec.n > 1 {
         rm(&ctx.at("record.layout"));
     }
@@ -1002,6 +1062,27 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             v.beside(&cat!(bn, ".vtt"), false),
         );
         record_marks(ctx, &take, (&mt, &mv), &base)?;
+    }
+    if let Some((text, counts)) = &flog {
+        let wrote = crate::shots::OutFile::resolved(&so.flog, false)
+            .and_then(|f| f.put(&mut text.as_slice()).map(|()| f.path()));
+        match wrote {
+            Ok(p) => say(cat!(
+                "record: ",
+                crate::cmd::record_frames::summary(*counts),
+                " (",
+                p,
+                ")"
+            )),
+            Err(m) => {
+                say(cat!("record: --frames-log: ", m));
+                return Err(ctx.die(cat!(
+                    "record: could not write the frames log (the video is at ",
+                    rec.file,
+                    ")"
+                )));
+            }
+        }
     }
     let mut sp = Vec::new();
     if so.sheet {

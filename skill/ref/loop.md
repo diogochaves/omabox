@@ -80,7 +80,7 @@ most of a session's context**: the smallest that shows it (`--window`, `-g`, `--
 ## Where to look next
 
 - A failure: ref: checks.md; `omabox help exit-codes`, ref: cli.md. Colours, transitions, sizes,
-  monitors, `gpu`/`cpu`: ref: shots.md. `drag`, `scroll`: ref: input.md.
+  monitors, `gpu`/`cpu`/`frames`: ref: shots.md. `drag`, `scroll`: ref: input.md.
 - Plugins, toasts, `--omarchy`, the lock screen, polkit: ref: shell.md. `--hyprland`, plain boxes:
   ref: builds.md. Launcher: ref: apps.md. Logs, `lua`: ref: hyprland.md.
 - Mounts, HOME, `save`, ports, idling: ref: session.md.
