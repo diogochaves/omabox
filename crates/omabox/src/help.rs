@@ -53,6 +53,7 @@ pub const COMMANDS: &[&str] = &[
     "plugin",
     "gdb",
     "gpu",
+    "frames",
     "cpu",
     "audio",
     "polkit",

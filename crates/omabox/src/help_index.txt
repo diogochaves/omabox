@@ -42,6 +42,7 @@ In the box
   output          a screen dropped and back
 Measure and debug
   cpu, gpu        CPU and memory; GPU time
+  frames          how the screen ran: frame times, late frames
   audio, polkit   an --audio box's sound; its polkit agent
   gdb             a backtrace of Hyprland or the shell
   ports           the boxes' servers your 127.0.0.1 reaches

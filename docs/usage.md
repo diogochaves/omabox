@@ -101,8 +101,11 @@ omabox brief -b box-3                  # ~15 lines for a subagent's prompt: the 
   with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for
   the whole box session), `--xwayland`, `--autoreload` (Hyprland reloads its config when a file it
   loaded changes, as on your desktop), `omabox gpu 10` (GPU time of one box's
-  processes; on NVIDIA, its driver's own sampling) and `omabox cpu 10` (their CPU, as % of one
-  core, and memory; `--app NAME` or `--pid PID` for one). `omabox help` lists every command,
+  processes; on NVIDIA, its driver's own sampling), `omabox cpu 10` (their CPU, as % of one
+  core, and memory; `--app NAME` or `--pid PID` for one) and `omabox frames 5s` (how the screen
+  ran: the time between the compositor's frames, median to max, and the frames that came late; `--
+  ACTION` around one action; `record --frames-log FILE` says which captured frame each frame of a
+  video holds). `omabox help` lists every command,
   `--all` every flag, `omabox help CMD` (or `omabox CMD --help`) one command's; `--long` adds what
   each one does.
 

@@ -14,6 +14,18 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (#489).
 - **`window --pin`** pins a floating window (shown on every workspace), `--pin off` unpins it;
   `windows --json` has `pinned` (#489).
+- **`omabox frames [DURATION | -- ACTION...]`**: how a box's screen ran. The time between the
+  compositor's frames on its output (median, p95, p99, max), how many a second while it drew, and
+  the frames that came late (over 1.5 refreshes after the one before, with the refreshes that went
+  without one); `--json` adds each frame's time. An idle screen is "no frame" and a gap over
+  `--idle` (250ms) a pause, listed apart. It names the GPU that drew the box, and says when the
+  numbers are software rendering's or an interactive box's (about 15 frames a second when hidden)
+  (#488).
+- **`record --frames-log FILE`** (with `stop`, `-- ACTION` or `--for`): which captured frame each
+  frame of the video holds, when the compositor drew it, whether it is new or the one before
+  repeated, and how many captures the video's fps left out before it, with one line that counts
+  them (`92 frames: 61 new, 0 repeated, 30 skipped`). Counted by ffmpeg's own fps filter over the
+  same recording, not estimated (#488).
 
 ### Fixed
 - **`record --from 0`** (and `0s`, `0ms`) is the video's first frame; it was refused as "not a

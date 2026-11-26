@@ -90,6 +90,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"monitor" => Some("-b= --box= --name= --json"),
         b"plugin" => Some("-b= --box="),
         b"gpu" => Some("-b= --box= --json"),
+        b"frames" => Some("-b= --box= --monitor= --hold= --idle= --json"),
         b"cpu" => Some("-b= --box= --settle= --pid= --app= --threads --json"),
         b"audio" => Some("-b= --box= --json"),
         b"polkit" => Some(
@@ -101,7 +102,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"gdb" => Some("-b= --box= --shell --pid= --watch"),
         b"record" => Some(concat!(
             "-b= --box= -o= --output= --monitor= --no-pointer --audio --glide= --show-input --captions --cut-idle? --fps= ",
-            "--crf= --hold= --for= --sheet --frames= --every= --fit= --from= --to= -g= --every-frame --changed --json"
+            "--crf= --hold= --for= --sheet --frames= --frames-log= --every= --fit= --from= --to= -g= --every-frame --changed --json"
         )),
         b"check" => Some(concat!(
             "-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= --report-scale= --only= -w= --window= --active -g= --expect= --expect-tree= --expect-image= --expect-cmd ",

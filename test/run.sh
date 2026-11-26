@@ -963,7 +963,7 @@ t_unit_rec_ff() {
   # (the check's own: the crate with rec_ff's calls renamed, each of them unbounded)
   m=$TMP/recff-crate; rm -rf "$m"; cp -r "$src" "$m"; chmod -R u+w "$m"   # (an install's tree is read-only)
   sed -i 's/\brec_ff(/sys_ff(/g; s/\bff_line(/sys_line(/g; s/\brec_ff_subst(/sys_subst(/g; s/\bff_at(/sys_at(/g' "$m/cmd/record_stop.rs" "$m/cmd/record_sheet.rs"
-  check_eq "...it finds the 15 calls bounded (finding 356, #260's --changed, finding 693's copy), rec_ff's and ff_at's taken away" 15 "$(python3 -c "$REC_FF" "$m" | sed '$d' | wc -l)"
+  check_eq "...it finds the 16 calls bounded (finding 356, #260's --changed, finding 693's copy, #488's frames log), rec_ff's and ff_at's taken away" 16 "$(python3 -c "$REC_FF" "$m" | sed '$d' | wc -l)"
   # (rec_ff itself, a run out of time run once more, stuck once, a failure not a timeout:
   # record_stop.rs rec_ff_runs_once_more, an #[ignore] test; its bound: bounds; #324 wave 6-suite.)
 }
@@ -25516,11 +25516,126 @@ t_run_cwd() {
   check "down" ob down "$B"
 }
 
+# omabox frames (#488, finding 763): what it refuses before any box.
+t_unit_frames() {
+  local out rc args bad=""
+  for args in "frames soon" "frames 5 6" "frames 50ms" "frames 11m" "frames --hold 2s" "frames --hold 2m -- keys a" "frames --idle 10ms" \
+      "frames 5 -- keys a" "frames -- shot" "frames -- keys -b x a" "frames --bogus" "frames --monitor" \
+      "record --frames-log x start" "record --frames-log x status" "record --frames-log x --cut-idle stop" "record --frames-log"; do
+    read -ra a <<<"$args"
+    out=$(ob "${a[@]}" 2>&1); rc=$?
+    [ "$rc" = 2 ] || bad+=" [$args: $rc $out]"
+  done
+  check_eq "frames and record --frames-log: bad values and words that do not go together exit 2" "" "$bad"
+  check_match "frames: a duration it does not take, said with its range" "frames: how long to watch, 100ms to 10m, like 5s .*got soon \(omabox help frames\)" "$(ob frames soon 2>&1)"
+  check_match "...-- ACTION: one that acts" "frames -- ACTION: an omabox command that acts \(keys, click.*got shot" "$(ob frames -- shot 2>&1)"
+  check_match "...on the watched box" "frames -- ACTION: the action runs on the watched box \(no -b\)" "$(ob frames -- keys -b x a 2>&1)"
+  check_match "...DURATION or an action" "frames: DURATION or -- ACTION, not both" "$(ob frames 5 -- keys a 2>&1)"
+  check_match "record -- ACTION's own words kept" "record -- ACTION: the action runs on the recorded box \(no -b\)" "$(ob record -- keys -b x a 2>&1)"
+  check_match "record --frames-log with start: it goes with the video's making" "record start: --frames-log goes with stop, -- ACTION or --for" "$(ob record --frames-log x start 2>&1)"
+  check_match "...with --cut-idle: refused, and why" "--frames-log or --cut-idle, not both" "$(ob record --frames-log x --cut-idle stop 2>&1)"
+  check_match "...in a folder that is not there: refused before anything is recorded" "record: --frames-log: " "$(ob record --frames-log "$TMP/$P-no-such-dir/x.tsv" --for 1s 2>&1)"
+  out=$(OMABOX_JAIL='{"id":"t"}' ob record --frames-log x stop 2>&1); rc=$?
+  check_match "...for a jailed agent: refused" "^[12] .*--frames-log is not for a jailed agent yet" "$rc $out"
+  check_eq "a box that is not up: 1" 1 "$(ob frames -b "$P-nope" 1s >/dev/null 2>&1; echo $?)"
+  check "help frames says what a frame time is not" grep -q "nothing to draw" <<<"$(ob help frames --long)"
+}
+
+# omabox frames (#488, finding 763) on a real box: an idle screen draws nothing; an animation that
+# draws every refresh (the fixture's --animate) against the same one drawn late every other frame
+# (--stall 2:70: nothing new for 70 ms), told apart by their late frames and their p95, each against
+# the other's with a wide margin (other suites load the machine), never against a number of ms alone.
+t_frames() {
+  local B=$P-frm fx=$ROOT/tools/fixture/omabox-fixture out rc=0 js jt
+  [ -x "$fx" ] || { no "the fixture is built" "no $fx"; return; }
+  local fxbind=(--ro-bind "${fx%/*}"); [[ $fx != /usr/* ]] || fxbind=()
+  up_ok "$B" --no-shell --net isolated "${fxbind[@]}" || { no "up" "$UP_OUT"; return; }
+  # (a box just up still draws: its first frames, the pointer's)
+  ob wait -b "$B" --timeout 15s still --quiet 1s >/dev/null 2>&1
+  out=$(ob frames -b "$B" 1s 2>&1) || rc=$?
+  check_match "frames on an idle screen: no frame, said as what it is" "^0 box '$B': [0-9]+x[0-9]+@[0-9.]+ on [^ ]+, watched 1\.[0-9]+s: no frame: nothing on the screen changed" "$rc $out"
+  check_match "...and the GPU that drew the box" "GPU: [a-z0-9_-]+ [0-9a-f:.]+ \(renderD[0-9]+\)" "$out"
+  check_eq "...--json: 0 frames, nothing timed" "0 null null" "$(ob frames -b "$B" 1s --json 2>/dev/null | jq -r '"\(.frames) \(.fps) \(.frame_ms)"')"
+  # (the first frame of a watch begun as another ends, on an idle screen, once never came)
+  check_eq "...five watches back to back: each gets its first frame" "0 0 0 0 0" "$(for _ in 1 2 3 4 5; do ob frames -b "$B" 200ms --json 2>/dev/null | jq -r .frames; done | paste -sd ' ')"
+  ob run -b "$B" -d -q -- "$fx" --animate --log /tmp/fx.log >/dev/null 2>&1
+  check "a window that animates" ob wait -b "$B" --timeout 10s window class:omabox-fixture
+  js=$(ob frames -b "$B" 3s --json 2>&1); rc=$?
+  check_eq "frames 3s --json of an animation: exit 0" 0 "$rc"
+  check "...over 90 frames in its 3 s ($(jq -r .frames <<<"$js" 2>&1))" jq -e '.frames > 90 and .intervals == .frames - 1 and (.times_ms | length) == .frames' <<<"$js"
+  check "...the output, its refresh, what it copied, the GPU" jq -e '(.output | length) > 0 and .refresh_hz > 0 and (.copy == "corner" or .copy == "whole") and (.render.driver | length) > 0 and .late.over_ms > .refresh_ms and .late.over_ms < 2 * .refresh_ms and .software == false and .interactive == false' <<<"$js"
+  check "...a median within a refresh and a half ($(jq -r '.frame_ms.median' <<<"$js" 2>&1) ms)" jq -e '.frame_ms.median <= .late.over_ms and .frame_ms.median <= .frame_ms.p95 and .frame_ms.p95 <= .frame_ms.p99 and .frame_ms.p99 <= .frame_ms.max' <<<"$js"
+  out=$(ob frames -b "$B" 1s 2>&1)
+  check_match "...as text: frames, a rate, the frame times, the late ones" "[0-9]+ frames, [0-9.]+ a second while it drew \([0-9.]+s\) frame time: median [0-9.]+ ms, p95 [0-9.]+, p99 [0-9.]+, max [0-9.]+ \(a refresh is [0-9.]+ ms\) late: " "$(paste -sd ' ' <<<"$out")"
+  ob run -b "$B" -- pkill -x omabox-fixture >/dev/null 2>&1
+  check "...the window gone" ob wait -b "$B" --timeout 10s window class:omabox-fixture --gone
+  # The same animation, stuttering: every other frame 70 ms late.
+  ob run -b "$B" -d -q -- "$fx" --animate --stall 2:70 --log /tmp/fx2.log >/dev/null 2>&1
+  check "a window that stutters" ob wait -b "$B" --timeout 10s window class:omabox-fixture
+  jt=$(ob frames -b "$B" 3s --json 2>&1)
+  check "the stutter: a quarter of its frames late or more ($(jq -r '.late.percent' <<<"$jt" 2>&1)%), refreshes without a frame counted" jq -e '.late.percent >= 25 and .late.refreshes_skipped >= .late.count and .late.count > 5' <<<"$jt"
+  check "...told from the smooth one: over twice its share of late frames ($(jq -r '.late.percent' <<<"$js" 2>&1)% smooth)" \
+    jq -en --argjson s "$js" --argjson t "$jt" '$t.late.percent >= 2 * $s.late.percent + 10'
+  check "...and by its p95 ($(jq -r '.frame_ms.p95' <<<"$jt" 2>&1) ms, the smooth one's $(jq -r '.frame_ms.p95' <<<"$js" 2>&1))" \
+    jq -en --argjson s "$js" --argjson t "$jt" '$t.frame_ms.p95 >= 60 and $t.frame_ms.p95 >= 2 * $s.frame_ms.median'
+  check "...--idle 60ms: its late frames are pauses then, out of the figures" \
+    jq -e '.pauses.count > 5 and .pauses.over_ms == 60 and .pauses.longest_ms > 60 and (.frame_ms == null or .frame_ms.max <= 60)' <<<"$(ob frames -b "$B" 2s --idle 60ms --json 2>&1)"
+  ob run -b "$B" -- pkill -x omabox-fixture >/dev/null 2>&1
+  ob wait -b "$B" --timeout 10s window class:omabox-fixture --gone >/dev/null 2>&1
+  # Around an action: watched from before it starts, and --hold after it.
+  rc=0; out=$(ob frames -b "$B" --hold 1s --json -- run -d -q -- "$fx" --animate --for 600 --log /tmp/fx3.log 2>/dev/null) || rc=$?
+  check_eq "frames -- ACTION: exit 0" 0 "$rc"
+  check "...the action's frames, in a watch of its hold or more ($(jq -r '"\(.frames) frames, \(.seconds) s"' <<<"$out" 2>&1))" jq -e '.frames > 10 and .seconds >= 1' <<<"$out"
+  rc=0; out=$(ob frames -b "$B" --hold 100ms -- run -- false 2>&1) || rc=$?
+  check_match "...an action that fails: its status, the watch still reported" "^1 .*watched .*frames: the action ended 1" "$rc $(paste -sd ' ' <<<"$out")"
+  rc=0; out=$(ob frames -b "$B" --monitor "$P-NOPE" 1s 2>&1) || rc=$?
+  check_match "frames --monitor of no such output: exit 1, said" "^1 omabox: frames: could not watch box '$B''s screen: no output named $P-NOPE" "$rc $out"
+  check "down" ob down "$B"
+}
+
+# record --frames-log (#488, finding 763): which captured frame each video frame holds, by ffmpeg's
+# own fps filter over the same raw stream. A row a video frame; a 60 Hz screen recorded at 30 fps
+# leaves captured frames out, at 120 fps repeats them.
+t_record_frames_log() {
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "record --frames-log" "no render node here but NVIDIA's"; return; }
+  if ! rec_tools; then skip "record --frames-log" "$REC_WHY"; return; fi
+  local B=$P-rfl fx=$ROOT/tools/fixture/omabox-fixture v=$TMP/$P-rfl.mp4 l=$TMP/$P-rfl.tsv out rc=0 nf sum
+  [ -x "$fx" ] || { no "the fixture is built" "no $fx"; return; }
+  local fxbind=(--ro-bind "${fx%/*}"); [[ $fx != /usr/* ]] || fxbind=()
+  OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated "${fxbind[@]}" || { no "up for record --frames-log" "$UP_OUT"; return; }
+  ob run -b "$B" -d -q -- "$fx" --animate --log /tmp/fx.log >/dev/null 2>&1
+  check "a window that animates" ob wait -b "$B" --timeout 10s window class:omabox-fixture
+  out=$(ob record -b "$B" -o "$v" --fps 30 --for 2s --frames-log "$l" 2>&1) || rc=$?
+  check_match "record --for 2s --fps 30 --frames-log: its summary, naming the log" "^0 .*omabox: record: [0-9]+ frames: [0-9]+ new, [0-9]+ repeated, [0-9]+ skipped \($l\)" "$rc $(paste -sd ' ' <<<"$out")"
+  nf=$(ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 "$v" 2>/dev/null)
+  check_eq "...a header, then a row for each frame of the video ($nf)" "frame ms holds drawn_ms what skipped $nf" "$(head -n 1 "$l" | tr '\t' ' ') $(($(wc -l < "$l") - 1))"
+  sum=$(awk -F'\t' 'NR > 1 { n++; if ($5 == "new") a++; else if ($5 == "repeated") r++; else bad++; s += $6
+      if ($1 != n || $3 < h || ($5 == "repeated") != ($3 == h) || $4 < d) bad++; h = $3; d = $4 }
+    END { printf "%d frames: %d new, %d repeated, %d skipped%s", n, a, r, s, bad ? " BAD " bad : "" }' "$l")
+  check_match "...its rows add up to the summary: frames in order, what they hold never going back, a repeat the same frame again" "omabox: record: $sum \(" "$out"
+  check "...60 captured frames a second into 30: captured frames left out ($sum)" awk -F'\t' 'NR > 1 { s += $6 } END { exit !(s >= 10) }' "$l"
+  check "...the times of what the frames hold keep up with the video's own (the last within 100 ms)" awk -F'\t' 'END { d = $2 - $4; exit !(d > -100 && d < 100) }' "$l"
+  rc=0; out=$(ob record -b "$B" -o "$v" --fps 120 --for 1s --frames-log "$l" 2>&1) || rc=$?
+  check_match "at 120 fps: its summary" "^0 .*[0-9]+ frames: [0-9]+ new, [0-9]+ repeated, [0-9]+ skipped" "$rc $(paste -sd ' ' <<<"$out")"
+  check "...more frames than the screen drew: repeats, a third of them or more ($(grep -o '[0-9]* frames: .* skipped' <<<"$out"))" \
+    awk -F'\t' 'NR > 1 { n++; if ($5 == "repeated") r++ } END { exit !(n > 100 && r >= n / 3) }' "$l"
+  # start, then stop --frames-log: the same log, made at stop.
+  rm -f "$l"
+  ob record -b "$B" start -o "$v" --fps 60 >/dev/null 2>&1
+  ob record -b "$B" hold 1s >/dev/null 2>&1
+  out=$(ob record -b "$B" stop --frames-log "$l" 2>&1)
+  check_match "record stop --frames-log: its summary" "[0-9]+ frames: [0-9]+ new, [0-9]+ repeated, [0-9]+ skipped \($l\)" "$out"
+  check "...and the log" test -s "$l"
+  check_eq "...nothing recording" "box '$B': not recording" "$(ob record -b "$B" status)"
+  check "down" ob down "$B"
+}
+
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_guard_theme_set t_unit_layout t_unit_parse_mode t_unit_record t_unit_scene t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch t_unit_bench_checks
+UNIT=(t_unit_json t_unit_frames t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_guard_theme_set t_unit_layout t_unit_parse_mode t_unit_record t_unit_scene t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch t_unit_bench_checks
   t_unit_aquamarine t_unit_aq_runpath t_unit_theme_check t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_scene t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_term t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_record_links t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_shot_layer t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_scene t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_record_frames_log t_frames t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_term t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_record_links t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_shot_layer t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_hostile_reads t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's

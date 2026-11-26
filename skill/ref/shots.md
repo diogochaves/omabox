@@ -212,6 +212,18 @@ Sections:
   pmon`, `source` in `--json`): whole seconds, % of the GPU each process was seen using once a second;
   a light process can read 0, and one saturating the GPU leaves the others at 0. Compare runs, not
   absolute figures, there.
+- **How smooth it ran** (frame times, late frames): `omabox frames 5s` while the thing animates, or
+  `omabox frames -- keys super+space` around one action (watched from before it starts, `--hold
+  500ms` after it); `--json` for the fields (`frame_ms.median/p95/p99/max`, `late.count/percent`,
+  `pauses`, `render`, `times_ms`). It times the compositor's frames on the box's screen (`--monitor
+  NAME` for another), not one app's. A frame is late when it came over 1.5 refreshes after the one
+  before. A compositor draws only what changes: an idle screen is "no frame", and a gap over
+  `--idle` (250ms) is a pause, listed apart, not a late frame; between the two it cannot tell a late
+  frame from nothing to draw, so measure one animation at a time, something that changes every
+  frame. Compare runs in a headless box at the mode you mean (`--size 2560x1440@144`): an
+  interactive box hidden on its workspace draws about 15 frames a second whatever it shows, and
+  software rendering's numbers are the CPU's (both said under the report). Other boxes on the GPU
+  slow the frames and are not listed.
 - **wgpu apps (eframe's default renderer, iced, Bevy) do not start in a box on NVIDIA**:
   `RequestAdapterError(NotFound { active_backends: VULKAN | GL })`; wgpu does not fall back to GL
   there. Build the app with a GL renderer (eframe's `glow`), or run it in a box on the AMD/Mesa render

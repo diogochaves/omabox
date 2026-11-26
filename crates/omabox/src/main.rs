@@ -184,6 +184,7 @@ fn main() -> ExitCode {
         Some("output") => Some(cmd::output::run),
         Some("mode") => Some(cmd::mode::run),
         Some("gpu") => Some(cmd::gpu::run),
+        Some("frames") => Some(cmd::frames::run),
         Some("cpu") => Some(cmd::cpu::run),
         Some("audio") => Some(cmd::audio::run),
         Some("polkit") => Some(cmd::polkit::run),

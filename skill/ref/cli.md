@@ -61,6 +61,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `dock --json` | `enabled, position, autohide, monitors` (each `name, workspace, layout, fullscreen, layer` (`at, size`, or null), `state` (shown, tucked, hidden, off, none), `input` (icons, edge, none)) |
 | `monitor list --json` | an array: `name, mode, scale, x, y, workspace` (`dropped` for one `output drop` took) |
 | `gpu --json` | `box, seconds, source, render, percent, engines` and more |
+| `frames --json` | `box, output, mode, refresh_hz, refresh_ms, seconds, frames, intervals, fps, frame_ms` (`median, p95, p99, max, mean`; null with nothing timed), `late` (`over_ms, count, percent, refreshes_skipped, unsure`), `pauses` (`over_ms, count, seconds, longest_ms`), `interactive, software, notes, render, times_ms` and more |
 | `cpu --json` | `box, seconds, settle, cores, percent, processes, total` and more |
 | `audio --json` | `box, seconds, sound, sound_s, peak_db, rms_db, spans, levels` and more |
 | `polkit ask --json` | `result` (authenticated, not-authenticated, cancelled, timeout, agent-gone, no-agent), `tries, wrong, agent, path, action, why`; `polkit agents --json`: an array, `subject, name, path, fallback` |

@@ -97,6 +97,12 @@ Sections:
   (the highest scale, gaps black), the monitors in step to a frame. Needs wf-recorder and ffmpeg (they run in the box; a stuck ffmpeg step is killed at its time limit and run once more; when the encode is stuck twice, `stop` copies the raw H.264 into the MP4 without re-encoding it and says what that video lacks (no steady fps, no sound, input, captions, cut or layout composed, a larger file), and fails keeping the raw files only when that copy fails too). An ffmpeg without libx264 (Fedora's ffmpeg-free, openSUSE's) records with openh264, said at start: still an H.264 MP4, `--crf N` its quantiser (bigger files), no `--crf 0`, 4096x2304's pixels a frame at most. You cannot watch it: `record
   stop --sheet` (or `record sheet demo.mp4 [--frames N | --every 2s] [--fit N]`, any video, no box needed) prints a contact
   sheet, demo.sheet.png, frames labelled with their times: Read it, fix the script, record again.
+  Measuring from a video (how many frames one thing trails another): `record ... --frames-log f.tsv`
+  (with `stop`, `-- ACTION` or `--for`) writes, a row a video frame, which captured frame it holds,
+  when the compositor drew it, and whether it is new, the one before repeated, or came after
+  captures the video's fps left out; one line counts them ("92 frames: 61 new, 0 repeated, 30
+  skipped"). Record at the screen's rate (`--fps 60` on a 60 Hz box) and count lag in `holds`, not
+  in video frames. One monitor, no `--cut-idle`.
   A short motion (a 100 ms glitch, a text decode), frame by frame: `record sheet demo.mp4 --from
   1.2s --to 1.6s --every-frame -g "X,Y WxH"` (each frame of that stretch, cropped to the region in
   the video's pixels, a small one enlarged), or `--changed -g "X,Y WxH"` for the frames where that

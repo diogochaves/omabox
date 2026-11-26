@@ -37,7 +37,7 @@ Hyprland version from a folder: its libraries first, its `hyprctl` bound over th
 | `tools/wlfd` | hands an interactive box its one connection to your compositor |
 | `tools/peek` | the live view-only window (`omabox peek`) |
 | `tools/still` | waits in a box until its screen holds still or changes (`omabox wait`, `--wait`) |
-| `tools/burst` | takes a `shot --burst`'s frames through one capture client (Hyprland's screencast events once a burst) |
+| `tools/burst` | takes a `shot --burst`'s frames through one capture client (Hyprland's screencast events once a burst); `omabox-burst frames` times the compositor's frames on one output for `omabox frames` |
 | `tools/tree` | reads a window's accessibility (AT-SPI) tree in a box, as text (`omabox tree`) |
 | `tools/events` | records a box's Hyprland events, stamped, from its start (`omabox events`) |
 | `tools/notices` | records what reaches a box's notification server, from its start (`omabox log notifications`, `wait notification`) |
