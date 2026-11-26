@@ -161,7 +161,7 @@ pub const WIN_JQ: &str = concat!(
   | [$c | map(select(.mapped)) | to_entries[] | .value + {z: .key}
      | .onscreen = ((.workspace | wsk) as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
   | [$all[] | . as $t | {address, stableId, class, title, initialClass, initialTitle, pid,
-      workspace: .workspace.name, at, size, floating, fullscreen: (.fullscreen > 0),
+      workspace: .workspace.name, at, size, floating, pinned: (.pinned // false), fullscreen: (.fullscreen > 0),
       fullscreenMode: (if .fullscreen >= 2 then "fullscreen" elif .fullscreen == 1 then "maximized" else "none" end), xwayland,
       active: (.address == $a.address), onscreen,
       cover: [$all[] | select(.address != $t.address and .onscreen and above(.; $t) and overlaps($t))

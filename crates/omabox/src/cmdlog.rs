@@ -330,6 +330,7 @@ pub fn is_read(cmd: &[u8], r: &Redacted) -> bool {
             b"--tile",
             b"--fullscreen",
             b"--maximize",
+            b"--pin",
         ]
         .iter()
         .any(|o| has(o)),
