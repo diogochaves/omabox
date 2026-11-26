@@ -6597,6 +6597,7 @@ t_jail() {
     systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$bcli" >"$br/log" 2>&1 & SERVERS+=($!)
   until_ok 5 test -S "$br/sock" >/dev/null
   ob up "$P-host" >/dev/null 2>&1   # the user's box: not the jail's to drive
+  echo '{"windows": [{"name": "jscn", "run": ["foot", "-T", "JSCN", "sleep", "605"], "workspace": 2}]}' > "$repo/scene.json"
   cat > "$repo/t.sh" <<EOF
 O=$CLI
 r() { echo "== \$1"; shift; "\$@" 2>&1; echo "rc=\$?"; }
@@ -6617,6 +6618,9 @@ r travel-mod \$O click --steps 3 --mod ctrl 960 600
 r facts \$O run -d -q --wait -- foot -T J sleep 600
 r facts124 \$O keys --wait --timeout 1s --json shift
 r pointer-mod \$O pointer --steps 2 --mod shift -- move 900 500 move 960 540 --steps 3
+r scene-path \$O scene $repo/scene.json
+r scene-stdin sh -c '"\$1" scene - < $repo/scene.json' _ \$O
+r scene-where sh -c '"\$1" windows --json | jq -r ".[] | select(.title == \\"JSCN\\") | .workspace"' _ \$O
 r relay-o $R call $br/sock -- shot -b $P-jail -o $br/pwned.png
 r host \$O host -- touch $br/pwned
 r ro-bind \$O up $P-other --ro-bind $TMP/lacks
@@ -6649,6 +6653,10 @@ EOF
   # (#110: not by matching around the user's box with it stripped out first, which passed either way)
   check_match "...its own box listed" "^NAME .*$P-jail .*rc=0 $" "$(sect ls)"
   check_fails "...and not the user's box" grep -q -- "$P-host" <<<"$(sect ls)"
+  # #489: a jailed agent's scene: never read from a path on the user's side, taken on stdin.
+  check_match "scene FILE from a jail: refused, stdin named" "a jailed agent's scene comes on stdin .*rc=2" "$(sect scene-path | tr '\n' ' ')"
+  check_match "...scene - with the file piped in: its window opened" "^jscn 0x[0-9a-f]+ opened workspace 2 .*rc=0 $" "$(sect scene-stdin | tr '\n' ' ')"
+  check_eq "...on the workspace asked, in the jail's box" "2 rc=0" "$(sect scene-where | tr '\n' ' ' | sed 's/ $//')"
   check_eq "run starts in the jail's project, mounted" "$repo hi rc=0 " "$(sect pwd)"
   check_match "a shot is written into the jail" "211PNG" "$(sect shotfile)"
   check_match "shot -o into the jail's project" "out.png rc=0" "$(sect shot-o)"
@@ -9518,6 +9526,8 @@ t_desk_shell() {
   check_eq "...no line of its own for any of them" 1 "$(grep -c "not copied" <<<"$out")"
   check_eq "...box.json has each" "15 api-keys.env" "$(jq -r '.desk_shell.skipped | "\(length) \(.[0].path)"' "$(ob path "$B")/box.json")"
   check_fails "...a plugin the desk has off: no warning" grep -q "$P.doff" <<<"$out"
+  # #483: the folders its plugins are mounted on, made when the box starts, are up's own: not "added".
+  check_fails "diff --seed: no mounted plugin's folder as added" grep -q "plugins/" <<<"$(ob diff --seed -b "$B" 2>&1)"
   check_match "...omabox's own widget left out, said (#304)" "not mounting plugins/omabox: omabox's own widget" "$out"
   check_fails "...and out of the box's shell.json: bar, a plugin's list, its settings" grep -q chaves.omabox "$H/.config/omarchy/shell.json"
   j=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n)')
@@ -11719,7 +11729,8 @@ t_unit_tree_layer() {
     '0 {"namespace":"omarchy-background","address":"0xa","pid":7,"x":0,"y":0,"w":1920,"h":1080,"monitor":"DP-1","level":"background"}' "$rc $out"
   out=$(probe layer_select "$J" omarchy-bar 2>&1); rc=$?
   check_eq "a namespace on two monitors: exit 2" 2 "$rc"
-  check_match "...both listed, to name one by its address" "omarchy-bar matches 2 layers: name one by its address.*0xb .* on DP-1 .*0xd .* at 1920,0 on DP-2" "$(tr '\n' ' ' <<<"$out")"
+  check_match "...both listed, to name one by its address" "omarchy-bar matches 2 layers: name one by its edge of the screen \(omarchy-bar:top, :bottom, :left or :right\) or its address.*0xb .* on DP-1 .*0xd .* at 1920,0 on DP-2" "$(tr '\n' ' ' <<<"$out")"
+  check_eq "...by its edge (#494): of two vertical bars, the right one" "0xd DP-2" "$(probe layer_select "$J" omarchy-bar:right | jq -r '"\(.address) \(.monitor)"')"
   check_eq "address:0xd" "0xd DP-2" "$(probe layer_select "$J" address:0xd | jq -r '"\(.address) \(.monitor)"')"
   check_eq "pid:9" solo "$(probe layer_select "$J" pid:9 | jq -r .namespace)"
   out=$(probe layer_select "$J" omarchy-menu 2>&1); rc=$?
@@ -11860,6 +11871,19 @@ ShellRoot {
     WlrLayershell.namespace: "t254-empty"
     Text { text: "no roles here" }
   }
+  // #494: a frame drawn as one layer per edge, all of one namespace.
+  PanelWindow {
+    anchors { bottom: true; left: true; right: true }
+    implicitHeight: 24; exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "t494"
+    Rectangle { width: 90; height: 20; Accessible.role: Accessible.Button; Accessible.name: "bottom edge" }
+  }
+  PanelWindow {
+    anchors { top: true; bottom: true; right: true }
+    implicitWidth: 24; exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "t494"
+    Rectangle { width: 20; height: 90; Accessible.role: Accessible.Button; Accessible.name: "right edge" }
+  }
 }
 QML
   ob run -b "$B" -d -q -- qs -p /home/sbx/t254.qml >/dev/null 2>&1
@@ -11867,6 +11891,13 @@ QML
     no "the stub's layers map" "no t254 / t254-empty layer"; ob down "$B" >/dev/null; return
   fi
   read -r x y < <(ob hyprctl -b "$B" -j layers | jq -r '[.. | objects | select(.namespace? == "t254")][0] | "\(.x) \(.y)"')
+  # #494: two layers of one namespace: refused naming the edge words; each picked by its edge.
+  ob wait -b "$B" layer t494 >/dev/null 2>&1
+  out=$(ob tree -b "$B" --layer t494 2>&1); rc=$?
+  check_match "tree --layer of a namespace two layers share: exit 2, the edge words named (#494)" \
+    "^2 omabox: t494 matches 2 layers: name one by its edge of the screen \(t494:top, :bottom, :left or :right\) or its address" "$rc $out"
+  check_match "...--layer t494:right --find: the tall one's button" '^button "right edge" @' "$(ob tree -b "$B" --layer t494:right --find 'edge' 2>&1)"
+  check_match "...--layer t494:bottom: the wide one's" '^button "bottom edge" @' "$(ob tree -b "$B" --layer t494:bottom --find 'edge' 2>&1)"
   out=$(ob tree -b "$B" --layer t254 2>&1); rc=$?
   check_eq "tree --layer: the frame and its named button, in the screen's coordinates (the layer at $x,$y)" \
     "0 frame @$x,$y 400x120"$'\n'"  button \"a named button\" @$((x + 150)),$((y + 40)) 120x50" "$rc $out"
@@ -13162,6 +13193,27 @@ desk_guard() {
 }
 # re_q TEXT: TEXT as a bash regex matching it literally.
 re_q() { printf '%s' "$1" | sed -E 's/[][\\.*^$()+?{}|]/\\&/g'; }
+
+# #482: a desk box's --autoreload reloads on an edit of the box's copy of hyprland.lua: desk.lua runs
+# it by dofile, which Hyprland does not watch, so it asks Hyprland's module searcher for the file too.
+t_desk_autoreload() {
+  local B=$P-dauto D f c=${XDG_CACHE_HOME:-$HOME/.cache} xc=$TMP/$P-dauto-conf out i g=""
+  mkdir -p "$xc"; desk_lua "$xc"
+  out=$(cd "$ROOT" && XDG_CONFIG_HOME=$xc "$CLI" up "$B" --desktop desk --autoreload --net isolated --no-shell 2>&1) ||
+    { no "up --desktop desk --autoreload" "$out"; ob down "$B" >/dev/null 2>&1; return; }
+  D=$(ob path -b "$B")
+  desk_guard "$B" "$D" "$HOME" "$c" || { ob down "$B" >/dev/null 2>&1; return; }
+  # (written in the box, at the path its Hyprland reads the copy from)
+  f='c=${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua; test -f "$c" && printf "\nhl.config({ general = { gaps_out = 41 } })\n" >> "$c"'
+  ob run -b "$B" -- sh -c "$f" >/dev/null 2>&1 || { no "the box's copy of hyprland.lua" "none at its XDG_CONFIG_HOME"; ob down "$B" >/dev/null 2>&1; return; }
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    g=$(ob hyprctl -b "$B" getoption general:gaps_out 2>&1 | head -1)
+    [[ $g == *"41 41 41 41"* ]] && break
+    sleep 0.5
+  done
+  check_match "an edit of the desk copy's hyprland.lua reloads it (#482; try $i)" "41 41 41 41" "$g"
+  ob down "$B" >/dev/null 2>&1
+}
 
 # #321 step 1 (finding 700): a desk box at your real HOME's path. On the host, your HOME is only read:
 # what the box writes goes to its own folder, which desk_guard proves before anything of the test's
@@ -22778,7 +22830,7 @@ QML
     no "a bar on the second monitor ($m2)" "$(ob hyprctl -b "$B" layers 2>&1)"
   else
     out=$(ob shot -b "$B" --layer t-shotbar 2>&1); rc=$?
-    check_match "a bar on each monitor: exit 2, --monitor named" "^2 omabox: shot: t-shotbar matches 2 layers: name one by --monitor NAME or its address" "$rc $out"
+    check_match "a bar on each monitor: exit 2, --monitor named" "^2 omabox: shot: t-shotbar matches 2 layers: name one by --monitor NAME or its edge of the screen \(t-shotbar:top, :bottom, :left or :right\) or its address" "$rc $out"
     err=$(ob shot -b "$B" --fit 0 --layer t-shotbar --monitor "$m2" -o "$o/m2.png" 2>&1 >/dev/null); rc=$?
     check_eq "--monitor $m2: the bar there, 800x$lh" "0 800x$lh" "$rc $(magick identify -format %wx%h "$o/m2.png" 2>&1)"
     check_match "...said on $m2, at $W,0" "layer \"t-shotbar\" \(pid [0-9]+, 800x$lh at $W,0\) on $m2;" "$err"
@@ -24870,6 +24922,9 @@ HTML
   check_eq "...--window chromium does not" 2 "$(ob shot -b "${kb:-look-1}" --window chromium -o "$TMP/$P-lookg-no.png" >/dev/null 2>&1; echo $?)"
   [ -z "$kb" ] || ob down "$kb" >/dev/null 2>&1
   check_match "...no such file: refused" "look page: no such file" "$(ob look page "$d/nope.html" 2>&1)"
+  # #491: an http page nothing answers at: a problem, not "problems: none" over the browser's error page.
+  rc=0; out=$(ob look page "http://127.0.0.1:9/none" --net isolated --after 1s 2>&1) || rc=$?
+  check_match "look page on a port nothing answers at: 1, said" '^1 .*'$'\n''problems:'$'\n''  nothing answers at 127\.0\.0\.1:9 from the box ' "$rc $out"
   # #491: a file:// URL (or a path with what the page reads after it) is that file: its folder is
   # mounted for the look's box as a path's is (it was opened as a URL the box could not see: Chromium's
   # error page shot, "problems: none"); one of no file is refused before any box.
@@ -25635,7 +25690,7 @@ t_record_frames_log() {
 
 UNIT=(t_unit_json t_unit_frames t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_guard_theme_set t_unit_layout t_unit_parse_mode t_unit_record t_unit_scene t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch t_unit_bench_checks
   t_unit_aquamarine t_unit_aq_runpath t_unit_theme_check t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_scene t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_record_frames_log t_frames t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_term t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_record_links t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_shot_layer t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_autoreload t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_scene t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_record_frames_log t_frames t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_term t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_record_links t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_shot_layer t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_hostile_reads t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's

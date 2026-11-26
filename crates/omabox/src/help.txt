@@ -194,7 +194,8 @@ too (omabox -b NAME windows).
 @short shot
 --monitor NAME: one monitor of the box's (omabox monitor list)
 @short shot tree click wait
---layer SEL (or -l SEL): a layer surface (the bar, a panel, a menu): its namespace, address:0x... or pid:N
+--layer SEL (or -l SEL): a layer surface (the bar, a panel, a menu): its namespace, address:0x... or pid:N;
+NAMESPACE:top, :bottom, :left or :right when several share a namespace (a frame of one layer per screen edge)
 @short log events
 -f (or --follow): on until the box goes down
 @short lua hyprctl
@@ -1293,7 +1294,8 @@ still works, and `omabox host` runs a command you asked for on the real desktop.
 @ broker
 An agent inside ai-jail cannot enter a box: `omabox broker on` (a systemd user socket) lets its
 omabox hand commands to omabox outside, which keeps the jail's boxes to what the jail has (its
-project, its network or none) and to themselves. It prints the lines to add to ~/.ai-jail.
+project, its network or none) and to themselves. It prints the lines to add to
+~/.config/ai-jail/config.toml, merged into its ro_maps (ai-jail before 3.0 read ~/.ai-jail).
 @ up run
 Crashes in a box skip the desktop's crash notifications (core limit 1 byte; raise it inside for a core).
 @ which

@@ -120,6 +120,10 @@ else
       return raw_dofile(path, ...)
     end
   end
+  -- Hyprland watches the files its own module searcher loaded, not one run by dofile, so in an
+  -- --autoreload box an edit of this file reloaded nothing (#482). Asking the searcher for it (an
+  -- explicit path: it compiles the file, runs nothing) puts it on that list, as its modules are.
+  if type(package.searchers) == "table" then pcall(package.searchers[2], cfg) end
   -- The config itself; an error in it is a config error: the box still starts, with what loaded.
   local ok, err = pcall(dofile, cfg)
   if not ok then

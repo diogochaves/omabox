@@ -6,9 +6,10 @@ What is untested, and what a box does differently from your desktop. Back to the
 - Other NVIDIA models and drivers are untested. Of the agents the skill is installed for, Claude
   Code and OpenCode were checked end to end; Codex, pi and Hermes find the skill, but no run of
   theirs reached a model here.
-- Off Omarchy, Arch, Debian sid and openSUSE Tumbleweed were tried in containers (`test/distros.sh
-  --boxes`), not on a real install; there `protect-ports` was seen accepted but no connected box ran
-  with it. Fedora, NixOS and the rest: see [install](install.md#what-you-need).
+- Off Omarchy, Arch, Fedora 45, Debian sid and openSUSE Tumbleweed are each tested in a VM of its
+  own, `install.sh` through to real boxes (`test/distros-vm.sh`); only plain Arch runs the whole
+  suite there. A connected box with `protect-ports` was run on openSUSE (and is in the suite plain
+  Arch runs), not on Fedora or Debian. NixOS and the rest: see [install](install.md#what-you-need).
 - A plain box (`--desktop plain`, or any box where Omarchy is not installed) has no bar, launcher,
   tray host, notification server or wallpaper unless the shell `--shell CMD` runs has them: an app
   that waits for a tray watcher or sends notifications finds nobody there (`omabox tray` says the

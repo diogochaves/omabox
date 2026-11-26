@@ -26,17 +26,14 @@ pub fn layer_select(ctx: &Ctx, lys: &[u8], sel: &[u8]) -> Res<Vec<u8>> {
         return Err(ctx.die(cat!("box '", ctx.name, "' did not list its layers")));
     }
     let all = a.text();
-    let hits = Args::new(&["-c"])
-        .kv("--arg", "s", sel)
-        .arg(crate::jqprog::LAYER_HITS_JQ)
-        .run(Some(&all), jq::Err::Inherit)
-        .text();
+    let (hits, edge) = layer_hits(&all, sel);
     let big = jq::jq(
         &["-c", crate::jqprog::LAYER_BIG_JQ],
         Some(&hits),
         jq::Err::Inherit,
     )
     .text();
+    let big = edge.map_or(big.clone(), |e| at_edge(&big, e));
     let n = crate::win::jq_length(&big);
     match n.as_slice() {
         b"1" => return Ok(jq::jq(&["-c", ".[0]"], Some(&big), jq::Err::Inherit).text()),
@@ -61,12 +58,77 @@ pub fn layer_select(ctx: &Ctx, lys: &[u8], sel: &[u8]) -> Res<Vec<u8>> {
                 sel,
                 " matches ",
                 n,
-                " layers: name one by its address (address:0x...):"
+                " layers: name one by its edge of the screen (",
+                edge_base(sel),
+                ":top, :bottom, :left or :right) or its address (address:0x...):"
             ));
             layer_lines(&big);
         }
     }
     Err(Exit(2))
+}
+
+const EDGES: [&str; 4] = ["top", "bottom", "left", "right"];
+
+/// SEL without an edge word at its end (`ns:top`: `ns`), for a message.
+fn edge_base(sel: &[u8]) -> &[u8] {
+    EDGES
+        .iter()
+        .find_map(|e| sel.strip_suffix(e.as_bytes())?.strip_suffix(b":"))
+        .unwrap_or(sel)
+}
+
+/// The layers of ALL (LAYER_LIST_JQ's) SEL names, and the edge it asks for (#494): `NS:top`,
+/// `:bottom`, `:left` or `:right` picks among several layers of one namespace (a frame drawn as
+/// one layer per screen edge; their addresses change at each shell restart), unless a layer's
+/// namespace is SEL as written.
+fn layer_hits(all: &[u8], sel: &[u8]) -> (Vec<u8>, Option<&'static str>) {
+    let hits = |s: &[u8]| {
+        Args::new(&["-c"])
+            .kv("--arg", "s", s)
+            .arg(crate::jqprog::LAYER_HITS_JQ)
+            .run(Some(all), jq::Err::Inherit)
+            .text()
+    };
+    let whole = hits(sel);
+    let base = edge_base(sel);
+    if base.len() == sel.len() || crate::win::jq_length(&whole) != b"0" {
+        return (whole, None);
+    }
+    let edge = EDGES.iter().copied().find(|e| sel.ends_with(e.as_bytes()));
+    (hits(base), edge)
+}
+
+/// Of the layers BIG (a JSON list, each with x, y, w, h), those at EDGE: the top and bottom ones
+/// among the wide (w >= h), the left and right ones among the tall, or among all when none is so;
+/// the one nearest that edge, each that ties with it.
+fn at_edge(big: &[u8], edge: &str) -> Vec<u8> {
+    let Ok(serde_json::Value::Array(l)) = serde_json::from_slice::<serde_json::Value>(big) else {
+        return big.to_vec();
+    };
+    let n = |v: &serde_json::Value, k: &str| {
+        v.get(k).and_then(serde_json::Value::as_f64).unwrap_or(0.0)
+    };
+    let wide = matches!(edge, "top" | "bottom");
+    let shaped: Vec<&serde_json::Value> = l
+        .iter()
+        .filter(|v| (n(v, "w") >= n(v, "h")) == wide)
+        .collect();
+    let among: Vec<&serde_json::Value> = if shaped.is_empty() {
+        l.iter().collect()
+    } else {
+        shaped
+    };
+    // (the smaller, the nearer the edge)
+    let key = |v: &serde_json::Value| match edge {
+        "top" => n(v, "y"),
+        "bottom" => -(n(v, "y") + n(v, "h")),
+        "left" => n(v, "x"),
+        _ => -(n(v, "x") + n(v, "w")),
+    };
+    let best = among.iter().map(|v| key(v)).fold(f64::INFINITY, f64::min);
+    let kept: Vec<&serde_json::Value> = among.into_iter().filter(|v| key(v) == best).collect();
+    serde_json::to_vec(&kept).unwrap_or_else(|_| big.to_vec())
 }
 
 /// layer_pick CMD LAYERS SEL MON (#473, shot --layer): layer_select's one layer, MON (not empty)
@@ -79,11 +141,7 @@ pub fn layer_pick(ctx: &Ctx, cmd: &str, lys: &[u8], sel: &[u8], mon: &[u8]) -> R
         return Err(ctx.die(cat!("box '", ctx.name, "' did not list its layers")));
     }
     let all = a.text();
-    let mut hits = Args::new(&["-c"])
-        .kv("--arg", "s", sel)
-        .arg(crate::jqprog::LAYER_HITS_JQ)
-        .run(Some(&all), jq::Err::Inherit)
-        .text();
+    let (mut hits, edge) = layer_hits(&all, sel);
     if !mon.is_empty() {
         let mons = jq_r(r#"keys_unsorted | join(", ")"#, lys);
         let has = Args::new(&["-e"])
@@ -121,6 +179,7 @@ pub fn layer_pick(ctx: &Ctx, cmd: &str, lys: &[u8], sel: &[u8], mon: &[u8]) -> R
         jq::Err::Inherit,
     )
     .text();
+    let big = edge.map_or(big.clone(), |e| at_edge(&big, e));
     let n = crate::win::jq_length(&big);
     match n.as_slice() {
         b"1" => return Ok(jq::jq(&["-c", ".[0]"], Some(&big), jq::Err::Inherit).text()),
@@ -163,7 +222,9 @@ pub fn layer_pick(ctx: &Ctx, cmd: &str, lys: &[u8], sel: &[u8], mon: &[u8]) -> R
                 } else {
                     ""
                 },
-                "its address (address:0x...):"
+                "its edge of the screen (",
+                edge_base(sel),
+                ":top, :bottom, :left or :right) or its address (address:0x...):"
             ));
             layer_lines(&big);
         }
@@ -509,6 +570,47 @@ mod tests {
             layer_argv(br#"{"pid": null}"#, j, &[], Vec::new),
             Err(b"the layer has no pid to find its application by (null)\n".to_vec()),
             "a layer with no pid: said, nothing run"
+        );
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use super::*;
+
+    /// #494: a frame of four layers with one namespace, one picked by its edge; a namespace that
+    /// ends in an edge word is itself.
+    #[test]
+    fn a_layer_by_its_edge() {
+        let all = br#"[{"namespace":"fr","address":"0x1","pid":7,"x":0,"y":0,"w":1920,"h":30},
+            {"namespace":"fr","address":"0x2","pid":7,"x":0,"y":1050,"w":1920,"h":30},
+            {"namespace":"fr","address":"0x3","pid":7,"x":0,"y":30,"w":40,"h":1020},
+            {"namespace":"fr","address":"0x4","pid":7,"x":1880,"y":30,"w":40,"h":1020},
+            {"namespace":"bar:top","address":"0x5","pid":8,"x":0,"y":0,"w":1920,"h":26}]"#;
+        let pick = |sel: &str| {
+            let (hits, edge) = layer_hits(all, sel.as_bytes());
+            let l = edge.map_or(hits.clone(), |e| at_edge(&hits, e));
+            String::from_utf8(jq_r(r#"map(.address) | join(" ")"#, &l)).unwrap()
+        };
+        assert_eq!(pick("fr"), "0x1 0x2 0x3 0x4");
+        assert_eq!(pick("fr:top"), "0x1");
+        assert_eq!(pick("fr:bottom"), "0x2");
+        assert_eq!(pick("fr:left"), "0x3");
+        assert_eq!(pick("fr:right"), "0x4");
+        assert_eq!(pick("bar:top"), "0x5", "a namespace as written first");
+        assert_eq!(pick("nope:top"), "");
+        assert_eq!(pick("address:0x2"), "0x2");
+        assert_eq!(edge_base(b"fr:left"), b"fr");
+        assert_eq!(edge_base(b"fr"), b"fr");
+        // Two wide strips and nothing tall: left is the nearer of all; a tie keeps both.
+        let two = br#"[{"x":0,"y":0,"w":100,"h":10,"address":"a"},{"x":0,"y":50,"w":100,"h":10,"address":"b"}]"#;
+        assert_eq!(
+            jq_r("map(.address) | join(\" \")", &at_edge(two, "left")),
+            b"a b"
+        );
+        assert_eq!(
+            jq_r("map(.address) | join(\" \")", &at_edge(two, "bottom")),
+            b"b"
         );
     }
 }

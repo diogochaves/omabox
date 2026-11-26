@@ -74,6 +74,67 @@ pub fn record_seed(d: &[u8], name: &[u8]) {
     }
 }
 
+/// Where the box's mounts sit in its HOME, each relative to it (box.json BJ): a plugin mounted
+/// into the shell's folder (`plugin_via` "mounted"), and each of `mounts` whose place is under the
+/// box's `home`.
+fn mount_points(bj: &Value) -> Vec<Vec<u8>> {
+    let mut v: Vec<Vec<u8>> = Vec::new();
+    for (id, how) in bj
+        .get("plugin_via")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        if how.as_str() == Some("mounted") {
+            v.push(cat!(".config/omarchy/plugins/", id.as_bytes()));
+        }
+    }
+    let home = bj.get("home").and_then(Value::as_str).unwrap_or("");
+    if !home.is_empty() {
+        for m in bj
+            .get("mounts")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(rel) = m
+                .get("dest")
+                .and_then(Value::as_str)
+                .and_then(|d| crate::paths::under(d.as_bytes(), home.as_bytes()))
+            {
+                if !rel.is_empty() {
+                    v.push(rel.to_vec());
+                }
+            }
+        }
+    }
+    v
+}
+
+/// SEED given the folders of POINTS (and those on the way to each) as NOW has them, where SEED
+/// has nothing and NOW a folder: what holds a mount is not a change since the seed.
+fn mounts_into_seed(seed: &mut Snap, now: &Snap, points: &[Vec<u8>]) {
+    for p in points {
+        let mut end = 0;
+        loop {
+            end = match p[end..].iter().position(|&c| c == b'/') {
+                Some(i) => end + i,
+                None => p.len(),
+            };
+            let part = &p[..end];
+            if let Some(e) = now.entries.get(part) {
+                if e.kind == b'd' && !seed.entries.contains_key(part) {
+                    seed.entries.insert(part.to_vec(), e.clone());
+                }
+            }
+            if end == p.len() {
+                break;
+            }
+            end += 1;
+        }
+    }
+}
+
 /// Snapshot file NAME of the box, read back; None when there is none or it is not one.
 fn read_snap(ctx: &Ctx, name: &str) -> Option<Snap> {
     let f = crate::boxes::open_box_file(&ctx.at(&format!("snapshots/{name}")))?;
@@ -324,6 +385,16 @@ pub fn diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     };
     say_cut(ctx, &from_label, &a);
     say_cut(ctx, &to_label, &b);
+    let mut a = a;
+    if seed && to_json == "now" {
+        // The folders the box's mounts sit on are made in its HOME when it starts, after up's
+        // record: up's own, not a change (#483: a desk box listed each plugin's as added).
+        let bj = std::fs::read(ctx.at("box.json"))
+            .ok()
+            .and_then(|t| serde_json::from_slice::<Value>(&t).ok())
+            .unwrap_or(Value::Null);
+        mounts_into_seed(&mut a, &b, &mount_points(&bj));
+    }
     let (changes, left_out) = homesnap::diff(&a, &b, &noise);
     if as_json {
         let list: Vec<Value> = changes
@@ -416,4 +487,70 @@ pub fn diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         .as_bytes(),
     );
     out(text)
+}
+
+#[cfg(test)]
+mod mount_tests {
+    use super::*;
+
+    /// #483: where a box's mounts sit in its HOME, and those folders taken as seeded.
+    #[test]
+    fn mount_folders_are_the_seeds() {
+        let bj: Value = serde_json::from_str(
+            r#"{"home": "/home/u", "plugin_via": {"a.b": "mounted", "c.d": "linked"},
+                "mounts": [{"src": "/home/u/.local/share/mise/installs", "dest": "/home/u/.local/share/mise/installs"},
+                           {"src": "/srv/x", "dest": "/srv/x"}, {"src": "/home/u", "dest": "/home/u"}]}"#,
+        )
+        .unwrap();
+        let pts = mount_points(&bj);
+        assert_eq!(
+            pts,
+            vec![
+                b".config/omarchy/plugins/a.b".to_vec(),
+                b".local/share/mise/installs".to_vec()
+            ]
+        );
+        let dir = |m: i64| homesnap::Entry {
+            kind: b'd',
+            mode: 0o755,
+            size: 0,
+            mtime: m,
+            hash: None,
+            target: Vec::new(),
+        };
+        let mut seed = Snap::default();
+        let mut now = Snap::default();
+        seed.entries.insert(b".local".to_vec(), dir(1));
+        for p in [
+            ".local",
+            ".local/share",
+            ".local/share/mise",
+            ".local/share/mise/installs",
+            ".config/omarchy/plugins/a.b",
+            ".config/omarchy/plugins/other",
+        ] {
+            now.entries.insert(p.as_bytes().to_vec(), dir(2));
+        }
+        mounts_into_seed(&mut seed, &now, &pts);
+        let keys: Vec<String> = seed
+            .entries
+            .keys()
+            .map(|k| String::from_utf8_lossy(k).into_owned())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ".config/omarchy/plugins/a.b",
+                ".local",
+                ".local/share",
+                ".local/share/mise",
+                ".local/share/mise/installs"
+            ]
+        );
+        assert_eq!(
+            seed.entries[&b".local"[..]].mtime,
+            1,
+            "what the seed had stays its own"
+        );
+    }
 }

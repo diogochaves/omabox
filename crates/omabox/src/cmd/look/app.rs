@@ -301,6 +301,33 @@ pub(super) fn page_file(what: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     None
 }
 
+/// An http(s) URL's host and port (80 or 443 when it names none), a host of letters, digits, dots
+/// and dashes only: what a connection check may be made to. None for anything else.
+pub(super) fn http_host_port(url: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (rest, default) = match url.strip_prefix(b"http://") {
+        Some(r) => (r, &b"80"[..]),
+        None => (url.strip_prefix(b"https://")?, &b"443"[..]),
+    };
+    let end = rest
+        .iter()
+        .position(|&c| matches!(c, b'/' | b'?' | b'#'))
+        .unwrap_or(rest.len());
+    let auth = &rest[..end];
+    let (host, port) = match auth.iter().rposition(|&c| c == b':') {
+        Some(i) => (&auth[..i], &auth[i + 1..]),
+        None => (auth, default),
+    };
+    let ok = !host.is_empty()
+        && host
+            .iter()
+            .all(|&c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
+        && !host.starts_with(b"-")
+        && !port.is_empty()
+        && port.len() <= 5
+        && port.iter().all(u8::is_ascii_digit);
+    ok.then(|| (host.to_vec(), port.to_vec()))
+}
+
 /// A URL path's `%XX` as bytes; anything else as written.
 fn percent_decode(p: &[u8]) -> Vec<u8> {
     let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
@@ -385,6 +412,33 @@ pub(super) fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
 pub(super) fn page_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     let mut l = Look::new(a.keep.then_some(name));
     start(ctx, a, name, me, &[], &mut l)?;
+    // An http(s) page nothing answers at is shot as Chromium's error page, which neither its log nor
+    // its window says (#491, finding 761): one connection from the box first, no request sent.
+    if let Some((host, port)) = a.cmd.last().and_then(|u| http_host_port(u)) {
+        let r = ob(&[
+            b"run",
+            b"-b",
+            name,
+            b"--",
+            b"timeout",
+            b"3",
+            b"bash",
+            b"-c",
+            b"exec 3<>\"/dev/tcp/$1/$2\"",
+            b"_",
+            &host,
+            &port,
+        ]);
+        if !r.ok {
+            l.problem(cat!(
+                "nothing answers at ",
+                host,
+                ":",
+                port,
+                " from the box (no server there, or the box's network does not reach it: --net, --allow): the page did not load, the shot is the browser's error page"
+            ));
+        }
+    }
     let prep = || {
         if a.own {
             stop_pages(name);

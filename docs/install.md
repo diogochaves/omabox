@@ -125,8 +125,8 @@ rm -rf ~/.config/omabox ~/.cache/omabox    # settings, and box HOMEs a crash lef
 rm -rf ~/.local/share/omabox               # saves, if you made any
 ```
 
-`omabox setup --remove` turns the guard off (if on), the ai-jail broker off (its `~/.ai-jail` lines
-are yours to delete), disables the bar widget if it is on, and removes the links `setup` made (only
+`omabox setup --remove` turns the guard off (if on), the ai-jail broker off (its lines in
+`~/.config/ai-jail/config.toml` are yours to delete), disables the bar widget if it is on, and removes the links `setup` made (only
 those that still point at this omabox), the crash watcher's filter and a per-user aquamarine build; it keeps your settings and
 saves. Run it before you delete omabox: once it is gone there is no `guard off` left to
 run. A guard left behind applies nothing in Claude Code and says so; in Codex its values stay, and

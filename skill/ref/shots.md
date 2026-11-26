@@ -46,7 +46,9 @@ Sections:
   SEL` (its own pixels, covered or not) narrow the search; each search is one frame, 50-100 ms on a
   1080p screen. A scenario for `check run` can click by image instead of by fixed coordinates.
 - The shell's bar, panels, menus and plugins are layer surfaces: `omabox tree --layer SEL` (a
-  namespace from `omabox hyprctl layers`, `address:0x...` or `pid:PID`), with `--find`, `--json` and
+  namespace from `omabox hyprctl layers`, `address:0x...` or `pid:PID`; `NS:top`, `:bottom`, `:left`
+  or `:right` when several layers share a namespace, as a frame of one per screen edge does: their
+  addresses change at each shell restart), with `--find`, `--json` and
   `--all` as for windows. Its bounds are the **screen's** coordinates: plain `click X Y` at a node's
   middle lands on it, and `click --layer SEL --find TEXT` finds and clicks it. Quickshell publishes them from 0.3.2 (older: "no accessibility tree", or
   `--quickshell` a build), and only items that set an `Accessible.role`; the box's own shell also gives

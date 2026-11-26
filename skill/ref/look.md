@@ -139,8 +139,8 @@ in the box HOME, its sandbox kept (a FILE's folder is bound read-only, written a
 `file://` URL, with the `#fragment` or `?query` the page reads: `look page design/x.html#state=2`;
 a page that loads files from outside its folder needs `--ro-bind` of the folder above; an `http://`
 URL is reached as the box's network allows: `--net isolated --allow PORT` for a local server only,
-and a server that does not answer is shot as Chromium's error page with no problem named: check the
-shot).
+and a server nothing answers at is a problem, `nothing answers at HOST:PORT from the box`; one that
+answers with an error page of its own is not: check the shot).
 
 - **Real frames.** Headless Chrome under `--virtual-time-budget` runs `requestAnimationFrame` two or
   three times a run; a box's Chromium draws every frame on a real (headless) output, so a loop that

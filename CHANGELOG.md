@@ -26,6 +26,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   repeated, and how many captures the video's fps left out before it, with one line that counts
   them (`92 frames: 61 new, 0 repeated, 30 skipped`). Counted by ffmpeg's own fps filter over the
   same recording, not estimated (#488).
+- **`--layer NS:top`** (`:bottom`, `:left`, `:right`) picks one of several layers that share a
+  namespace, as a frame drawn with one layer per screen edge has; their addresses change at each
+  shell restart. For `tree`, `wait tree` and `shot` (#494).
 
 ### Fixed
 - **`record --from 0`** (and `0s`, `0ms`) is the video's first frame; it was refused as "not a
@@ -33,7 +36,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`look page file:///...`** is the file it names: its folder is mounted for the look's own box
   (or the look refused in a box that lacks it), with a `#fragment` or `?query` kept, on a path
   too. It was opened as a URL the box could not see, and Chromium's error page was shot with
-  "problems: none" (#491).
+  "problems: none" (#491). An `http://` page nothing answers at is a problem too (`nothing
+  answers at HOST:PORT from the box`).
+- **`up --desktop desk --autoreload`** reloads when the box's copy of your `hyprland.lua` is
+  edited; only `omabox reload` did (#482).
+- **`diff --seed`** no longer lists the folders a box's plugins and mounts sit on as added (#483).
+- `help broker --long` names ai-jail's `config.toml` (#481); `docs/limitations.md` says the other
+  distributions are tested in VMs (#485).
 
 ### Changed
 - **`up` and `restart-shell` say less**: the widgets a hosting plugin places itself are one note

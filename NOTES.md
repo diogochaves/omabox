@@ -15649,6 +15649,38 @@ from them.
       `notes_say_what_the_numbers_are_not`, `stamps_read_back`,
       `log_says_new_repeated_and_skipped`, `log_refuses_what_is_no_video`, `filter_words`,
       `t_unit_frames`, `t_frames`, `t_record_frames_log`.
+764. **Before 1.6.0: a layer by its edge, a page's port, a desk box's autoreload and seed, the docs**
+    (2026-11-26, #494, #491, #482, #483, #481, #485; and what 762 and 763 had left unchecked).
+    - `--layer NS:top`, `:bottom`, `:left`, `:right` (#494): several layers of one namespace (a
+      frame drawn as one layer per screen edge) could only be named by address, which changes at
+      each shell restart. `layer_hits` takes the edge word off unless a namespace is the selector
+      as written; `at_edge` keeps the wide ones for top and bottom, the tall for left and right
+      (all, when none is so), then the nearest that edge. For `tree`, `wait tree` and `shot`.
+      Tests: `a_layer_by_its_edge`, `t_unit_tree_layer`, `t_tree_layer` (two layers of one
+      namespace in a real box).
+    - `look page http://...` connects from the box to the URL's host and port first (bash's
+      `/dev/tcp`, 3 s, no request sent): nothing answering is a problem, where 761 left "problems:
+      none" over the browser's error page. A server that answers with an error page of its own is
+      still not told apart. Tests: `a_pages_host_and_port`, `look_page_checks` (port 9).
+    - A desk box's `--autoreload` did nothing for an edit of its `hyprland.lua` (#482): Hyprland
+      0.57 watches the main config and what its own module searcher loaded (`trackConfigPath`),
+      and `share/desk.lua` runs the user's file by `dofile`. desk.lua now asks
+      `package.searchers[2]` for the file first: an explicit path is tracked, compiled, not run.
+      The modules it `require`s were watched already. Verified on a desk box (gaps 10 to 41 within
+      2 s of the edit) and by `t_desk_autoreload`, on 0.57.2 and 0.56.2.
+    - `diff --seed` on a box nobody touched listed each mounted plugin's folder as added (#483):
+      bwrap makes the folders its mounts sit on when the box starts, after up's record. `diff
+      --seed` to now takes those (box.json's `plugin_via` "mounted", and `mounts` under `home`,
+      with the folders on the way) as seeded. What a desk's own plugins write in `~/.local/state`
+      once the shell runs is still listed: the box did write it. Tests:
+      `mount_folders_are_the_seeds`, `t_desk_shell`.
+    - A jailed agent's `scene -` (762 had not run it): `t_jail` now pipes a scene through the
+      broker (its window opened on the workspace asked) and has a path refused. And the tests of
+      762, 763 and the above pass on Hyprland 0.56.2 (`OMABOX_HYPRLAND`, on the AMD node:
+      `t_scene`, `t_frames`, `t_record_frames_log`, `t_window_size`, `t_tree_layer`,
+      `t_desk_autoreload`, 199 checks).
+    - `help broker --long` names `~/.config/ai-jail/config.toml` (#481); `docs/limitations.md`
+      says the distributions are tested in VMs, as the README does (#485).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
