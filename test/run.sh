@@ -5012,6 +5012,10 @@ t_unit_rust_ignored() {
     else no "cargo test --ignored: ${BASH_REMATCH[1]}" "$out"; fi
   done <<<"$out"
   check_eq "...each of them ran, and cargo test passed (rc)" "0 yes" "$rc $([ "$n" -gt 0 ] && echo yes || echo "no tests: $out")"
+  # The crate's other tests, as the package's check() runs them (finding 765: 1.6.0 was tagged with
+  # one failing, which no run of this suite had asked for; the package would not build).
+  rc=0; out=$(cargo test --locked --manifest-path "$ROOT/Cargo.toml" 2>&1) || rc=$?
+  check_eq "cargo test, as a package's check() runs it: all pass" 0 "$rc$([ "$rc" = 0 ] || printf ' %s' "$(grep -E 'FAILED|panicked' <<<"$out" | head -5)")"
 }
 # A jailed caller's omabox (#324 wave 6-front, A4; S9, findings 503, GHSA-925j), which cannot make a
 # user namespace (a stand-in unshare that fails) and finds the broker's socket, so hands its command

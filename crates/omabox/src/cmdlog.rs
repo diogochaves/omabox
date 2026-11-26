@@ -97,6 +97,8 @@ const KEEP: &[&str] = &[
     "--report-scale",
     "--ro-bind",
     "--runs",
+    "--scene",
+    "--frames-log",
     "--seed",
     "--settle",
     "--shell",

@@ -3,6 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## 1.6.1 — 2026-11-26
+
+### Fixed
+- **1.6.0 could not be packaged**: one of the crate's own tests failed (the command log had no
+  rule for the values of `up --scene` and `record --frames-log`), and a package's build runs
+  them. An installed 1.6.0 works; update to build a package (finding 765).
+
 ## 1.6.0 — 2026-11-26
 
 What a night of about twenty agents measuring a shell's animations asked for: a known desk in one

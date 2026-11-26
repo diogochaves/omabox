@@ -15681,6 +15681,15 @@ from them.
       `t_desk_autoreload`, 199 checks).
     - `help broker --long` names `~/.config/ai-jail/config.toml` (#481); `docs/limitations.md`
       says the distributions are tested in VMs, as the README does (#485).
+765. **1.6.0's tarball failed its own `cargo test`: a package could not be built from it**
+    (2026-11-26, found building the package an hour after the release). `cmdlog`'s
+    `every_value_option_is_chosen` wants each option that takes a value in one of the command
+    log's three lists; `up --scene` and `record --frames-log` (762, 763) were in none. In use
+    nothing was wrong (a value in no list is logged by its length), but a package's `check()` runs
+    `cargo test`, and the suite ran only the crate's `#[ignore]` tests: both suites passed on a
+    crate with a failing test. Both options are paths, kept as `-o` and `--seed` are; and
+    `t_unit_rust_ignored` now runs the plain `cargo test` too, so the unit tier fails where a
+    package would. 1.6.1 is that fix alone.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
